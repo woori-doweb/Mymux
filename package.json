@@ -3,14 +3,17 @@
   "version": "0.1.0",
   "description": "Personal CLI session manager with multiple terminals, completion, and session persistence.",
   "type": "module",
-  "main": "dist/cli.js",
+  "main": "desktop/main.cjs",
   "bin": {
     "mycli": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
-    "start": "node dist/cli.js"
+    "dev:desktop": "npm run build && electron .",
+    "start": "electron .",
+    "start:cli": "node dist/cli.js",
+    "package:portable": "npm run build && electron-builder --win portable"
   },
   "repository": {
     "type": "git",
@@ -25,11 +28,33 @@
   "homepage": "https://github.com/ChoiGyber/MyCli#readme",
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "electron": "^37.3.1",
+    "electron-builder": "^25.1.8",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "commander": "^14.0.3",
     "node-pty": "^1.1.0"
+  },
+  "build": {
+    "appId": "com.choigyber.mycli",
+    "productName": "MyCli",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ]
+    }
   }
 }

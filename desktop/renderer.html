@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyCli</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="eyebrow">Portable Desktop</span>
+          <h1>MyCli</h1>
+          <p>Manage persistent shell sessions and open attach consoles on demand.</p>
+        </div>
+
+        <section class="panel">
+          <h2>Create Session</h2>
+          <label>Name</label>
+          <input id="session-name" placeholder="work" />
+          <label>Working Directory</label>
+          <input id="session-cwd" placeholder="E:\Project\MyCli" />
+          <label>Shell</label>
+          <input id="session-shell" placeholder="C:\Windows\System32\cmd.exe" />
+          <button id="create-session" class="primary">Create</button>
+        </section>
+
+        <section class="panel">
+          <h2>Daemon</h2>
+          <div id="daemon-status" class="status-card">Loading...</div>
+          <button id="refresh-sessions">Refresh</button>
+        </section>
+      </aside>
+
+      <main class="content">
+        <section class="hero">
+          <h2>Sessions</h2>
+          <p>Open, inspect, rename, kill, and attach from one place.</p>
+        </section>
+
+        <section class="grid">
+          <div class="panel sessions-panel">
+            <div class="panel-header">
+              <h3>Session List</h3>
+              <span id="session-count">0 sessions</span>
+            </div>
+            <div id="session-list" class="session-list"></div>
+          </div>
+
+          <div class="panel detail-panel">
+            <div class="panel-header">
+              <h3>Session Detail</h3>
+              <span id="detail-name">No selection</span>
+            </div>
+            <pre id="session-detail" class="detail-view">Select a session to inspect it.</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="./renderer.js"></script>
+  </body>
+  </html>

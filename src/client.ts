@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import process from "node:process";
 import { SOCKET_PATH } from "./config.js";
@@ -39,6 +40,15 @@ async function waitForReady(child: ReturnType<typeof spawn>): Promise<void> {
   }
 }
 
+function getDaemonEntry(): string {
+  if (process.env.MYCLI_DAEMON_ENTRY) {
+    return process.env.MYCLI_DAEMON_ENTRY;
+  }
+
+  const currentFile = fileURLToPath(import.meta.url);
+  return path.join(path.dirname(currentFile), "daemon.js");
+}
+
 export async function ensureDaemon(): Promise<void> {
   const existingSocket = await tryConnectSocket();
   if (existingSocket) {
@@ -48,11 +58,15 @@ export async function ensureDaemon(): Promise<void> {
     return;
   }
 
-  const daemonEntry = path.join(path.dirname(process.argv[1]), "daemon.js");
+  const daemonEntry = getDaemonEntry();
   const child = spawn(process.execPath, [daemonEntry], {
     detached: true,
     stdio: ["ignore", "pipe", "ignore"],
     windowsHide: true,
+    env: {
+      ...process.env,
+      ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    },
   });
 
   child.unref();

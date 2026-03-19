@@ -47,6 +47,17 @@ mycli kill work
 mycli completion --shell powershell
 ```
 
+## Portable App
+
+Build a portable Windows desktop app:
+
+```powershell
+npm install
+npm run package:portable
+```
+
+The portable executable is created at `release\MyCli 0.1.0.exe`.
+
 Detach from an attached session with `Ctrl+P`.
 
 ## Notes
