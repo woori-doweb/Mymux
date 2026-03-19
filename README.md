@@ -16,12 +16,13 @@
 ```powershell
 npm run build
 npm link
+mycli init
 mycli open work --cwd E:\Project
 mycli open api --profile backend
 mycli open web --env NODE_ENV=development --env PORT=3000
-mycli list
+mycli list --status running --match api
 mycli attach work
-mycli logs work --lines 100 --clean
+mycli logs work --lines 100 --clean --follow
 mycli restore
 mycli daemon status
 mycli daemon restart
@@ -37,6 +38,7 @@ Detach from an attached session with `Ctrl+P`.
 - If the daemon stops, shell processes stop with it.
 - Recent output is replayed when you re-attach to a session.
 - `mycli daemon restart` starts a fresh daemon and rehydrates saved sessions.
+- `mycli logs --follow` tails the underlying session log file.
 - PowerShell completion can be loaded by evaluating the output of `mycli completion --shell powershell`.
 - On Windows, `pwsh` is preferred when available, then Windows PowerShell, then `cmd.exe`.
 

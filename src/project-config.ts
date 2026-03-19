@@ -19,3 +19,23 @@ export function getProfile(config: MyCliConfig, name?: string): SessionProfile |
 
   return config.profiles?.[name];
 }
+
+export function getProjectConfigPath(cwd: string): string {
+  return path.join(cwd, PROJECT_CONFIG_FILE);
+}
+
+export function writeProjectConfig(cwd: string, config: MyCliConfig): string {
+  const configPath = getProjectConfigPath(cwd);
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  return configPath;
+}
+
+export function createDefaultConfig(cwd: string): MyCliConfig {
+  return {
+    profiles: {
+      default: {
+        cwd,
+      },
+    },
+  };
+}

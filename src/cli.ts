@@ -1,10 +1,19 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import fs from "node:fs";
 import process from "node:process";
 import { attachSession, daemonStatus, ensureDaemon, request, stopDaemon } from "./client.js";
 import { renderPowerShellCompletion } from "./completion.js";
-import { resolveDefaultShell } from "./config.js";
-import { getProfile, loadProjectConfig } from "./project-config.js";
+import { getSessionLogPath, resolveDefaultShell } from "./config.js";
+import { stripAnsi } from "./ansi.js";
+import {
+  createDefaultConfig,
+  getProfile,
+  getProjectConfigPath,
+  loadProjectConfig,
+  writeProjectConfig,
+} from "./project-config.js";
+import type { SessionRecord } from "./types.js";
 import type { ServerMessage } from "./types.js";
 
 const program = new Command();
@@ -13,6 +22,21 @@ program
   .name("mycli")
   .description("Personal terminal session manager")
   .version("0.1.0");
+
+program
+  .command("init")
+  .option("--force", "overwrite existing mycli.config.json")
+  .action((options) => {
+    const cwd = process.cwd();
+    const configPath = getProjectConfigPath(cwd);
+
+    if (fs.existsSync(configPath) && !options.force) {
+      throw new Error(`Config already exists at ${configPath}. Use --force to overwrite.`);
+    }
+
+    writeProjectConfig(cwd, createDefaultConfig(cwd));
+    process.stdout.write(`Created ${configPath}\n`);
+  });
 
 program
   .command("open")
@@ -52,6 +76,8 @@ program
 program
   .command("list")
   .option("--json", "print JSON output")
+  .option("--status <status>", "filter by session status")
+  .option("--match <text>", "filter by session name or cwd")
   .action(async (options) => {
     const response = await request({
       type: "listSessions",
@@ -59,7 +85,7 @@ program
 
     assertSuccess(response);
 
-    const sessions = response.sessions ?? [];
+    const sessions = filterSessions(response.sessions ?? [], options.status, options.match);
     if (options.json) {
       process.stdout.write(`${JSON.stringify(sessions, null, 2)}\n`);
       return;
@@ -138,6 +164,7 @@ program
   .argument("<name>", "session name")
   .option("--lines <number>", "number of lines to print", "50")
   .option("--clean", "strip ANSI escape sequences")
+  .option("--follow", "follow appended log output")
   .action(async (name, options) => {
     const lines = Number.parseInt(options.lines, 10);
     if (!Number.isFinite(lines) || lines <= 0) {
@@ -153,6 +180,10 @@ program
 
     assertSuccess(response);
     process.stdout.write(`${response.log ?? ""}\n`);
+
+    if (options.follow) {
+      await followLogs(name, Boolean(options.clean));
+    }
   });
 
 const daemon = program.command("daemon").description("Manage the background daemon");
@@ -232,4 +263,75 @@ function parseEnvEntries(entries: string[]): Record<string, string> {
   }
 
   return env;
+}
+
+function filterSessions(
+  sessions: SessionRecord[],
+  status?: string,
+  match?: string,
+): SessionRecord[] {
+  return sessions.filter((session) => {
+    if (status && session.status !== status) {
+      return false;
+    }
+
+    if (match) {
+      const normalized = match.toLowerCase();
+      return (
+        session.name.toLowerCase().includes(normalized) ||
+        session.cwd.toLowerCase().includes(normalized)
+      );
+    }
+
+    return true;
+  });
+}
+
+async function followLogs(name: string, clean: boolean): Promise<void> {
+  const logPath = getSessionLogPath(name);
+  let offset = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0;
+
+  process.stdout.write(`[mycli] following ${logPath}. Press Ctrl+C to stop.\n`);
+
+  await new Promise<void>((resolve) => {
+    const interval = setInterval(() => {
+      if (!fs.existsSync(logPath)) {
+        return;
+      }
+
+      const size = fs.statSync(logPath).size;
+      if (size < offset) {
+        offset = size;
+        return;
+      }
+
+      if (size === offset) {
+        return;
+      }
+
+      const stream = fs.createReadStream(logPath, {
+        encoding: "utf8",
+        start: offset,
+        end: size - 1,
+      });
+
+      let chunk = "";
+      stream.on("data", (data: string) => {
+        chunk += data;
+      });
+      stream.on("end", () => {
+        offset = size;
+        process.stdout.write(clean ? stripAnsi(chunk) : chunk);
+      });
+    }, 500);
+
+    const stop = () => {
+      clearInterval(interval);
+      process.off("SIGINT", stop);
+      process.stdout.write("\n");
+      resolve();
+    };
+
+    process.on("SIGINT", stop);
+  });
 }
