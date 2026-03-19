@@ -15,6 +15,14 @@ function connectSocket(): Promise<net.Socket> {
   });
 }
 
+async function tryConnectSocket(): Promise<net.Socket | undefined> {
+  try {
+    return await connectSocket();
+  } catch {
+    return undefined;
+  }
+}
+
 async function waitForReady(child: ReturnType<typeof spawn>): Promise<void> {
   const stdout = child.stdout;
 
@@ -32,22 +40,59 @@ async function waitForReady(child: ReturnType<typeof spawn>): Promise<void> {
 }
 
 export async function ensureDaemon(): Promise<void> {
-  try {
-    const socket = await connectSocket();
+  const existingSocket = await tryConnectSocket();
+  if (existingSocket) {
+    const socket = existingSocket;
     sendJson(socket, { type: "health" } satisfies ClientMessage);
     socket.destroy();
     return;
-  } catch {
-    const daemonEntry = path.join(path.dirname(process.argv[1]), "daemon.js");
-    const child = spawn(process.execPath, [daemonEntry], {
-      detached: true,
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true,
-    });
-
-    child.unref();
-    await waitForReady(child);
   }
+
+  const daemonEntry = path.join(path.dirname(process.argv[1]), "daemon.js");
+  const child = spawn(process.execPath, [daemonEntry], {
+    detached: true,
+    stdio: ["ignore", "pipe", "ignore"],
+    windowsHide: true,
+  });
+
+  child.unref();
+  await waitForReady(child);
+}
+
+export async function daemonStatus(): Promise<Extract<ServerMessage, { type: "success" }>> {
+  const socket = await tryConnectSocket();
+  if (!socket) {
+    throw new Error("Daemon is not running.");
+  }
+
+  socket.destroy();
+  const response = await request({
+    type: "health",
+  });
+
+  if (response.type !== "success") {
+    throw new Error("Failed to read daemon status.");
+  }
+
+  return response;
+}
+
+export async function stopDaemon(): Promise<Extract<ServerMessage, { type: "success" }>> {
+  const socket = await tryConnectSocket();
+  if (!socket) {
+    throw new Error("Daemon is not running.");
+  }
+
+  socket.destroy();
+  const response = await request({
+    type: "stopDaemon",
+  });
+
+  if (response.type !== "success") {
+    throw new Error("Failed to stop daemon.");
+  }
+
+  return response;
 }
 
 export async function request<T extends ServerMessage = ServerMessage>(

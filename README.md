@@ -8,6 +8,7 @@
 - Re-attach to running sessions from later CLI invocations
 - Persist session metadata under `~/.mycli/sessions.json`
 - Keep recent terminal output and session log files under `~/.mycli/logs`
+- Support per-project profiles from `mycli.config.json`
 - Generate PowerShell completion
 
 ## Commands
@@ -16,10 +17,14 @@
 npm run build
 npm link
 mycli open work --cwd E:\Project
+mycli open api --profile backend
+mycli open web --env NODE_ENV=development --env PORT=3000
 mycli list
 mycli attach work
-mycli logs work --lines 100
+mycli logs work --lines 100 --clean
 mycli restore
+mycli daemon status
+mycli daemon restart
 mycli kill work
 mycli completion --shell powershell
 ```
@@ -31,5 +36,25 @@ Detach from an attached session with `Ctrl+P`.
 - The current MVP keeps sessions alive through the background daemon process.
 - If the daemon stops, shell processes stop with it.
 - Recent output is replayed when you re-attach to a session.
+- `mycli daemon restart` starts a fresh daemon and rehydrates saved sessions.
 - PowerShell completion can be loaded by evaluating the output of `mycli completion --shell powershell`.
 - On Windows, `pwsh` is preferred when available, then Windows PowerShell, then `cmd.exe`.
+
+## Project Config
+
+Create `mycli.config.json` in your project root:
+
+```json
+{
+  "profiles": {
+    "backend": {
+      "cwd": "E:\\Project\\MyCli",
+      "shell": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      "env": {
+        "NODE_ENV": "development",
+        "API_PORT": "4000"
+      }
+    }
+  }
+}
+```

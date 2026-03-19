@@ -4,6 +4,8 @@ export interface SessionRecord {
   cwd: string;
   pid: number;
   logPath: string;
+  profileName?: string;
+  env?: Record<string, string>;
   createdAt: string;
   updatedAt: string;
   status: "running" | "attached" | "stopped";
@@ -19,6 +21,8 @@ export type ClientMessage =
       name: string;
       shell?: string;
       cwd?: string;
+      profileName?: string;
+      env?: Record<string, string>;
     }
   | {
       type: "listSessions";
@@ -52,9 +56,13 @@ export type ClientMessage =
       type: "health";
     }
   | {
+      type: "stopDaemon";
+    }
+  | {
       type: "readLogs";
       name: string;
       lines: number;
+      clean?: boolean;
     };
 
 export type ServerMessage =
@@ -65,6 +73,7 @@ export type ServerMessage =
   | {
       type: "success";
       message: string;
+      pid?: number;
       session?: SessionRecord;
       sessions?: SessionRecord[];
       log?: string;
@@ -86,3 +95,13 @@ export type ServerMessage =
       name: string;
       exitCode: number;
     };
+
+export interface SessionProfile {
+  cwd?: string;
+  shell?: string;
+  env?: Record<string, string>;
+}
+
+export interface MyCliConfig {
+  profiles?: Record<string, SessionProfile>;
+}

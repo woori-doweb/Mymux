@@ -5,6 +5,7 @@ import path from "node:path";
 export const APP_DIR = path.join(os.homedir(), ".mycli");
 export const STATE_FILE = path.join(APP_DIR, "sessions.json");
 export const LOGS_DIR = path.join(APP_DIR, "logs");
+export const PROJECT_CONFIG_FILE = "mycli.config.json";
 export const SOCKET_PATH =
   process.platform === "win32"
     ? "\\\\.\\pipe\\mycli-daemon"

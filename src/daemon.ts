@@ -3,12 +3,11 @@ import fs from "node:fs";
 import net from "node:net";
 import pty from "node-pty";
 import {
-  APP_DIR,
-  LOGS_DIR,
   SOCKET_PATH,
   getSessionLogPath,
   resolveDefaultShell,
 } from "./config.js";
+import { stripAnsi } from "./ansi.js";
 import { createJsonLineReader, sendJson } from "./protocol.js";
 import { ensureAppDir, loadState, saveState } from "./store.js";
 import type { ClientMessage, ServerMessage, SessionRecord } from "./types.js";
@@ -67,8 +66,9 @@ function restoreKnownSessions(): void {
       continue;
     }
 
-    const runtime = spawnSession(session.name, session.cwd, session.shell, {
+    const runtime = spawnSession(session.name, session.cwd, session.shell, session.env, {
       createdAt: session.createdAt,
+      profileName: session.profileName,
     });
     runtime.record.createdAt = session.createdAt;
     runtime.record.updatedAt = new Date().toISOString();
@@ -83,7 +83,17 @@ function handleMessage(socket: net.Socket, message: ClientMessage): void {
       sendJson(socket, {
         type: "success",
         message: "daemon is running",
+        pid: process.pid,
+        sessions: [...sessions.values()].map((entry) => entry.record),
       } satisfies ServerMessage);
+      return;
+    case "stopDaemon":
+      sendJson(socket, {
+        type: "success",
+        message: "Daemon stopping.",
+        pid: process.pid,
+      } satisfies ServerMessage);
+      shutdown();
       return;
     case "createSession": {
       if (sessions.has(message.name)) {
@@ -98,6 +108,10 @@ function handleMessage(socket: net.Socket, message: ClientMessage): void {
         message.name,
         message.cwd ?? process.cwd(),
         resolveDefaultShell(message.shell),
+        message.env,
+        {
+          profileName: message.profileName,
+        },
       );
 
       sendJson(socket, {
@@ -205,7 +219,7 @@ function handleMessage(socket: net.Socket, message: ClientMessage): void {
     }
     case "readLogs": {
       const logPath = getSessionLogPath(message.name);
-      const log = readTail(logPath, message.lines);
+      const log = readTail(logPath, message.lines, message.clean ?? false);
       sendJson(socket, {
         type: "success",
         message: `Read logs for '${message.name}'.`,
@@ -220,19 +234,22 @@ function spawnSession(
   name: string,
   cwd: string,
   shell: string,
-  options?: { createdAt?: string },
+  envOverrides?: Record<string, string>,
+  options?: { createdAt?: string; profileName?: string },
 ): SessionRuntime {
   ensureAppDir();
   const logPath = getSessionLogPath(name);
+  const env = {
+    ...process.env,
+    ...envOverrides,
+    TERM: "xterm-256color",
+  };
   const ptyProcess = pty.spawn(shell, [], {
     name: "xterm-color",
     cols: 120,
     rows: 30,
     cwd,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-    },
+    env,
   });
 
   const now = new Date().toISOString();
@@ -244,6 +261,8 @@ function spawnSession(
       cwd,
       pid: ptyProcess.pid,
       logPath,
+      profileName: options?.profileName,
+      env: envOverrides,
       createdAt: options?.createdAt ?? now,
       updatedAt: now,
       status: "running",
@@ -333,12 +352,20 @@ function readRecentLog(logPath: string): string {
   return content.slice(content.length - MAX_BUFFER_SIZE);
 }
 
-function readTail(logPath: string, lines: number): string {
+function readTail(logPath: string, lines: number, clean: boolean): string {
   if (!fs.existsSync(logPath)) {
     return "";
   }
 
   const content = fs.readFileSync(logPath, "utf8");
   const safeLineCount = Math.max(1, Math.min(lines, 5000));
-  return content.split(/\r?\n/).slice(-safeLineCount).join("\n");
+  const result = content.split(/\r?\n/).slice(-safeLineCount).join("\n");
+  return clean ? stripAnsi(result) : result;
+}
+
+function shutdown(): void {
+  persist();
+  setTimeout(() => {
+    process.exit(0);
+  }, 25);
 }
