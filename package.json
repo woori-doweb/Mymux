@@ -1,0 +1,35 @@
+{
+  "name": "mycli",
+  "version": "0.1.0",
+  "description": "Personal CLI session manager with multiple terminals, completion, and session persistence.",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "mycli": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChoiGyber/MyCli.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ChoiGyber/MyCli/issues"
+  },
+  "homepage": "https://github.com/ChoiGyber/MyCli#readme",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "commander": "^14.0.3",
+    "node-pty": "^1.1.0"
+  }
+}
