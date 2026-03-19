@@ -33,3 +33,7 @@ export function resolveDefaultShell(shell?: string): string {
 export function getSessionLogPath(name: string): string {
   return path.join(LOGS_DIR, `${name}.log`);
 }
+
+export function getSessionEventLogPath(name: string): string {
+  return path.join(LOGS_DIR, `${name}.events.jsonl`);
+}

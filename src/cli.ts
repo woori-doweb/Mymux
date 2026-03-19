@@ -11,6 +11,8 @@ import {
   getProfile,
   getProjectConfigPath,
   loadProjectConfig,
+  removeProfile,
+  upsertProfile,
   writeProjectConfig,
 } from "./project-config.js";
 import type { SessionRecord } from "./types.js";
@@ -126,6 +128,41 @@ program
     }
   });
 
+const profileCommand = program.command("profile").description("Manage project profiles");
+
+profileCommand
+  .command("add")
+  .argument("<name>", "profile name")
+  .option("--cwd <path>", "working directory")
+  .option("--shell <shell>", "shell executable")
+  .option("--env <key=value>", "environment variable", collectValues, [])
+  .action((name, options) => {
+    const cwd = process.cwd();
+    const env = parseEnvEntries(options.env);
+    const profile = {
+      cwd: options.cwd,
+      shell: options.shell,
+      env: Object.keys(env).length ? env : undefined,
+    };
+
+    const configPath = upsertProfile(cwd, name, profile);
+    process.stdout.write(`Saved profile '${name}' to ${configPath}\n`);
+  });
+
+profileCommand
+  .command("remove")
+  .argument("<name>", "profile name")
+  .action((name) => {
+    const cwd = process.cwd();
+    const config = loadProjectConfig(cwd);
+    if (!config.profiles?.[name]) {
+      throw new Error(`Profile '${name}' not found.`);
+    }
+
+    const configPath = removeProfile(cwd, name);
+    process.stdout.write(`Removed profile '${name}' from ${configPath}\n`);
+  });
+
 program
   .command("attach")
   .argument("<name>", "session name")
@@ -141,6 +178,21 @@ program
     const response = await request({
       type: "killSession",
       name,
+    });
+
+    assertSuccess(response);
+    process.stdout.write(`${response.message}\n`);
+  });
+
+program
+  .command("rename")
+  .argument("<name>", "current session name")
+  .argument("<nextName>", "new session name")
+  .action(async (name, nextName) => {
+    const response = await request({
+      type: "renameSession",
+      name,
+      nextName,
     });
 
     assertSuccess(response);
@@ -165,6 +217,7 @@ program
   .option("--lines <number>", "number of lines to print", "50")
   .option("--clean", "strip ANSI escape sequences")
   .option("--follow", "follow appended log output")
+  .option("--since <value>", "show log chunks since ISO time or 10m/2h/1d")
   .action(async (name, options) => {
     const lines = Number.parseInt(options.lines, 10);
     if (!Number.isFinite(lines) || lines <= 0) {
@@ -176,6 +229,7 @@ program
       name,
       lines,
       clean: Boolean(options.clean),
+      since: options.since,
     });
 
     assertSuccess(response);

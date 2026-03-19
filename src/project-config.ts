@@ -39,3 +39,31 @@ export function createDefaultConfig(cwd: string): MyCliConfig {
     },
   };
 }
+
+export function upsertProfile(
+  cwd: string,
+  name: string,
+  profile: SessionProfile,
+): string {
+  const config = loadProjectConfig(cwd);
+  const profiles = {
+    ...(config.profiles ?? {}),
+    [name]: profile,
+  };
+
+  return writeProjectConfig(cwd, {
+    ...config,
+    profiles,
+  });
+}
+
+export function removeProfile(cwd: string, name: string): string {
+  const config = loadProjectConfig(cwd);
+  const profiles = { ...(config.profiles ?? {}) };
+  delete profiles[name];
+
+  return writeProjectConfig(cwd, {
+    ...config,
+    profiles,
+  });
+}

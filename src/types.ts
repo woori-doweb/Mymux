@@ -35,6 +35,11 @@ export type ClientMessage =
       name: string;
     }
   | {
+      type: "renameSession";
+      name: string;
+      nextName: string;
+    }
+  | {
       type: "attachSession";
       name: string;
       cols: number;
@@ -63,6 +68,7 @@ export type ClientMessage =
       name: string;
       lines: number;
       clean?: boolean;
+      since?: string;
     };
 
 export type ServerMessage =

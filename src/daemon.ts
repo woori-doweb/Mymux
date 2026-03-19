@@ -4,6 +4,7 @@ import net from "node:net";
 import pty from "node-pty";
 import {
   SOCKET_PATH,
+  getSessionEventLogPath,
   getSessionLogPath,
   resolveDefaultShell,
 } from "./config.js";
@@ -18,6 +19,7 @@ interface SessionRuntime {
   record: SessionRecord;
   ptyProcess: pty.IPty;
   logStream: fs.WriteStream;
+  eventLogStream: fs.WriteStream;
   recentOutput: string;
   attachedClient?: net.Socket;
 }
@@ -153,12 +155,39 @@ function handleMessage(socket: net.Socket, message: ClientMessage): void {
       runtime.record.status = "stopped";
       runtime.ptyProcess.kill();
       runtime.logStream.end();
+      runtime.eventLogStream.end();
       sessions.delete(message.name);
       persist();
 
       sendJson(socket, {
         type: "success",
         message: `Session '${message.name}' killed.`,
+      } satisfies ServerMessage);
+      return;
+    }
+    case "renameSession": {
+      if (sessions.has(message.nextName)) {
+        sendJson(socket, {
+          type: "error",
+          message: `Session '${message.nextName}' already exists.`,
+        } satisfies ServerMessage);
+        return;
+      }
+
+      const runtime = sessions.get(message.name);
+      if (!runtime) {
+        sendJson(socket, {
+          type: "error",
+          message: `Session '${message.name}' not found.`,
+        } satisfies ServerMessage);
+        return;
+      }
+
+      renameSession(runtime, message.nextName);
+      sendJson(socket, {
+        type: "success",
+        message: `Session '${message.name}' renamed to '${message.nextName}'.`,
+        session: runtime.record,
       } satisfies ServerMessage);
       return;
     }
@@ -219,7 +248,9 @@ function handleMessage(socket: net.Socket, message: ClientMessage): void {
     }
     case "readLogs": {
       const logPath = getSessionLogPath(message.name);
-      const log = readTail(logPath, message.lines, message.clean ?? false);
+      const log = message.since
+        ? readSince(getSessionEventLogPath(message.name), message.since, message.clean ?? false)
+        : readTail(logPath, message.lines, message.clean ?? false);
       sendJson(socket, {
         type: "success",
         message: `Read logs for '${message.name}'.`,
@@ -239,6 +270,7 @@ function spawnSession(
 ): SessionRuntime {
   ensureAppDir();
   const logPath = getSessionLogPath(name);
+  const eventLogPath = getSessionEventLogPath(name);
   const env = {
     ...process.env,
     ...envOverrides,
@@ -254,6 +286,7 @@ function spawnSession(
 
   const now = new Date().toISOString();
   const logStream = fs.createWriteStream(logPath, { flags: "a" });
+  const eventLogStream = fs.createWriteStream(eventLogPath, { flags: "a" });
   const runtime: SessionRuntime = {
     record: {
       name,
@@ -269,11 +302,15 @@ function spawnSession(
     },
     ptyProcess,
     logStream,
+    eventLogStream,
     recentOutput: readRecentLog(logPath),
   };
 
   ptyProcess.onData((data) => {
     runtime.logStream.write(data);
+    runtime.eventLogStream.write(
+      `${JSON.stringify({ timestamp: new Date().toISOString(), data })}\n`,
+    );
     runtime.recentOutput = appendRecentOutput(runtime.recentOutput, data);
 
     if (runtime.attachedClient && !runtime.attachedClient.destroyed) {
@@ -288,13 +325,14 @@ function spawnSession(
     if (runtime.attachedClient && !runtime.attachedClient.destroyed) {
       sendJson(runtime.attachedClient, {
         type: "sessionExit",
-        name,
+        name: runtime.record.name,
         exitCode,
       } satisfies ServerMessage);
     }
 
     runtime.logStream.end();
-    sessions.delete(name);
+    runtime.eventLogStream.end();
+    sessions.delete(runtime.record.name);
     persist();
   });
 
@@ -368,4 +406,91 @@ function shutdown(): void {
   setTimeout(() => {
     process.exit(0);
   }, 25);
+}
+
+function renameSession(runtime: SessionRuntime, nextName: string): void {
+  const previousName = runtime.record.name;
+  const previousLogPath = runtime.record.logPath;
+  const previousEventLogPath = getSessionEventLogPath(previousName);
+  const nextLogPath = getSessionLogPath(nextName);
+  const nextEventLogPath = getSessionEventLogPath(nextName);
+
+  runtime.logStream.end();
+  runtime.eventLogStream.end();
+
+  if (fs.existsSync(previousLogPath)) {
+    fs.renameSync(previousLogPath, nextLogPath);
+  }
+  if (fs.existsSync(previousEventLogPath)) {
+    fs.renameSync(previousEventLogPath, nextEventLogPath);
+  }
+
+  runtime.logStream = fs.createWriteStream(nextLogPath, { flags: "a" });
+  runtime.eventLogStream = fs.createWriteStream(nextEventLogPath, { flags: "a" });
+  runtime.record.name = nextName;
+  runtime.record.logPath = nextLogPath;
+  runtime.record.updatedAt = new Date().toISOString();
+
+  sessions.delete(previousName);
+  sessions.set(nextName, runtime);
+  persist();
+}
+
+function readSince(eventLogPath: string, since: string, clean: boolean): string {
+  if (!fs.existsSync(eventLogPath)) {
+    return "";
+  }
+
+  const sinceMs = parseSinceExpression(since);
+  const lines = fs.readFileSync(eventLogPath, "utf8").split(/\r?\n/);
+  const chunks: string[] = [];
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    try {
+      const entry = JSON.parse(line) as { timestamp?: string; data?: string };
+      if (!entry.timestamp || typeof entry.data !== "string") {
+        continue;
+      }
+
+      const timestampMs = new Date(entry.timestamp).getTime();
+      if (Number.isNaN(timestampMs) || timestampMs < sinceMs) {
+        continue;
+      }
+
+      chunks.push(entry.data);
+    } catch {
+      continue;
+    }
+  }
+
+  const result = chunks.join("");
+  return clean ? stripAnsi(result) : result;
+}
+
+function parseSinceExpression(value: string): number {
+  const trimmed = value.trim().toLowerCase();
+  const absoluteTime = new Date(value).getTime();
+  if (!Number.isNaN(absoluteTime)) {
+    return absoluteTime;
+  }
+
+  const match = trimmed.match(/^(\d+)(s|m|h|d)$/);
+  if (!match) {
+    throw new Error("Invalid --since value. Use ISO time or relative values like 10m, 2h, 1d.");
+  }
+
+  const amount = Number.parseInt(match[1], 10);
+  const unit = match[2];
+  const multipliers: Record<string, number> = {
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+  };
+
+  return Date.now() - amount * multipliers[unit];
 }

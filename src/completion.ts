@@ -3,7 +3,7 @@ export function renderPowerShellCompletion(): string {
 Register-ArgumentCompleter -Native -CommandName mycli -ScriptBlock {
   param($wordToComplete, $commandAst, $cursorPosition)
 
-  $commands = @('init', 'open', 'list', 'attach', 'kill', 'restore', 'logs', 'daemon', 'profiles', 'completion')
+  $commands = @('init', 'open', 'list', 'attach', 'kill', 'rename', 'restore', 'logs', 'daemon', 'profiles', 'profile', 'completion')
   $commandElements = $commandAst.CommandElements | ForEach-Object { $_.Extent.Text }
 
   if ($commandElements.Count -le 2) {
@@ -16,7 +16,7 @@ Register-ArgumentCompleter -Native -CommandName mycli -ScriptBlock {
   }
 
   $subcommand = $commandElements[1]
-  if ($subcommand -in @('attach', 'kill', 'logs')) {
+  if ($subcommand -in @('attach', 'kill', 'rename', 'logs')) {
     try {
       $sessions = mycli list --json | ConvertFrom-Json
       $sessions |
@@ -40,6 +40,17 @@ Register-ArgumentCompleter -Native -CommandName mycli -ScriptBlock {
           }
       }
     } catch {
+    }
+  }
+
+  if ($subcommand -eq 'profile') {
+    $profileCommands = @('add', 'remove')
+    if ($commandElements.Count -le 3) {
+      $profileCommands |
+        Where-Object { $_ -like "$wordToComplete*" } |
+        ForEach-Object {
+          [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
     }
   }
 }
