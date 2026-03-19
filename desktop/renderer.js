@@ -10,6 +10,16 @@ const detailEl = document.getElementById("session-detail");
 const daemonStatusEl = document.getElementById("daemon-status");
 const toastEl = document.getElementById("toast");
 const cwdInputEl = document.getElementById("session-cwd");
+const shellSelectEl = document.getElementById("session-shell-select");
+const customShellRowEl = document.getElementById("custom-shell-row");
+const customShellInputEl = document.getElementById("session-shell-custom");
+
+const SHELL_PRESETS = {
+  auto: undefined,
+  pwsh: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  powershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  cmd: "C:\\Windows\\System32\\cmd.exe",
+};
 
 document.getElementById("refresh-sessions").addEventListener("click", () => {
   refreshAll();
@@ -26,10 +36,25 @@ document.getElementById("browse-cwd").addEventListener("click", async () => {
   }
 });
 
+shellSelectEl.addEventListener("change", () => {
+  customShellRowEl.classList.toggle("hidden-row", shellSelectEl.value !== "custom");
+});
+
+document.getElementById("browse-shell").addEventListener("click", async () => {
+  try {
+    const selectedPath = await window.mycliDesktop.selectShell();
+    if (selectedPath) {
+      customShellInputEl.value = selectedPath;
+    }
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
 document.getElementById("create-session").addEventListener("click", async () => {
   const name = document.getElementById("session-name").value.trim();
   const cwd = cwdInputEl.value.trim();
-  const shell = document.getElementById("session-shell").value.trim();
+  const shell = resolveShellSelection();
 
   if (!name) {
     showToast("Session name is required.");
@@ -190,6 +215,18 @@ function showToast(message) {
   showToast.timer = setTimeout(() => {
     toastEl.classList.add("hidden");
   }, 2500);
+}
+
+function resolveShellSelection() {
+  if (shellSelectEl.value === "custom") {
+    const value = customShellInputEl.value.trim();
+    if (!value) {
+      throw new Error("Choose a custom shell executable or switch back to Auto.");
+    }
+    return value;
+  }
+
+  return SHELL_PRESETS[shellSelectEl.value];
 }
 
 refreshAll();

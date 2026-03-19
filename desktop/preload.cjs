@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld("mycliDesktop", {
   attachSession: (name) => ipcRenderer.invoke("sessions:attach", name),
   daemonStatus: () => ipcRenderer.invoke("daemon:status"),
   selectDirectory: () => ipcRenderer.invoke("dialog:select-directory"),
+  selectShell: () => ipcRenderer.invoke("dialog:select-shell"),
 });

@@ -24,8 +24,18 @@
             <input id="session-cwd" placeholder="E:\Project\MyCli" />
             <button id="browse-cwd" type="button" class="secondary">Browse</button>
           </div>
-          <label>Shell</label>
-          <input id="session-shell" placeholder="C:\Windows\System32\cmd.exe" />
+          <label>Terminal Type</label>
+          <select id="session-shell-select">
+            <option value="auto">Auto (Recommended)</option>
+            <option value="pwsh">PowerShell 7 (pwsh)</option>
+            <option value="powershell">Windows PowerShell</option>
+            <option value="cmd">Command Prompt (cmd)</option>
+            <option value="custom">Custom executable...</option>
+          </select>
+          <div id="custom-shell-row" class="field-row hidden-row">
+            <input id="session-shell-custom" placeholder="C:\Windows\System32\cmd.exe" />
+            <button id="browse-shell" type="button" class="secondary">Browse</button>
+          </div>
           <button id="create-session" class="primary">Create</button>
         </section>
 

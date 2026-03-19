@@ -84,6 +84,7 @@ body {
 }
 
 .panel input,
+.panel select,
 .panel button {
   width: 100%;
   border-radius: 14px;
@@ -97,7 +98,17 @@ body {
   gap: 10px;
 }
 
+.hidden-row {
+  display: none;
+}
+
 .panel input {
+  padding: 12px 14px;
+  color: var(--text);
+  background: rgba(11, 16, 27, 0.94);
+}
+
+.panel select {
   padding: 12px 14px;
   color: var(--text);
   background: rgba(11, 16, 27, 0.94);

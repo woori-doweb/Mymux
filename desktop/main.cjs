@@ -163,3 +163,19 @@ ipcMain.handle("dialog:select-directory", async () => {
 
   return result.filePaths[0];
 });
+
+ipcMain.handle("dialog:select-shell", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: [
+      { name: "Executables", extensions: ["exe", "cmd", "bat"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths[0];
+});
