@@ -122,7 +122,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Restore the previous session if one was saved; otherwise open a default terminal.
   try {
     const restored = await restoreSession();
-    if (!restored) await openStartupGuide();
+    if (!restored) await maybeShowStartupGuide();
   } catch (e) {
     console.error("Session restore error:", e);
     try { await spawnTerminal(); } catch {}
@@ -2382,7 +2382,31 @@ const GUIDE_CODEX =
   "\x1b[2m↓ 아래 셸에 명령을 붙여넣어 설치하세요.\x1b[0m\r\n" +
   "\r\n";
 
-async function openStartupGuide() {
+// Decide whether to show the install guide based on what is already installed.
+// Once both CLIs are set up, no guide is shown — just a normal terminal.
+async function maybeShowStartupGuide() {
+  let claudeOk = false, codexOk = false;
+  try {
+    claudeOk = await invoke("tool_installed", { name: "claude" });
+    codexOk = await invoke("tool_installed", { name: "codex" });
+  } catch (e) {
+    console.warn("tool_installed check failed:", e);
+  }
+  if (claudeOk && codexOk) {
+    // Both set up → skip the guide entirely.
+    await spawnTerminal();
+    return;
+  }
+  // Show a guide pane only for the tools that still need installing.
+  await openStartupGuide(!claudeOk, !codexOk);
+}
+
+async function openStartupGuide(showClaude, showCodex) {
+  const guides = [];
+  if (showClaude) guides.push(GUIDE_CLAUDE);
+  if (showCodex) guides.push(GUIDE_CODEX);
+  if (guides.length === 0) { await spawnTerminal(); return; }
+
   terminalWelcome.style.display = "none";
 
   const tabIdx = tabCounter++;
@@ -2397,24 +2421,29 @@ async function openStartupGuide() {
 
   try {
     const shell = getDefaultShellId();
+    const paneIds = [];
 
-    // Left pane → Claude Code guide.
-    const leftId = await createPane(rootContainer, shell, null, null);
-    terminals.get(leftId).term.write(GUIDE_CLAUDE);
+    // First guide pane.
+    const firstId = await createPane(rootContainer, shell, null, null);
+    terminals.get(firstId).term.write(guides[0]);
+    paneIds.push(firstId);
 
-    // Divider + right pane → Codex guide (mirrors splitPane internals).
-    const divider = document.createElement("div");
-    divider.className = "pane-divider";
-    rootContainer.appendChild(divider);
-    setupDividerDrag(divider, rootContainer, "horizontal");
+    // Second guide pane (only when both tools need a guide), split left/right.
+    if (guides.length === 2) {
+      const divider = document.createElement("div");
+      divider.className = "pane-divider";
+      rootContainer.appendChild(divider);
+      setupDividerDrag(divider, rootContainer, "horizontal");
 
-    const rightId = await createPane(rootContainer, shell, null, null);
-    terminals.get(rightId).term.write(GUIDE_CODEX);
+      const secondId = await createPane(rootContainer, shell, null, null);
+      terminals.get(secondId).term.write(guides[1]);
+      paneIds.push(secondId);
+    }
 
     tabs.set(tabIdx, {
       el: tabEl,
       rootEl: rootContainer,
-      panes: [leftId, rightId],
+      panes: paneIds,
       label: "Setup Guide",
       session: { kind: "local", shell: null, cwd: null },
     });
@@ -2424,7 +2453,7 @@ async function openStartupGuide() {
 
     await new Promise((r) => requestAnimationFrame(r));
     refitAllPanes();
-    setFocusedPane(leftId);
+    setFocusedPane(paneIds[0]);
   } catch (err) {
     console.error("Startup guide failed:", err);
     tabEl.remove();

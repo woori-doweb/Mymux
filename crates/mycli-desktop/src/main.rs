@@ -5,6 +5,7 @@ mod commands;
 mod explorer;
 mod session;
 mod terminal;
+mod tools;
 mod update;
 
 use std::sync::Arc;
@@ -59,6 +60,7 @@ fn main() {
             browser::browser_pane_url,
             update::update_check,
             update::update_install,
+            tools::tool_installed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mymux");
