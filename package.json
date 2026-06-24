@@ -17,15 +17,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ChoiGyber/MyCli.git"
+    "url": "git+https://github.com/ChoiGyber/Mymux.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/ChoiGyber/MyCli/issues"
+    "url": "https://github.com/ChoiGyber/Mymux/issues"
   },
-  "homepage": "https://github.com/ChoiGyber/MyCli#readme",
+  "homepage": "https://github.com/ChoiGyber/Mymux#readme",
   "devDependencies": {
     "@types/node": "^25.5.0",
     "electron": "^37.3.1",

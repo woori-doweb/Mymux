@@ -88,11 +88,11 @@ Then:
    ```json
    "darwin-aarch64": {
      "signature": "<contents of Mymux.app.tar.gz.sig>",
-     "url": "https://github.com/ChoiGyber/MyCli/releases/download/v0.2.0/Mymux.app.tar.gz"
+     "url": "https://github.com/ChoiGyber/Mymux/releases/download/v0.2.0/Mymux.app.tar.gz"
    },
    "darwin-x86_64": {
      "signature": "<same .sig contents>",
-     "url": "https://github.com/ChoiGyber/MyCli/releases/download/v0.2.0/Mymux.app.tar.gz"
+     "url": "https://github.com/ChoiGyber/Mymux/releases/download/v0.2.0/Mymux.app.tar.gz"
    }
    ```
 
