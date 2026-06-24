@@ -11,3 +11,8 @@ release/
 
 # OMC tooling runtime state
 .omc/
+
+# Updater signing keys — NEVER commit these
+*.key
+*.key.pub
+mymux_updater.key*
