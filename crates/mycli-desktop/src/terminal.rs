@@ -34,14 +34,81 @@ fn find_in_path(exe: &str) -> Option<std::path::PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Default shell. On Windows prefer PowerShell (pwsh > powershell) so commands
-/// like `cd E:` switch drives as users expect; fall back to cmd.exe (COMSPEC).
+/// Locate Git Bash (no startup banner). Avoids System32\bash.exe (the WSL
+/// launcher) and Windows Store aliases.
+#[cfg(windows)]
+fn find_git_bash() -> Option<std::path::PathBuf> {
+    let candidates = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ];
+    for c in candidates {
+        let p = std::path::PathBuf::from(c);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        let p = local.join(r"Programs\Git\bin\bash.exe");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(p) = find_in_path("bash.exe") {
+        let s = p.to_string_lossy().to_lowercase();
+        if !s.contains("system32") && !s.contains("windowsapps") {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Write (idempotently) a Git Bash init file that shows the working directory
+/// right before the `$` prompt, then returns its forward-slash path for
+/// `--rcfile`. Sources the normal startup so PATH/aliases still work.
+#[cfg(windows)]
+fn mymux_bashrc() -> Option<String> {
+    let dir = dirs::home_dir()?.join(".mycli");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("mymux.bashrc");
+    let content = "\
+# Mymux Git Bash init — show the directory before the $ prompt.
+[ -f /etc/profile ] && . /etc/profile
+[ -f ~/.bashrc ] && . ~/.bashrc
+unset PROMPT_COMMAND
+PS1='\\[\\033[36m\\]\\w\\[\\033[0m\\] \\$ '
+";
+    std::fs::write(&path, content).ok()?;
+    Some(path.to_string_lossy().replace('\\', "/"))
+}
+
+/// Default shell. On Windows prefer Git Bash (clean, no product banner); if it
+/// isn't installed, fall back to PowerShell with `-NoLogo` so the startup
+/// banner is suppressed.
 fn default_shell_builder() -> CommandBuilder {
     #[cfg(windows)]
     {
+        if let Some(path) = find_git_bash() {
+            let mut c = CommandBuilder::new(path);
+            if let Some(rc) = mymux_bashrc() {
+                // Custom prompt (dir before $). --rcfile makes it non-login, so
+                // the rcfile re-sources /etc/profile; CHERE_INVOKING keeps cwd.
+                c.arg("--rcfile");
+                c.arg(rc);
+                c.arg("-i");
+                c.env("CHERE_INVOKING", "1");
+            } else {
+                c.arg("--login");
+                c.arg("-i");
+            }
+            return c;
+        }
         for exe in ["pwsh.exe", "powershell.exe"] {
             if let Some(path) = find_in_path(exe) {
-                return CommandBuilder::new(path);
+                let mut c = CommandBuilder::new(path);
+                c.arg("-NoLogo");
+                return c;
             }
         }
     }

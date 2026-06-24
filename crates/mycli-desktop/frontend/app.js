@@ -34,6 +34,7 @@ const tabs = new Map(); // tabIdx -> { root: PaneNode, el: DOM }
 let activeTabIdx = null;
 let activeTermId = null;
 let focusedPaneId = null;
+let draggingPaneId = null;
 let tabCounter = 0;
 let browserTabActive = false;
 let cdpWs = null;
@@ -43,6 +44,13 @@ let screenInputBound = false;
 let browserMode = "native"; // 'native' (embedded WebView) | 'ai' (CDP screencast)
 let nativeCurrentUrl = "https://www.google.com";
 let paneSyncPending = false;
+let terminalFontSize = (function () {
+  try {
+    const v = parseInt(localStorage.getItem("mymux.termFontSize"), 10);
+    if (Number.isInteger(v) && v >= 8 && v <= 40) return v;
+  } catch {}
+  return 14;
+})();
 let savedCmds = [];
 let currentInput = "";
 let acSelectedIdx = -1;
@@ -104,6 +112,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     currentExplorerPath = home;
     await loadExplorer();
     await loadDrives();
+    renderExplorerFavorites();
   } catch (e) {
     console.error("Init error:", e);
   }
@@ -272,11 +281,13 @@ function renderFileList(entries) {
     const nameClass = entry.is_dir ? "dir" : "file";
     const size = entry.is_dir ? "" : formatSize(entry.size);
 
+    const favOn = entry.is_dir && isExplorerFav(entry.path);
     li.innerHTML = `
       <span class="file-icon ${iconClass}">${icon}</span>
       <span class="file-name ${nameClass}">${esc(entry.name)}</span>
       <span class="file-size">${size}</span>
       <span class="file-item-actions">
+        ${entry.is_dir ? `<button class="fav-btn${favOn ? " on" : ""}" title="즐겨찾기">${favOn ? "★" : "☆"}</button>` : ""}
         <button class="cd-btn" title="Open a new terminal here">cd</button>
       </span>
     `;
@@ -286,19 +297,17 @@ function renderFileList(entries) {
       li.addEventListener("click", () => navigateTo(entry.path));
     }
 
+    const favBtnEl = li.querySelector(".fav-btn");
+    if (favBtnEl) {
+      favBtnEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleExplorerFav(entry.path, entry.name);
+      });
+    }
+
     li.querySelector(".cd-btn").addEventListener("click", (e) => {
       e.stopPropagation();
-      const path = entry.is_dir ? entry.path : currentExplorerPath;
-      if (currentSftpId) {
-        // Remote explorer: cd inside the active SSH terminal. The path comes
-        // from the remote server's listing, so single-quote + escape it to
-        // prevent shell injection via a malicious filename.
-        const safe = String(path).replace(/'/g, "'\\''");
-        sendToTerminal(`cd '${safe}'`);
-      } else {
-        // Local: open a NEW terminal already in that directory
-        spawnTerminal(undefined, path);
-      }
+      cdToTerminal(entry.is_dir ? entry.path : currentExplorerPath);
     });
 
     fileListEl.appendChild(li);
@@ -308,6 +317,72 @@ function renderFileList(entries) {
 function navigateTo(path) {
   currentExplorerPath = path;
   loadExplorer();
+}
+
+// Operate the CLI in a folder: open a new local terminal already in that
+// directory, or `cd` the active SSH terminal for remote paths (escaped).
+function cdToTerminal(path) {
+  if (currentSftpId) {
+    const safe = String(path).replace(/'/g, "'\\''");
+    sendToTerminal(`cd '${safe}'`);
+    return;
+  }
+  // Local: open the folder in the CURRENT window by splitting the active tab.
+  // Fall back to a new tab only when no terminal pane is active.
+  if (!browserTabActive && activeTabIdx != null && focusedPaneId != null && terminals.has(focusedPaneId)) {
+    splitPane("horizontal", path);
+  } else {
+    spawnTerminal(undefined, path);
+  }
+}
+
+// ── Explorer favorites (folders, persisted in localStorage) ──
+function getExplorerFavorites() {
+  try { return JSON.parse(localStorage.getItem("mymux.explorerFavorites") || "[]"); } catch { return []; }
+}
+function setExplorerFavorites(arr) {
+  try { localStorage.setItem("mymux.explorerFavorites", JSON.stringify(arr)); } catch {}
+}
+function isExplorerFav(path) {
+  return getExplorerFavorites().some((f) => f.path === path);
+}
+function toggleExplorerFav(path, name) {
+  const favs = getExplorerFavorites();
+  const idx = favs.findIndex((f) => f.path === path);
+  if (idx >= 0) favs.splice(idx, 1);
+  else favs.push({ path, name: name || baseName(path) || path });
+  setExplorerFavorites(favs);
+  renderExplorerFavorites();
+  loadExplorer(); // refresh star state in the list
+}
+function removeExplorerFav(path) {
+  setExplorerFavorites(getExplorerFavorites().filter((f) => f.path !== path));
+  renderExplorerFavorites();
+  loadExplorer();
+}
+function renderExplorerFavorites() {
+  const el = document.getElementById("explorer-favorites");
+  if (!el) return;
+  const favs = getExplorerFavorites();
+  el.innerHTML = "";
+  if (favs.length === 0) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "";
+  for (const f of favs) {
+    const chip = document.createElement("div");
+    chip.className = "fav-chip";
+    chip.title = f.path;
+    chip.innerHTML = `<span class="fav-chip-star">★</span><span class="fav-chip-name">${esc(f.name)}</span><button class="fav-chip-x" title="제거">&times;</button>`;
+    chip.querySelector(".fav-chip-star").addEventListener("click", () => cdToTerminal(f.path));
+    chip.querySelector(".fav-chip-name").addEventListener("click", () => cdToTerminal(f.path));
+    chip.querySelector(".fav-chip-x").addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeExplorerFav(f.path);
+    });
+    el.appendChild(chip);
+  }
 }
 
 async function goUp() {
@@ -417,6 +492,47 @@ async function createPane(parentEl, shell, args, cwd) {
   statusBar.querySelector(".split-v").addEventListener("click", (e) => { e.stopPropagation(); setFocusedPane(id); splitPane("vertical"); });
   statusBar.querySelector(".close").addEventListener("click", (e) => { e.stopPropagation(); closePane(id); });
 
+  // Drag the status bar onto another pane's top/bottom/left/right to re-tile.
+  statusBar.draggable = true;
+  statusBar.title = "드래그해서 패인 이동";
+  statusBar.addEventListener("dragstart", (e) => {
+    if (e.target.closest(".pane-btn")) { e.preventDefault(); return; }
+    draggingPaneId = id;
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", String(id)); } catch {}
+  });
+  statusBar.addEventListener("dragend", () => { draggingPaneId = null; hideDropIndicator(); });
+  paneEl.addEventListener("dragover", (e) => {
+    if (draggingPaneId == null || draggingPaneId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    showDropIndicator(paneEl, computeDropPosition(paneEl, e));
+  });
+  paneEl.addEventListener("dragleave", (e) => {
+    if (!paneEl.contains(e.relatedTarget)) hideDropIndicator();
+  });
+  paneEl.addEventListener("drop", (e) => {
+    if (draggingPaneId == null || draggingPaneId === id) { hideDropIndicator(); draggingPaneId = null; return; }
+    e.preventDefault();
+    const pos = computeDropPosition(paneEl, e);
+    const src = draggingPaneId;
+    draggingPaneId = null;
+    hideDropIndicator();
+    movePane(src, id, pos);
+  });
+
+  // Ctrl +/- to change terminal font size, Ctrl+0 to reset (intercept before
+  // xterm/PTY so the keys don't reach the shell or zoom the WebView).
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (e.key === "=" || e.key === "+") { e.preventDefault(); adjustTerminalFontSize(1); return false; }
+      if (e.key === "-" || e.key === "_") { e.preventDefault(); adjustTerminalFontSize(-1); return false; }
+      if (e.key === "0") { e.preventDefault(); setTerminalFontSize(14); return false; }
+      if (e.key === "Tab") { e.preventDefault(); focusNextPane(e.shiftKey ? -1 : 1); return false; }
+    }
+    return true;
+  });
+
   term.onData((data) => {
     const result = handleTerminalInput(data, id);
     if (result !== "consumed") {
@@ -482,7 +598,7 @@ async function spawnTerminal(shell, cwd) {
 }
 
 // Split the focused pane
-async function splitPane(direction) {
+async function splitPane(direction, cwd) {
   if (!focusedPaneId) return;
   const tInfo = terminals.get(focusedPaneId);
   if (!tInfo) return;
@@ -510,7 +626,7 @@ async function splitPane(direction) {
 
   // Create new pane
   try {
-    const newPtyId = await createPane(splitContainer, null, null);
+    const newPtyId = await createPane(splitContainer, null, null, cwd);
     currentTab.panes.push(newPtyId);
     refreshSessionList();
 
@@ -618,6 +734,139 @@ function refitAllPanes() {
       invoke("pty_resize", { id, cols: t.term.cols, rows: t.term.rows });
     } catch {}
   }
+}
+
+// Terminal font size (Ctrl +/-/0), applied to all panes and persisted.
+function setTerminalFontSize(size) {
+  terminalFontSize = Math.max(8, Math.min(40, size));
+  try { localStorage.setItem("mymux.termFontSize", String(terminalFontSize)); } catch {}
+  for (const [, t] of terminals) {
+    try { t.term.options.fontSize = terminalFontSize; } catch {}
+  }
+  refitAllPanes();
+}
+function adjustTerminalFontSize(delta) {
+  setTerminalFontSize(terminalFontSize + delta);
+}
+
+// Cycle focus through the active tab's panes in reading order
+// (top-to-bottom rows, left-to-right within a row). dir: +1 next, -1 prev.
+function focusNextPane(dir) {
+  if (activeTabIdx == null || browserTabActive) return;
+  const tab = tabs.get(activeTabIdx);
+  if (!tab || !tab.panes || tab.panes.length < 2) return;
+  const ordered = tab.panes
+    .map((id) => ({ id, t: terminals.get(id) }))
+    .filter((p) => p.t && p.t.paneEl)
+    .map((p) => ({ id: p.id, r: p.t.paneEl.getBoundingClientRect() }))
+    .sort((a, b) => (Math.abs(a.r.top - b.r.top) > 5 ? a.r.top - b.r.top : a.r.left - b.r.left));
+  const ids = ordered.map((p) => p.id);
+  let idx = ids.indexOf(focusedPaneId);
+  if (idx < 0) idx = 0;
+  const next = (idx + dir + ids.length) % ids.length;
+  setFocusedPane(ids[next]);
+}
+
+// ── Pane drag-to-rearrange ──
+function computeDropPosition(leaf, e) {
+  const r = leaf.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width;
+  const y = (e.clientY - r.top) / r.height;
+  const d = { top: y, bottom: 1 - y, left: x, right: 1 - x };
+  let pos = "top", min = d.top;
+  for (const k of ["bottom", "left", "right"]) {
+    if (d[k] < min) { min = d[k]; pos = k; }
+  }
+  return pos;
+}
+
+function getDropIndicator() {
+  let ind = document.getElementById("drop-indicator");
+  if (!ind) {
+    ind = document.createElement("div");
+    ind.id = "drop-indicator";
+    document.body.appendChild(ind);
+  }
+  return ind;
+}
+function showDropIndicator(leaf, position) {
+  const ind = getDropIndicator();
+  const r = leaf.getBoundingClientRect();
+  let left = r.left, top = r.top, width = r.width, height = r.height;
+  if (position === "top") height = r.height / 2;
+  else if (position === "bottom") { top = r.top + r.height / 2; height = r.height / 2; }
+  else if (position === "left") width = r.width / 2;
+  else if (position === "right") { left = r.left + r.width / 2; width = r.width / 2; }
+  ind.style.display = "block";
+  ind.style.left = left + "px";
+  ind.style.top = top + "px";
+  ind.style.width = width + "px";
+  ind.style.height = height + "px";
+}
+function hideDropIndicator() {
+  const ind = document.getElementById("drop-indicator");
+  if (ind) ind.style.display = "none";
+}
+
+// Detach a pane-leaf from its split container and collapse the leftover
+// single-child container (mirrors closePane's cleanup).
+function detachAndCollapse(leaf, tab) {
+  const container = leaf.parentElement;
+  leaf.remove();
+  if (!container) return;
+  const divider = [...container.children].find(
+    (c) => c.classList && c.classList.contains("pane-divider")
+  );
+  if (divider) divider.remove();
+  const remaining = container.children[0];
+  if (remaining) {
+    if (container.parentElement && container !== tab.rootEl) {
+      container.parentElement.replaceChild(remaining, container);
+    }
+    if (remaining.style) remaining.style.flex = "1";
+  }
+}
+
+// Move `srcId` next to `targetId` on the given side (top/bottom/left/right),
+// within the same tab.
+function movePane(srcId, targetId, position) {
+  if (srcId === targetId) return;
+  const src = terminals.get(srcId);
+  const target = terminals.get(targetId);
+  if (!src || !target) return;
+  const tab = findTabForPane(targetId);
+  if (!tab || !tab.panes.includes(srcId)) return; // same-tab moves only
+
+  const srcLeaf = src.paneEl;
+  const targetLeaf = target.paneEl;
+
+  detachAndCollapse(srcLeaf, tab);
+
+  const parent = targetLeaf.parentElement;
+  if (!parent) return;
+
+  const vertical = position === "top" || position === "bottom";
+  const before = position === "top" || position === "left";
+
+  const split = document.createElement("div");
+  split.className = `pane-container ${vertical ? "vertical" : "horizontal"}`;
+  split.style.cssText = "flex:1;";
+  parent.replaceChild(split, targetLeaf);
+
+  const divider = document.createElement("div");
+  divider.className = "pane-divider";
+  srcLeaf.style.flex = "1";
+  targetLeaf.style.flex = "1";
+
+  if (before) {
+    split.append(srcLeaf, divider, targetLeaf);
+  } else {
+    split.append(targetLeaf, divider, srcLeaf);
+  }
+  setupDividerDrag(divider, split, vertical ? "vertical" : "horizontal");
+
+  setFocusedPane(srcId);
+  requestAnimationFrame(() => refitAllPanes());
 }
 
 async function connectSsh() {
@@ -1248,8 +1497,10 @@ async function handleCloseRequest() {
 function createXterm() {
   return new Terminal({
     cursorBlink: true,
-    fontSize: 14,
-    fontFamily: '"D2Coding", "Cascadia Code", "Consolas", monospace',
+    fontSize: terminalFontSize,
+    fontFamily: '"Pretendard KR", "D2Coding", "Cascadia Code", "Consolas", monospace',
+    fontWeight: 100,
+    fontWeightBold: 400,
     theme: terminalTheme(),
   });
 }
@@ -1904,10 +2155,22 @@ function showAutocomplete(input, ptyId) {
 
   // Position popup near the terminal cursor
   const t = terminals.get(ptyId);
-  if (t && t.paneEl) {
-    const termRect = t.paneEl.getBoundingClientRect();
-    acPopup.style.left = (termRect.left + 20) + "px";
-    acPopup.style.bottom = (window.innerHeight - termRect.bottom + 30) + "px";
+  if (t && t.term) {
+    // Anchor a speech-bubble just above the typed text, near the cursor.
+    const screenEl = t.term.element || t.paneEl;
+    const r = screenEl.getBoundingClientRect();
+    const cols = Math.max(t.term.cols || 80, 1);
+    const rows = Math.max(t.term.rows || 24, 1);
+    const cw = r.width / cols;
+    const ch = r.height / rows;
+    const buf = t.term.buffer && t.term.buffer.active;
+    const curX = buf ? buf.cursorX : 0;
+    const curY = buf ? buf.cursorY : rows - 1;
+    let left = r.left + curX * cw - 16; // tail aligns near the cursor
+    left = Math.max(r.left + 4, Math.min(left, window.innerWidth - 250));
+    const lineTop = r.top + curY * ch;
+    acPopup.style.left = left + "px";
+    acPopup.style.bottom = (window.innerHeight - lineTop + 12) + "px";
     acPopup.style.top = "auto";
   }
 
