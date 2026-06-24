@@ -122,7 +122,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Restore the previous session if one was saved; otherwise open a default terminal.
   try {
     const restored = await restoreSession();
-    if (!restored) await spawnTerminal();
+    if (!restored) await openStartupGuide();
   } catch (e) {
     console.error("Session restore error:", e);
     try { await spawnTerminal(); } catch {}
@@ -2336,3 +2336,99 @@ window.addEventListener("DOMContentLoaded", () => {
   };
   start();
 });
+
+// ── Startup guide: two side-by-side shells with install instructions ──
+// Shown on launch when there is no previous session to restore. Left pane
+// guides Claude Code install, right pane guides Codex CLI install. Each pane
+// is a live shell, so the user can paste the commands right below the banner.
+
+const GUIDE_CLAUDE =
+  "\r\n" +
+  "\x1b[1;36m══════ Claude Code 설치 ══════\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[90mNode.js 18+ 가 필요합니다.\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[1;32m▶ npm (모든 OS)\x1b[0m\r\n" +
+  "  \x1b[33mnpm install -g @anthropic-ai/claude-code\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[1;32m▶ 네이티브 설치\x1b[0m\r\n" +
+  "  \x1b[90mmacOS/Linux\x1b[0m\r\n" +
+  "  \x1b[33mcurl -fsSL https://claude.ai/install.sh | bash\x1b[0m\r\n" +
+  "  \x1b[90mWindows (PowerShell)\x1b[0m\r\n" +
+  "  \x1b[33mirm https://claude.ai/install.ps1 | iex\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[1;32m▶ 실행\x1b[0m   \x1b[33mclaude\x1b[0m\r\n" +
+  "\x1b[90m문서: docs.claude.com/claude-code\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[2m↓ 아래 셸에 명령을 붙여넣어 설치하세요.\x1b[0m\r\n" +
+  "\r\n";
+
+const GUIDE_CODEX =
+  "\r\n" +
+  "\x1b[1;35m══════ Codex CLI 설치 ══════\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[90mOpenAI Codex CLI. ChatGPT 계정 또는\x1b[0m\r\n" +
+  "\x1b[90mAPI 키가 필요합니다.\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[1;32m▶ npm (모든 OS)\x1b[0m\r\n" +
+  "  \x1b[33mnpm install -g @openai/codex\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[1;32m▶ Homebrew (macOS/Linux)\x1b[0m\r\n" +
+  "  \x1b[33mbrew install codex\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[1;32m▶ 실행\x1b[0m   \x1b[33mcodex\x1b[0m\r\n" +
+  "\x1b[90m문서: github.com/openai/codex\x1b[0m\r\n" +
+  "\r\n" +
+  "\x1b[2m↓ 아래 셸에 명령을 붙여넣어 설치하세요.\x1b[0m\r\n" +
+  "\r\n";
+
+async function openStartupGuide() {
+  terminalWelcome.style.display = "none";
+
+  const tabIdx = tabCounter++;
+  const tabEl = document.createElement("div");
+  tabEl.className = "terminal-instance active";
+
+  const rootContainer = document.createElement("div");
+  rootContainer.className = "pane-container horizontal";
+  rootContainer.style.cssText = "flex:1;";
+  tabEl.appendChild(rootContainer);
+  terminalContainer.appendChild(tabEl);
+
+  try {
+    const shell = getDefaultShellId();
+
+    // Left pane → Claude Code guide.
+    const leftId = await createPane(rootContainer, shell, null, null);
+    terminals.get(leftId).term.write(GUIDE_CLAUDE);
+
+    // Divider + right pane → Codex guide (mirrors splitPane internals).
+    const divider = document.createElement("div");
+    divider.className = "pane-divider";
+    rootContainer.appendChild(divider);
+    setupDividerDrag(divider, rootContainer, "horizontal");
+
+    const rightId = await createPane(rootContainer, shell, null, null);
+    terminals.get(rightId).term.write(GUIDE_CODEX);
+
+    tabs.set(tabIdx, {
+      el: tabEl,
+      rootEl: rootContainer,
+      panes: [leftId, rightId],
+      label: "Setup Guide",
+      session: { kind: "local", shell: null, cwd: null },
+    });
+    addTab(tabIdx, "Setup Guide");
+    switchToTab(tabIdx);
+    refreshSessionList();
+
+    await new Promise((r) => requestAnimationFrame(r));
+    refitAllPanes();
+    setFocusedPane(leftId);
+  } catch (err) {
+    console.error("Startup guide failed:", err);
+    tabEl.remove();
+    // Fall back to a single default terminal.
+    try { await spawnTerminal(); } catch {}
+  }
+}
