@@ -16,6 +16,17 @@ async function clipboardWrite(text) {
   } catch {}
 }
 
+// Paste clipboard text into a terminal pane (Ctrl+V / Shift+Insert / right-click).
+async function pasteIntoPane(id) {
+  try {
+    const clip = window.__TAURI_PLUGIN_CLIPBOARD_MANAGER__;
+    if (clip && clip.readText) {
+      const text = await clip.readText();
+      if (text) invoke("pty_write", { id, data: text });
+    }
+  } catch {}
+}
+
 // ── DOM refs ──
 let sidebar, btnToggleSidebar, btnNewTerminal;
 let explorerPath, btnExplorerUp, explorerMode, fileListEl;
@@ -118,6 +129,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   await setupListeners();
   initBrowserPanel();
+  applyBrowserEnabled();
 
   // Restore the previous session if one was saved; otherwise open a default terminal.
   try {
@@ -255,6 +267,21 @@ async function setupListeners() {
 
   // Resize — refit all visible panes
   new ResizeObserver(() => refitAllPanes()).observe(terminalContainer);
+
+  // Explorer: type a path + Enter to jump there.
+  const gotoEl = document.getElementById("explorer-goto");
+  if (gotoEl) {
+    gotoEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const p = gotoEl.value.trim();
+        if (p) navigateTo(p);
+      }
+    });
+  }
+
+  // Browser feature on/off toggle (top bar 🌐).
+  const btnBrowser = document.getElementById("btn-toggle-browser");
+  if (btnBrowser) btnBrowser.addEventListener("click", toggleBrowserEnabled);
 }
 
 // ═══════════════════════════════════════════════
@@ -522,11 +549,19 @@ async function createPane(parentEl, shell, args, cwd) {
   // xterm/PTY so the keys don't reach the shell or zoom the WebView).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      // Paste (Ctrl/Cmd+V, also Ctrl+Shift+V); copy selection (Ctrl+Shift+C).
+      if (e.key === "v" || e.key === "V") { e.preventDefault(); pasteIntoPane(id); return false; }
+      if (e.shiftKey && (e.key === "c" || e.key === "C")) {
+        const sel = term.getSelection();
+        if (sel) { e.preventDefault(); clipboardWrite(sel); return false; }
+      }
       if (e.key === "=" || e.key === "+") { e.preventDefault(); adjustTerminalFontSize(1); return false; }
       if (e.key === "-" || e.key === "_") { e.preventDefault(); adjustTerminalFontSize(-1); return false; }
       if (e.key === "0") { e.preventDefault(); setTerminalFontSize(14); return false; }
       if (e.key === "Tab") { e.preventDefault(); focusNextPane(e.shiftKey ? -1 : 1); return false; }
     }
+    // Shift+Insert → paste
+    if (e.type === "keydown" && e.shiftKey && e.key === "Insert") { e.preventDefault(); pasteIntoPane(id); return false; }
     return true;
   });
 
@@ -541,6 +576,13 @@ async function createPane(parentEl, shell, args, cwd) {
   term.onFocus = () => setFocusedPane(id);
   paneEl.addEventListener("click", () => setFocusedPane(id));
   termWrap.addEventListener("click", () => { setFocusedPane(id); term.focus(); });
+  // Right-click: copy the selection if any, otherwise paste the clipboard (PuTTY-style).
+  termWrap.addEventListener("contextmenu", async (e) => {
+    e.preventDefault();
+    const sel = term.getSelection();
+    if (sel) { await clipboardWrite(sel); term.clearSelection(); }
+    else { await pasteIntoPane(id); }
+  });
 
   await invoke("pty_write", { id, data: "\x1b[1;1R" });
 
@@ -991,6 +1033,27 @@ async function doSshConnect(opts) {
 }
 
 // ── Browser (Playwright/CDP) tab ──
+function browserEnabled() {
+  try { return localStorage.getItem("mymux.browserEnabled") !== "false"; } catch { return true; }
+}
+function applyBrowserEnabled() {
+  const on = browserEnabled();
+  const tab = document.getElementById("browser-tab");
+  if (tab) tab.style.display = on ? "" : "none";
+  const btn = document.getElementById("btn-toggle-browser");
+  if (btn) { btn.classList.toggle("active", on); btn.title = on ? "브라우저 끄기" : "브라우저 켜기"; }
+  if (!on) {
+    // Turning the browser off is also the escape hatch for a stuck native
+    // overlay: leave the view if open, and force-hide the child WebView either way.
+    if (browserTabActive) setBrowserView(false);
+    else invoke("browser_pane_hide").catch(() => {});
+  }
+}
+function toggleBrowserEnabled() {
+  try { localStorage.setItem("mymux.browserEnabled", browserEnabled() ? "false" : "true"); } catch {}
+  applyBrowserEnabled();
+}
+
 function initBrowserPanel() {
   // Persistent Browser tab pinned at the left of the tab strip.
   const tab = document.createElement("div");

@@ -922,6 +922,22 @@ html[data-theme="light"] #toolbar-actions #btn-update:hover {
 }
 .modal-box .modal-actions button.secondary:hover { color: var(--text); background: var(--surface-hover); }
 
+/* Explorer "go to path" input (bottom of the explorer panel). */
+#explorer-goto {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 6px 8px 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+}
+#explorer-goto::placeholder { color: var(--text-dim); }
+#explorer-goto:focus { outline: none; border-color: var(--accent); }
+
 .terminal-instance {
   position: absolute;
   inset: 0;
