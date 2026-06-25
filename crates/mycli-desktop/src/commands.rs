@@ -112,6 +112,43 @@ pub fn delete_command(id: String) -> Result<(), String> {
     s.remove(&id).map_err(|e| e.to_string())
 }
 
+/// Read a text/code file for the in-app viewer. Returns Err("BINARY") for
+/// non-text files (so the frontend can open them with the OS default app),
+/// and Err on files larger than ~2 MB.
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    use std::io::Read;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.len() > 2_000_000 {
+        return Err("파일이 너무 큽니다 (2MB 초과)".into());
+    }
+    let mut buf = Vec::new();
+    std::fs::File::open(&path)
+        .map_err(|e| e.to_string())?
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    let sample = &buf[..buf.len().min(8000)];
+    if sample.contains(&0u8) {
+        return Err("BINARY".into());
+    }
+    Ok(String::from_utf8_lossy(&buf).to_string())
+}
+
+/// Open a path with the OS default application (used for binary/exe files).
+#[tauri::command]
+pub fn open_external(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // explorer.exe with the path as a single structured argument is not
+        // subject to `cmd` metacharacter parsing (avoids command injection).
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn execute_command(command_text: String) -> Result<String, String> {
     let output = mycli_core::executor::run(&command_text).map_err(|e| e.to_string())?;

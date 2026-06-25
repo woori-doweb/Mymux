@@ -282,6 +282,10 @@ async function setupListeners() {
   // Browser feature on/off toggle (top bar 🌐).
   const btnBrowser = document.getElementById("btn-toggle-browser");
   if (btnBrowser) btnBrowser.addEventListener("click", toggleBrowserEnabled);
+
+  // File viewer close button.
+  const vClose = document.getElementById("viewer-close");
+  if (vClose) vClose.addEventListener("click", closeViewer);
 }
 
 // ═══════════════════════════════════════════════
@@ -338,6 +342,9 @@ function renderFileList(entries) {
     if (entry.is_dir) {
       // Single click enters the folder
       li.addEventListener("click", () => navigateTo(entry.path));
+    } else {
+      // Single click opens the file in the viewer tab.
+      li.addEventListener("click", () => openFileViewer(entry));
     }
 
     const favBtnEl = li.querySelector(".fav-btn");
@@ -360,6 +367,134 @@ function renderFileList(entries) {
 function navigateTo(path) {
   currentExplorerPath = path;
   loadExplorer();
+}
+
+// ── File viewer (markdown / text) — open a clicked file in a tab ──
+let viewerActive = false;
+
+const VIEWER_TEXT_EXTS = new Set([
+  "md","markdown","txt","log","json","js","ts","jsx","tsx","rs","py","go","java","c","cpp","h","hpp",
+  "cs","rb","php","sh","bash","zsh","ps1","bat","cmd","yml","yaml","toml","ini","cfg","conf","xml",
+  "html","htm","css","scss","sql","csv","env","lock","mjs","cjs",
+]);
+
+// Minimal, safe Markdown → HTML (escapes text first, then applies transforms).
+function renderMarkdown(src) {
+  const escHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = (t) => {
+    t = escHtml(t);
+    t = t.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+    t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, txt, url) => {
+      // txt/url are already &<>-escaped by escHtml above. Also escape quotes
+      // for the attribute context and allow only safe URL schemes.
+      const ok = /^(https?:|mailto:|#|\/|\.)/i.test(url);
+      const href = ok ? url.replace(/"/g, "&quot;").replace(/'/g, "&#39;") : "#";
+      return `<a href="${href}" target="_blank" rel="noreferrer">${txt}</a>`;
+    });
+    return t;
+  };
+  const lines = src.replace(/\r\n?/g, "\n").split("\n");
+  let html = "", i = 0, inList = false;
+  const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^```/);
+    if (fence) {
+      closeList(); i++; let code = "";
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) { code += lines[i] + "\n"; i++; }
+      i++;
+      html += `<pre><code>${escHtml(code)}</code></pre>`;
+      continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { closeList(); const lvl = h[1].length; html += `<h${lvl}>${inline(h[2])}</h${lvl}>`; i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { closeList(); html += "<hr/>"; i++; continue; }
+    const bq = line.match(/^>\s?(.*)$/);
+    if (bq) { closeList(); html += `<blockquote>${inline(bq[1])}</blockquote>`; i++; continue; }
+    const li = line.match(/^\s*[-*+]\s+(.*)$/) || line.match(/^\s*\d+\.\s+(.*)$/);
+    if (li) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${inline(li[1])}</li>`; i++; continue; }
+    if (line.trim() === "") { closeList(); i++; continue; }
+    closeList(); html += `<p>${inline(line)}</p>`; i++;
+  }
+  closeList();
+  return html;
+}
+
+function ensureViewerTab() {
+  let tab = document.getElementById("viewer-tab");
+  if (!tab) {
+    tab = document.createElement("div");
+    tab.className = "browser-tab"; // reuse the pinned-tab styling
+    tab.id = "viewer-tab";
+    tab.innerHTML = `<span>📄</span><span>Viewer</span>`;
+    tab.title = "파일 뷰어";
+    tab.addEventListener("click", () => setViewerView(true));
+    terminalTabs.prepend(tab);
+  }
+  return tab;
+}
+
+function setViewerView(on) {
+  viewerActive = on;
+  const panel = document.getElementById("viewer-panel");
+  const tab = document.getElementById("viewer-tab");
+  if (on) {
+    if (browserTabActive) setBrowserView(false);
+    panel.classList.remove("hidden");
+    terminalContainer.style.display = "none";
+    terminalWelcome.style.display = "none";
+    terminalTabs.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    if (tab) tab.classList.add("active");
+  } else {
+    panel.classList.add("hidden");
+    terminalContainer.style.display = "";
+    if (tab) tab.classList.remove("active");
+  }
+}
+
+function closeViewer() {
+  setViewerView(false);
+  const tab = document.getElementById("viewer-tab");
+  if (tab) tab.remove();
+}
+
+function fileExt(name) {
+  const m = /\.([^.\\/]+)$/.exec(name);
+  return m ? m[1].toLowerCase() : "";
+}
+
+async function openFileViewer(entry) {
+  const ext = fileExt(entry.name);
+  const lower = entry.name.toLowerCase();
+  const isText = VIEWER_TEXT_EXTS.has(ext) || lower === "dockerfile" || lower.endsWith(".gitignore") || ext === "";
+  if (!isText) {
+    invoke("open_external", { path: entry.path }).catch((e) => toast(String(e), true));
+    return;
+  }
+  let content;
+  try {
+    content = await invoke("read_text_file", { path: entry.path });
+  } catch (e) {
+    if (String(e).includes("BINARY")) { invoke("open_external", { path: entry.path }).catch(() => {}); return; }
+    toast(String(e), true);
+    return;
+  }
+  document.getElementById("viewer-title").textContent = entry.name;
+  const body = document.getElementById("viewer-body");
+  if (ext === "md" || ext === "markdown") {
+    body.className = "viewer-body markdown";
+    body.innerHTML = renderMarkdown(content);
+  } else {
+    body.className = "viewer-body";
+    const pre = document.createElement("pre");
+    pre.textContent = content;
+    body.innerHTML = "";
+    body.appendChild(pre);
+  }
+  ensureViewerTab();
+  setViewerView(true);
 }
 
 // Operate the CLI in a folder: open a new local terminal already in that
@@ -1115,6 +1250,7 @@ function setBrowserView(on) {
   const panel = document.getElementById("browser-panel");
   const tab = document.getElementById("browser-tab");
   if (on) {
+    if (viewerActive) setViewerView(false);
     panel.classList.remove("hidden");
     terminalContainer.style.display = "none";
     terminalWelcome.style.display = "none";
@@ -1731,6 +1867,7 @@ function addTab(tabIdx, label) {
 
 function switchToTab(tabIdx) {
   if (browserTabActive) setBrowserView(false);
+  if (viewerActive) setViewerView(false);
   activeTabIdx = tabIdx;
   terminalTabs.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("active", Number(tab.dataset.id) === tabIdx);

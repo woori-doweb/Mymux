@@ -28,6 +28,8 @@ fn main() {
             commands::delete_command,
             commands::execute_command,
             commands::set_favorite,
+            commands::read_text_file,
+            commands::open_external,
             session::session_save,
             session::session_load,
             session::session_clear,
