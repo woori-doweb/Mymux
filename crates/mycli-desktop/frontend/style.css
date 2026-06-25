@@ -103,6 +103,29 @@ header h1 {
   border-color: var(--accent);
 }
 
+/* Update button: blue in dark mode, green in light mode — always white text. */
+#toolbar-actions #btn-update {
+  background: #0f9ef0;
+  color: #fff;
+  border-color: #0f9ef0;
+  font-size: 11px;          /* a bit smaller than other toolbar buttons */
+  padding: 3px 8px;         /* smaller than base, content vertically centered */
+  line-height: 1.1;
+}
+#toolbar-actions #btn-update:hover {
+  background: #3db8ff;
+  border-color: #3db8ff;
+}
+html[data-theme="light"] #toolbar-actions #btn-update {
+  background: #16a34a;
+  color: #fff;
+  border-color: #16a34a;
+}
+html[data-theme="light"] #toolbar-actions #btn-update:hover {
+  background: #1f9d4e;
+  border-color: #1f9d4e;
+}
+
 /* Accent swatches + theme toggle */
 #accent-swatches {
   display: inline-flex;
@@ -1283,6 +1306,21 @@ header h1 {
   border: 8px solid transparent;
   border-top-color: var(--surface);
   border-bottom: 0;
+}
+/* When flipped below the cursor, the tail points up instead of down. */
+#autocomplete-popup.below::before {
+  bottom: auto;
+  top: -9px;
+  border: 9px solid transparent;
+  border-bottom-color: var(--border);
+  border-top: 0;
+}
+#autocomplete-popup.below::after {
+  bottom: auto;
+  top: -7px;
+  border: 8px solid transparent;
+  border-bottom-color: var(--surface);
+  border-top: 0;
 }
 #autocomplete-list {
   list-style: none;

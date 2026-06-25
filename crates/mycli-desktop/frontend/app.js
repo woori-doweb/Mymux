@@ -2292,7 +2292,8 @@ function showAutocomplete(input, ptyId) {
   // Position popup near the terminal cursor
   const t = terminals.get(ptyId);
   if (t && t.term) {
-    // Anchor a speech-bubble just above the typed text, near the cursor.
+    // Anchor a speech-bubble near the cursor — above by default, but flip
+    // below when there isn't enough room above (cursor near the top edge).
     const screenEl = t.term.element || t.paneEl;
     const r = screenEl.getBoundingClientRect();
     const cols = Math.max(t.term.cols || 80, 1);
@@ -2305,12 +2306,26 @@ function showAutocomplete(input, ptyId) {
     let left = r.left + curX * cw - 16; // tail aligns near the cursor
     left = Math.max(r.left + 4, Math.min(left, window.innerWidth - 250));
     const lineTop = r.top + curY * ch;
+    const lineBottom = r.top + (curY + 1) * ch;
+    const gap = 12;
     acPopup.style.left = left + "px";
-    acPopup.style.bottom = (window.innerHeight - lineTop + 12) + "px";
-    acPopup.style.top = "auto";
+    // Reveal first so offsetHeight is measurable (no repaint until JS yields).
+    acPopup.classList.remove("hidden");
+    const popupH = acPopup.offsetHeight;
+    if (lineTop - gap - popupH >= 4) {
+      // Enough room above → keep the bubble above the cursor.
+      acPopup.style.bottom = (window.innerHeight - lineTop + gap) + "px";
+      acPopup.style.top = "auto";
+      acPopup.classList.remove("below");
+    } else {
+      // Near the top → flip below the cursor line so it isn't clipped.
+      acPopup.style.top = (lineBottom + gap) + "px";
+      acPopup.style.bottom = "auto";
+      acPopup.classList.add("below");
+    }
+  } else {
+    acPopup.classList.remove("hidden");
   }
-
-  acPopup.classList.remove("hidden");
 }
 
 function hideAutocomplete() {

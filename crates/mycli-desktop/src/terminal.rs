@@ -72,13 +72,29 @@ fn mymux_bashrc() -> Option<String> {
     let dir = dirs::home_dir()?.join(".mycli");
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join("mymux.bashrc");
-    let content = "\
-# Mymux Git Bash init — show the directory before the $ prompt.
+    let content = r#"# Mymux Git Bash init — show the directory before the $ prompt.
 [ -f /etc/profile ] && . /etc/profile
 [ -f ~/.bashrc ] && . ~/.bashrc
 unset PROMPT_COMMAND
-PS1='\\[\\033[36m\\]\\w\\[\\033[0m\\] \\$ '
-";
+PS1='\[\033[36m\]\w\[\033[0m\] \$ '
+
+# Mymux: richer tab-completion (closer to PowerShell, where the tool supports it).
+if ! shopt -oq posix; then
+  for __f in /usr/share/bash-completion/bash_completion /etc/bash_completion; do
+    [ -r "$__f" ] && . "$__f" && break
+  done
+  unset __f
+fi
+__mymux_load_completion() {
+  command -v "$1" >/dev/null 2>&1 || return
+  local __out
+  __out=$("$1" completion bash 2>/dev/null) || return
+  [ -n "$__out" ] && eval "$__out" 2>/dev/null
+}
+__mymux_load_completion claude
+__mymux_load_completion codex
+__mymux_load_completion gh
+"#;
     std::fs::write(&path, content).ok()?;
     Some(path.to_string_lossy().replace('\\', "/"))
 }
