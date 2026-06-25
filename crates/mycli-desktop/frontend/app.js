@@ -128,6 +128,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     try { await spawnTerminal(); } catch {}
   }
 
+  // Panes opened during restore/startup are sized before the container layout
+  // has fully settled, which can leave a restored terminal blank/unresponsive
+  // (xterm fitted to 0 rows). The ResizeObserver won't fire if the container
+  // size didn't change, so force a refit once layout settles.
+  requestAnimationFrame(() => requestAnimationFrame(() => refitAllPanes()));
+  setTimeout(() => refitAllPanes(), 150);
+
   setupCloseHandler();
 });
 
@@ -588,6 +595,8 @@ async function spawnTerminal(shell, cwd) {
       label,
       session: { kind: "local", shell: shell || null, cwd: cwd || null },
     });
+    const ti0 = terminals.get(ptyId);
+    if (ti0) ti0.session = { kind: "local", shell: shell || null, cwd: cwd || null };
     addTab(tabIdx, label);
     switchToTab(tabIdx);
     refreshSessionList();
@@ -627,8 +636,11 @@ async function splitPane(direction, cwd) {
 
   // Create new pane
   try {
-    const newPtyId = await createPane(splitContainer, getDefaultShellId(), null, cwd);
+    const splitShell = getDefaultShellId();
+    const newPtyId = await createPane(splitContainer, splitShell, null, cwd);
     currentTab.panes.push(newPtyId);
+    const nti = terminals.get(newPtyId);
+    if (nti) nti.session = { kind: "local", shell: splitShell || null, cwd: cwd || null };
     refreshSessionList();
 
     // Refit all panes in this tab
@@ -947,6 +959,7 @@ async function doSshConnect(opts) {
   try {
     const ptyId = await createPane(rootContainer, "ssh", sshArgs);
     terminals.get(ptyId).sshTarget = target;
+    terminals.get(ptyId).session = { kind: "ssh", target, username, host, port, keyPath: keyPath || null, auth };
 
     tabs.set(tabIdx, {
       el: tabEl,
@@ -1365,12 +1378,96 @@ function nativeNavigate(input) {
 }
 
 // ── Session persistence + close prompt ──
+// Serialize a tab's pane layout (DOM tree) into a saveable structure.
+// A leaf → { leaf: <pane session> }; a split container → { dir, children: [...] }.
+function serializePane(el) {
+  if (el.classList && el.classList.contains("pane-leaf")) {
+    const id = Number(el.dataset.ptyId);
+    const t = terminals.get(id);
+    return { leaf: t && t.session ? t.session : { kind: "local", shell: null, cwd: null } };
+  }
+  const dir = el.classList && el.classList.contains("vertical") ? "vertical" : "horizontal";
+  const children = [...el.children]
+    .filter((c) => c.classList && (c.classList.contains("pane-leaf") || c.classList.contains("pane-container")))
+    .map(serializePane);
+  return { dir, children };
+}
+
 function collectSession() {
   const arr = [];
   for (const [, tab] of tabs) {
-    if (tab.session) arr.push({ ...tab.session, label: tab.label });
+    if (tab.panes && tab.panes.length > 1 && tab.rootEl) {
+      // Multi-pane tab → persist the full split layout (tree).
+      arr.push({ label: tab.label, tree: serializePane(tab.rootEl) });
+    } else if (tab.session) {
+      // Single-pane tab → flat entry (backward-compatible with v1).
+      arr.push({ ...tab.session, label: tab.label });
+    }
   }
-  return { version: 1, tabs: arr };
+  return { version: 2, tabs: arr };
+}
+
+// Rebuild a saved pane tree into `parentEl`, spawning each leaf's terminal.
+async function buildPaneNode(parentEl, node) {
+  if (node && node.leaf) {
+    const s = node.leaf;
+    if (s.kind === "ssh") {
+      const id = await createPane(parentEl, "ssh", ["-p", String(s.port || 22), s.target]);
+      const t = terminals.get(id);
+      if (t) { t.sshTarget = s.target; t.session = { ...s }; }
+    } else {
+      const id = await createPane(parentEl, s.shell || getDefaultShellId(), null, s.cwd || undefined);
+      const t = terminals.get(id);
+      if (t) t.session = { kind: "local", shell: s.shell || null, cwd: s.cwd || null };
+    }
+    return;
+  }
+  const dir = node && node.dir === "vertical" ? "vertical" : "horizontal";
+  const container = document.createElement("div");
+  container.className = "pane-container " + dir;
+  container.style.cssText = "flex:1;";
+  parentEl.appendChild(container);
+  const kids = (node && node.children) || [];
+  for (let i = 0; i < kids.length; i++) {
+    if (i > 0) {
+      const divider = document.createElement("div");
+      divider.className = "pane-divider";
+      container.appendChild(divider);
+      setupDividerDrag(divider, container, dir);
+    }
+    await buildPaneNode(container, kids[i]);
+  }
+}
+
+// Restore a multi-pane tab from its saved split tree.
+async function restoreTabFromTree(tabData) {
+  terminalWelcome.style.display = "none";
+  const tabIdx = tabCounter++;
+  const tabEl = document.createElement("div");
+  tabEl.className = "terminal-instance active";
+  terminalContainer.appendChild(tabEl);
+
+  await buildPaneNode(tabEl, tabData.tree);
+
+  const rootEl = [...tabEl.children].find((c) => c.classList && c.classList.contains("pane-container"));
+  const paneIds = [...tabEl.querySelectorAll(".pane-leaf")]
+    .map((el) => Number(el.dataset.ptyId))
+    .filter((n) => !Number.isNaN(n) && terminals.has(n));
+  if (paneIds.length === 0 || !rootEl) {
+    tabEl.remove();
+    return;
+  }
+  const label = tabData.label || "Terminal";
+  tabs.set(tabIdx, {
+    el: tabEl,
+    rootEl,
+    panes: paneIds,
+    label,
+    session: terminals.get(paneIds[0]) ? terminals.get(paneIds[0]).session : null,
+  });
+  addTab(tabIdx, label);
+  switchToTab(tabIdx);
+  refreshSessionList();
 }
 
 async function saveSessionNow() {
@@ -1393,7 +1490,9 @@ async function restoreSession() {
   const pwSessions = [];
   for (const s of data.tabs) {
     try {
-      if (s.kind === "ssh") {
+      if (s.tree) {
+        await restoreTabFromTree(s);
+      } else if (s.kind === "ssh") {
         if (s.auth === "key") {
           // Key/agent auth → reconnect automatically (no secret needed).
           await doSshConnect({
