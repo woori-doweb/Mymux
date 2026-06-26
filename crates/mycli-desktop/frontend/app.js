@@ -613,11 +613,23 @@ function onViewerLinkClick(e) {
   if (!href) return;
   if (href.startsWith("#")) return; // in-page anchor — let it scroll
   e.preventDefault();
-  if (/^mailto:/i.test(href)) { invoke("open_external", { path: href }).catch(() => {}); return; }
   if (/^https?:\/\//i.test(href)) { openInNativeBrowser(href); return; }
   if (/^\/\//.test(href)) { openInNativeBrowser("https:" + href); return; }
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) { invoke("open_external", { path: href }).catch(() => {}); return; }
-  // Local file / folder path (absolute or relative to the viewed file).
+  if (/^mailto:/i.test(href)) { invoke("open_external", { path: href }).catch(() => {}); return; }
+  // Windows-absolute path (C:\..) — a local path, NOT a URI scheme. Route to the
+  // local opener (which never executes non-viewable files) instead of letting it
+  // fall through to a "C:" scheme that would reach open_external.
+  if (/^[a-z]:[\\/]/i.test(href)) {
+    let t = href.split("#")[0].split("?")[0].replace(/\//g, "\\");
+    try { t = decodeURIComponent(t); } catch {}
+    openLocalLink(t);
+    return;
+  }
+  // Any other explicit URI scheme (file:, javascript:, custom protocols, …) is
+  // not allowed from a document link — drop it. (open_external would launch
+  // protocol handlers / local programs.)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return;
+  // Otherwise: a relative local file/folder path.
   let target = href.split("#")[0].split("?")[0];
   try { target = decodeURIComponent(target); } catch {}
   if (!target) return;
@@ -646,12 +658,22 @@ async function openLocalLink(target) {
     explorerGo(target, null); // it's a directory
     return;
   } catch {}
-  // Treat as a file: point the Explorer at its folder, then open it.
+  // It's a file. Point the Explorer at its folder. Only open VIEWABLE files in
+  // the viewer — never pass an arbitrary local path to open_external, which would
+  // LAUNCH executables (.exe/.bat/.msi/…) straight from a clicked document link.
   const dir = dirOf(target);
   if (dir && dir !== currentExplorerPath) {
     try { await invoke("explorer_list_local", { path: dir }); explorerGo(dir, null); } catch {}
   }
-  openFileViewer({ path: target, name: baseName(target), is_dir: false, is_symlink: false, size: 0 });
+  const name = baseName(target);
+  const ext = fileExt(name);
+  const lower = name.toLowerCase();
+  const viewable = VIEWER_TEXT_EXTS.has(ext) || lower === "dockerfile" || lower.endsWith(".gitignore") || ext === "";
+  if (viewable) {
+    openFileViewer({ path: target, name, is_dir: false, is_symlink: false, size: 0 });
+  } else {
+    toast("탐색기에서 위치를 열었습니다: " + name);
+  }
 }
 
 function activateSidebarTab(name) {
