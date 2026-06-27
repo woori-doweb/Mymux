@@ -348,8 +348,14 @@ async function setupListeners() {
     }
   }, 16); // ~60fps
 
-  // Resize — refit all visible panes
-  new ResizeObserver(() => refitAllPanes()).observe(terminalContainer);
+  // Resize — refit all visible panes. Debounced (coalesced to one animation
+  // frame) so a ResizeObserver burst doesn't reflow every pane repeatedly.
+  let refitPending = false;
+  new ResizeObserver(() => {
+    if (refitPending) return;
+    refitPending = true;
+    requestAnimationFrame(() => { refitPending = false; refitAllPanes(); });
+  }).observe(terminalContainer);
 
   // Explorer: type a path + Enter to jump there.
   const gotoEl = document.getElementById("explorer-goto");
@@ -1349,7 +1355,12 @@ async function createPane(parentEl, shell, args, cwd) {
     rows,
   });
 
-  const sessionLabel = shell === "ssh" ? "SSH" : (shell || "Terminal");
+  // Opened in a specific folder → name the session after that folder (shown on
+  // the pane label AND in the right-side session list via sessionLabelFor →
+  // t.label). Falls back to the shell name when no folder was given.
+  const sessionLabel = shell === "ssh"
+    ? "SSH"
+    : (cwd ? baseName(cwd) : (shell || "Terminal"));
   terminals.set(id, { term, fitAddon, paneEl, type: shell === "ssh" ? "ssh" : "local", label: sessionLabel, cwd: cwd || null });
 
   // Status bar: label + split/close controls
@@ -1678,11 +1689,38 @@ function movePaneToTab(ptyId, targetTabIdx) {
   if (srcEmptied) toast(`마지막 세션이라 '${srcLabel}' 탭이 닫혔습니다`);
 }
 
-function refitAllPanes() {
+// Refit panes to their container. By default a pane whose pixel size hasn't
+// actually changed is skipped: refitting an unchanged pane reflows xterm (which
+// pulls scrollback up — the content visibly "jumps") and fires a needless
+// SIGWINCH that makes idle shells redraw. The active/streaming pane stays
+// bottom-pinned so it looks fine, which is why only idle panes appeared to jump.
+// `force` (e.g. font-size change) bypasses the size cache.
+function refitAllPanes(force = false) {
   for (const [id, t] of terminals) {
     try {
+      const host = (t.term.element && t.term.element.parentElement) || t.paneEl;
+      const w = host ? host.clientWidth : 0;
+      const h = host ? host.clientHeight : 0;
+      if (w === 0 || h === 0) continue;                       // hidden/transient: never fit to 0
+      if (!force && w === t._fitW && h === t._fitH) continue; // unchanged: skip (no jump)
+      t._fitW = w;
+      t._fitH = h;
+
+      // Keep bottom-pinned panes pinned across the reflow; leave others put.
+      const buf = t.term.buffer.active;
+      const wasAtBottom = buf.viewportY >= buf.baseY;
+
       t.fitAddon.fit();
-      invoke("pty_resize", { id, cols: t.term.cols, rows: t.term.rows });
+
+      if (wasAtBottom) { try { t.term.scrollToBottom(); } catch {} }
+
+      // Only notify the backend when the grid actually changed (a no-op resize
+      // still delivers SIGWINCH and makes the shell redraw).
+      if (t.term.cols !== t._fitCols || t.term.rows !== t._fitRows) {
+        t._fitCols = t.term.cols;
+        t._fitRows = t.term.rows;
+        invoke("pty_resize", { id, cols: t.term.cols, rows: t.term.rows });
+      }
     } catch {}
   }
 }
@@ -1694,7 +1732,7 @@ function setTerminalFontSize(size) {
   for (const [, t] of terminals) {
     try { t.term.options.fontSize = terminalFontSize; } catch {}
   }
-  refitAllPanes();
+  refitAllPanes(true); // font change keeps pixel size but must re-grid every pane
 }
 function adjustTerminalFontSize(delta) {
   setTerminalFontSize(terminalFontSize + delta);

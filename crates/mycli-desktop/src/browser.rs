@@ -208,6 +208,13 @@ pub fn browser_launch(
     }
     cmd.arg(start_url);
 
+    // No flashing console window on Windows (CREATE_NO_WINDOW).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+
     let child = cmd
         .spawn()
         .map_err(|e| format!("{label} 실행 실패: {e}"))?;

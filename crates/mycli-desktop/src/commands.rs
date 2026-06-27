@@ -147,8 +147,11 @@ pub fn open_external(path: String) -> Result<(), String> {
     {
         // explorer.exe with the path as a single structured argument is not
         // subject to `cmd` metacharacter parsing (avoids command injection).
+        // CREATE_NO_WINDOW (0x0800_0000) → no flashing console window.
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("explorer")
             .arg(&path)
+            .creation_flags(0x0800_0000)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
