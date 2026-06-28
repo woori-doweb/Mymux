@@ -90,6 +90,28 @@ async fn handle_socket(
     }
 
     let mut rx = session.output_tx.subscribe();
+
+    // If the shell already exited (its single Exit broadcast predates this
+    // subscription), tell the client now instead of hanging on recv().
+    if session.is_exited() {
+        let _ = sender
+            .send(Message::Text(
+                json!({ "type": "exit", "code": null }).to_string(),
+            ))
+            .await;
+        audit::record(
+            &state,
+            None,
+            None,
+            "terminal.detach",
+            Some(&term_id),
+            detach_meta,
+            "ok",
+        )
+        .await;
+        return;
+    }
+
     let mut send_task = tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -108,7 +130,14 @@ async fn handle_socket(
                         .await;
                     break;
                 }
-                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Lagged(n)) => {
+                    let _ = sender
+                        .send(Message::Text(
+                            json!({ "type": "error", "message": format!("output lagged — {n} chunks dropped; reattach to resync") }).to_string(),
+                        ))
+                        .await;
+                    continue;
+                }
                 Err(RecvError::Closed) => break,
             }
         }

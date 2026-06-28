@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util"] }
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 futures-util = "0.3"
 
 serde = { workspace = true }
@@ -34,7 +34,7 @@ argon2 = "0.5"
 rand = "0.8"
 base64 = "0.22"
 sha2 = "0.10"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3" }
 toml = "0.8"
 ipnet = "2"
 clap = { version = "4", features = ["derive"] }

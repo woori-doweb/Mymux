@@ -142,3 +142,26 @@ WebSocket frames — client→server `{"type":"input","data":"…"}`,
 - Output is delivered best-effort over a bounded broadcast channel; a reconnect
   replays the last `replay_buffer_bytes` of scrollback.
 - The app must run as non-root, bound to `127.0.0.1`, behind Nginx + Tailscale.
+
+## 13. Known follow-ups / deferred hardening
+
+Surfaced by an independent review and intentionally deferred (acceptable for a
+tailnet-internal MVP; tracked here so they aren't forgotten):
+
+- **Live sessions survive logout/revoke.** Revoking a session (logout/disable)
+  does not yet terminate an already-open WebSocket PTY — the shell lives until
+  the socket disconnects or idles out. Follow-up: track live sockets per session
+  and close them on revoke, or periodically re-validate inside the WS loop.
+- **Username-keyed lockout = targeted DoS.** A known username can be deliberately
+  locked out by failed attempts. Fine inside the tailnet; consider IP-scoped
+  counting or exponential backoff later.
+- **CIDR check is not uniform.** `allowed_client_cidrs` is enforced at login and
+  the WS upgrade but not on the REST terminal/audit endpoints (nginx + Tailscale
+  already gate reachability). Follow-up: apply the check uniformly.
+- **Reattach output gaps.** Output produced between the replay snapshot and the
+  live subscription can be missed; a broadcast `Lagged` burst drops chunks (now
+  surfaced to the client as an `error` frame prompting reattach). Follow-up:
+  subscribe-then-snapshot under the replay lock for gap-free reattach.
+- **No Content-Security-Policy.** `X-Frame-Options`, `X-Content-Type-Options`,
+  and `Referrer-Policy` are set; a strict CSP needs `login.html`'s inline script
+  moved to a file first.

@@ -203,6 +203,10 @@ impl TerminalManager {
                                 rb.pop_front();
                             }
                         }
+                        // Output is activity too — otherwise the idle reaper
+                        // would kill long-running output-only commands (builds,
+                        // `tail -f`) that receive no keystrokes.
+                        *s2.last_active_at.lock().unwrap() = OffsetDateTime::now_utc();
                         let _ = s2.output_tx.send(PtyEvent::Output(data));
                     }
                     Err(_) => break,
@@ -212,10 +216,24 @@ impl TerminalManager {
             let _ = s2.output_tx.send(PtyEvent::Exit);
         });
 
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(id, Arc::clone(&session));
+        // Re-check the quota under the lock at insert time to close the
+        // check-then-insert TOCTOU (concurrent spawns could otherwise exceed it).
+        {
+            let mut map = self.sessions.lock().unwrap();
+            let live = map
+                .values()
+                .filter(|s| s.owner_user_id == owner_user_id && !s.is_exited())
+                .count();
+            if live >= self.config.max_sessions_per_user {
+                drop(map);
+                session.kill();
+                return Err(AppError::BadRequest(format!(
+                    "session limit reached ({})",
+                    self.config.max_sessions_per_user
+                )));
+            }
+            map.insert(id, Arc::clone(&session));
+        }
         Ok(session)
     }
 
