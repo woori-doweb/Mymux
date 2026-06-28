@@ -164,6 +164,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   requestAnimationFrame(() => requestAnimationFrame(() => remeasureFontCells()));
   setTimeout(() => remeasureFontCells(), 150);
 
+  startFocusKeeper();
   setupCloseHandler();
 });
 
@@ -1381,11 +1382,17 @@ async function createPane(parentEl, shell, args, cwd) {
     : (cwd ? baseName(cwd) : (shell || "Terminal"));
   terminals.set(id, { term, fitAddon, paneEl, type: shell === "ssh" ? "ssh" : "local", label: sessionLabel, cwd: cwd || null });
 
-  // Status bar: label + split/close controls
+  // Status bar: label + split/close controls. The cwd chip tracks the pane's
+  // current directory (setPaneCwd updates it on cd). Blank it when it equals the
+  // label so a folder-named session doesn't show the same name twice (e.g.
+  // "Mymux   Mymux") — `.pane-cwd:empty` hides it. It reappears once you cd into
+  // a folder whose name differs from the label.
+  const cwdLabel = cwd ? baseName(cwd) : "~";
+  const cwdText = cwdLabel === sessionLabel ? "" : cwdLabel;
   statusBar.innerHTML = `
     <span class="pane-grip" title="드래그해서 패인 이동">&#10287;</span>
     <span class="pane-label">${esc(sessionLabel)}</span>
-    ${shell !== "ssh" ? `<span class="pane-cwd" title="${esc(cwd || "")}">${esc(cwd ? baseName(cwd) : "~")}</span>` : ""}
+    ${shell !== "ssh" ? `<span class="pane-cwd" title="${esc(cwd || "")}">${esc(cwdText)}</span>` : ""}
     <span class="pane-actions">
       <button class="pane-btn split-h" title="Split horizontally (Ctrl+Shift+D)">&#8596;</button>
       <button class="pane-btn split-v" title="Split vertically (Ctrl+Shift+E)">&#8597;</button>
@@ -1462,6 +1469,30 @@ async function createPane(parentEl, shell, args, cwd) {
   // appeared inside the "$"). xterm.js answers real DSR (ESC[6n) queries on its
   // own, so the injection is both unnecessary and harmful; removed.
 
+  // Keep this pane focused. The WebView can silently drop the helper-textarea
+  // focus when the app sits idle (cursor goes hollow, typing stops until you
+  // click again). If focus leaves the textarea and lands on *nothing*
+  // (body/null) — i.e. it was dropped, not moved to another pane/input — restore
+  // it to the active pane. Clicking another pane/input/overlay sets a real
+  // activeElement, which is respected (no steal).
+  const helperTa = term.element && term.element.querySelector(".xterm-helper-textarea");
+  if (helperTa) {
+    helperTa.addEventListener("blur", () => {
+      setTimeout(() => {
+        if (focusedPaneId !== id) return;              // only the active pane
+        if (browserTabActive || viewerActive) return;  // not in terminal mode
+        const el = term.element;
+        if (!el || el.classList.contains("focus")) return; // xterm already focused
+        // Leave it only if focus genuinely moved to another input/pane (rename
+        // box, find bar, other terminal); otherwise it was dropped → restore.
+        const ae = document.activeElement;
+        if (ae && ae !== document.body && !el.contains(ae) &&
+            (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
+        try { term.focus(); } catch {}
+      }, 0);
+    });
+  }
+
   setFocusedPane(id);
   return id;
 }
@@ -1476,6 +1507,39 @@ function setFocusedPane(ptyId) {
     t.term.focus();
   }
   updateSessionActive();
+}
+
+// Safety net for terminal focus. The WebView can drop the active terminal's
+// focus while the app sits idle — sometimes without firing a blur event, so the
+// per-pane blur handler in createPane can miss it. Once a second, if we're in
+// terminal mode and focus has fallen to nothing (body/null) rather than a real
+// element (another pane, an input, an overlay), pull it back to the active pane.
+// This is why a focused session stays selectable until you click elsewhere.
+let focusKeeperStarted = false;
+function startFocusKeeper() {
+  if (focusKeeperStarted) return;
+  focusKeeperStarted = true;
+  // Restore terminal focus the instant the window regains it. A background app
+  // (notably WIZVERA Veraport's handler, which pops a window every ~7s) briefly
+  // steals OS focus, blurring the terminal so the cursor goes hollow. Bouncing
+  // the textarea makes xterm re-register focus even when it kept activeElement;
+  // the 250ms tick is a backstop in case the window 'focus' event is missed.
+  const restore = () => {
+    if (!focusedPaneId || !terminals.has(focusedPaneId)) return;
+    if (browserTabActive || viewerActive) return;
+    const t = terminals.get(focusedPaneId);
+    const el = t.term.element;
+    if (!el || el.classList.contains("focus")) return; // already focused → fine
+    // Leave it only if focus genuinely moved to another input/pane.
+    const ae = document.activeElement;
+    if (ae && ae !== document.body && !el.contains(ae) &&
+        (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
+    const ta = el.querySelector(".xterm-helper-textarea");
+    try { if (ta && document.activeElement === ta) ta.blur(); } catch {}
+    try { t.term.focus(); } catch {}
+  };
+  window.addEventListener("focus", restore, true);
+  setInterval(restore, 250);
 }
 
 // Briefly pulse a pane + its session-list row to notify task completion
@@ -2964,7 +3028,11 @@ function setPaneCwd(ptyId, path) {
   t.cwd = path || null;
   const el = t.paneEl && t.paneEl.querySelector(".pane-cwd");
   if (el) {
-    el.textContent = path ? baseName(path) : "~";
+    const lbl = t.paneEl.querySelector(".pane-label");
+    const labelText = lbl ? lbl.textContent : "";
+    const cwdLabel = path ? baseName(path) : "~";
+    // Blank (→ hidden via .pane-cwd:empty) when it would just repeat the label.
+    el.textContent = cwdLabel === labelText ? "" : cwdLabel;
     el.title = path || "";
   }
 }

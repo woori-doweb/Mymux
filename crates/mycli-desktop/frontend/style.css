@@ -1348,6 +1348,9 @@ html[data-theme="light"] #toolbar-actions #btn-update:hover {
   color: var(--text-dim);
   font-size: 11px;
 }
+/* Blanked when the cwd equals the label (folder-named session) → hide it so the
+   name isn't shown twice; it reappears after you cd somewhere with a different name. */
+.pane-statusbar .pane-cwd:empty { display: none; }
 .pane-actions {
   display: flex;
   gap: 4px;

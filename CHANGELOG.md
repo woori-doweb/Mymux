@@ -43,6 +43,26 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
     the texture atlas and refits. It now runs on `document.fonts.ready` **and**
     again after session restore settles, so the startup session is corrected.
 
+- **Pane status-bar name shown twice / 패인 상태바 이름 중복.** 폴더명으로 연 세션은
+  라벨과 작업폴더 칩이 같은 이름이라 두 번 표시됐습니다(`Mymux   Mymux`). 칩이 라벨과
+  같으면 비워서 숨기되(`.pane-cwd:empty`), `cd`로 다른 폴더에 가면 다시 나타나 위치
+  추적은 유지합니다.
+
+  The pane status bar repeated the folder name (label + cwd chip) for
+  folder-named sessions; the chip is now blanked/hidden when it equals the label,
+  and reappears after you `cd` somewhere with a different name.
+
+- **Terminal focus stolen by background apps / 백그라운드 앱에 터미널 포커스 뺏김.** 일부
+  보안 프로그램(예: WIZVERA Veraport)이 수 초마다 핸들러 창을 띄워 OS 포커스를 가로채면
+  터미널 커서가 비활성(hollow)이 됐습니다. 창이 포커스를 되찾는 즉시 활성 패인을 복원하고,
+  xterm이 포커스를 다시 인식하도록 textarea를 bounce 합니다. (다른 입력/패인으로 의도
+  이동한 경우는 존중. 근본 원인이 외부 앱이면 그 앱을 끄는 것이 정석.)
+
+  When a background app (e.g. WIZVERA Veraport's handler, popping every ~7s)
+  briefly steals OS focus, the terminal cursor went hollow. Focus is now restored
+  on window refocus, bouncing the textarea so xterm re-registers it; deliberate
+  moves to another input/pane are respected.
+
 ### Notes / 참고
 - v0.1.8에서 시도한 불필요한 `ESC[1;1R` 커서 위치 보고 제거는 **실제 원인이 아니었습니다**
   (헛다리). 0.1.7·0.1.8에서 동일한 증상이 났던 이유가 바로 위의 stale 셀 메트릭이며,
