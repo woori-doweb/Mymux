@@ -1,0 +1,40 @@
+# Mymux Web Control Console — example configuration.
+# Copy to /etc/mymux-console/config.toml and adjust. Keep it readable only by
+# the service user (chmod 600). NEVER bind to 0.0.0.0 — Nginx + Tailscale/IP
+# allowlist are responsible for any external reachability.
+
+[server]
+bind = "127.0.0.1:7070"
+public_url = "https://mymux-console.tailnet.local"
+static_dir = "/opt/mymux-console/static"
+database_url = "sqlite:/var/lib/mymux-console/mymux.db"
+
+[network]
+behind_reverse_proxy = true
+trusted_proxy_ips = ["127.0.0.1"]
+# Tailscale CGNAT range. The app re-checks even though Nginx already restricts.
+allowed_client_cidrs = ["100.64.0.0/10"]
+
+[auth]
+cookie_name = "mymux_session"
+# Set false ONLY for local HTTP development. Production must be true (HTTPS).
+cookie_secure = true
+session_timeout_seconds = 28800
+idle_timeout_seconds = 1800
+login_fail_limit = 5
+login_lock_seconds = 600
+
+[terminal]
+default_shell = "/bin/bash"
+allowed_shells = ["/bin/bash", "/bin/sh"]
+workspace_root = "/srv/mymux-workspaces"
+max_sessions_per_user = 5
+idle_timeout_seconds = 1800
+max_lifetime_seconds = 28800
+replay_buffer_bytes = 262144
+
+[audit]
+enabled = true
+# Reserved for a follow-up PR; keep false so secrets never land in the audit log.
+log_terminal_input = false
+log_terminal_output = false

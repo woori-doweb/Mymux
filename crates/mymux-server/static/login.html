@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mymux Console — Login</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="login-page">
+  <form id="login-form" class="login-card" autocomplete="on">
+    <h1>Mymux Console</h1>
+    <input id="username" name="username" placeholder="Username" autocomplete="username" autofocus />
+    <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" />
+    <button type="submit">Sign in</button>
+    <p id="error" class="error" role="alert"></p>
+  </form>
+  <script>
+    const form = document.getElementById('login-form');
+    const err = document.getElementById('error');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      try {
+        const r = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (r.ok) {
+          location.href = '/index.html';
+        } else {
+          const j = await r.json().catch(() => ({}));
+          err.textContent = j.error || ('login failed (' + r.status + ')');
+        }
+      } catch (ex) {
+        err.textContent = 'network error';
+      }
+    });
+  </script>
+</body>
+</html>

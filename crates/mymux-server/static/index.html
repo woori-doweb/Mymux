@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mymux Console</title>
+  <link rel="stylesheet" href="vendor/xterm.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <span class="brand">Mymux Console</span>
+    <span id="whoami"></span>
+    <span class="spacer"></span>
+    <button id="btn-new">+ Terminal</button>
+    <button id="btn-close">Close</button>
+    <button id="btn-logout">Logout</button>
+  </header>
+  <main id="layout">
+    <aside id="sidebar">
+      <h2>Terminals</h2>
+      <ul id="term-list"></ul>
+      <div id="audit-box" class="hidden">
+        <h2>Recent audit</h2>
+        <ul id="audit-list"></ul>
+      </div>
+    </aside>
+    <section id="term-area"><div id="terminal"></div></section>
+  </main>
+  <script src="vendor/xterm.min.js"></script>
+  <script src="vendor/addon-fit.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

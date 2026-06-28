@@ -1,0 +1,32 @@
+# systemd unit for the Mymux Web Control Console.
+# Install to /etc/systemd/system/mymux-console.service.
+# Runs as a dedicated non-root user; the binary binds 127.0.0.1 only.
+
+[Unit]
+Description=Mymux Web Control Console
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=mymux-console
+Group=mymux-console
+WorkingDirectory=/var/lib/mymux-console
+ExecStart=/opt/mymux-console/mymux-server serve --config /etc/mymux-console/config.toml
+Restart=on-failure
+RestartSec=3
+
+Environment=RUST_LOG=info
+
+# Hardening — the service never needs root or the home tree.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mymux-console /var/log/mymux-console /srv/mymux-workspaces
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+[package]
+name = "mymux-server"
+version = "0.1.0"
+edition = "2024"
+description = "Mymux Web Control Console — authenticated, Tailscale-internal web terminal server"
+publish = false
+
+# Adapted from crates/mycli-desktop/src/terminal.rs (PTY patterns), but the
+# desktop app uses Tauri commands + polling pty_read; the server is WebSocket
+# push. Kept cross-platform-compilable on purpose: CI builds --workspace on
+# Linux + Windows + macOS, so no unguarded unix-only APIs here.
+
+[[bin]]
+name = "mymux-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+futures-util = "0.3"
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+portable-pty = "0.9"
+# query!/query_as! compile-time macros are intentionally NOT used (would pull a
+# DATABASE_URL build dependency). Only the runtime query()/query_as() functions
+# + FromRow derive are used. Timestamps are stored as RFC3339 TEXT.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+argon2 = "0.5"
+rand = "0.8"
+base64 = "0.22"
+sha2 = "0.10"
+time = { version = "0.3", features = ["formatting"] }
+toml = "0.8"
+ipnet = "2"
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

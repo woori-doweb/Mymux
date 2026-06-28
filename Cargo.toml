@@ -3,6 +3,7 @@ members = [
     "crates/mycli-core",
     "crates/mycli-tui",
     "crates/mycli-desktop",
+    "crates/mymux-server",
 ]
 resolver = "2"
 
