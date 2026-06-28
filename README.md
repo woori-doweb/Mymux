@@ -9,6 +9,7 @@
 Built with **Tauri 2 + Rust** (WebView2 frontend). Made by **ChoiGyber**.
 
 - Repository / 저장소: <https://github.com/ChoiGyber/Mymux>
+- Website / 소개 페이지: <https://choigyber.github.io/Mymux/>
 - Contact / 연락처: **racji92@gmail.com**
 
 ---
@@ -106,9 +107,10 @@ Remove-Item "$env:LOCALAPPDATA\com.mycli.desktop\EBWebView\Default\Cache","$env:
 ---
 
 ## Release / 릴리즈
-Local build → sign → upload to GitHub Releases. See [`RELEASING.md`](RELEASING.md).
+Local build → sign → upload to GitHub Releases. See [`RELEASING.md`](RELEASING.md);
+per-version changes are in [`CHANGELOG.md`](CHANGELOG.md).
 로컬에서 빌드·서명 후 GitHub Releases에 업로드합니다. 자세한 절차는
-[`RELEASING.md`](RELEASING.md) 참고.
+[`RELEASING.md`](RELEASING.md), 버전별 변경 내역은 [`CHANGELOG.md`](CHANGELOG.md) 참고.
 
 ---
 

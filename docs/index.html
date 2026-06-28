@@ -1,0 +1,1383 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mymux — Windows Terminal Multiplexer</title>
+<meta name="description" content="A Windows desktop terminal multiplexer — multiple shells, SSH/SFTP, a file explorer, a file viewer, and an in-app browser in one window.">
+<meta name="keywords" content="terminal, multiplexer, Windows, SSH, SFTP, Tauri, Rust, tmux">
+<meta property="og:title" content="Mymux — Windows Terminal Multiplexer">
+<meta property="og:description" content="Multiple shells, SSH/SFTP, file explorer, file viewer, and in-app browser in one window.">
+<meta property="og:url" content="https://choigyber.github.io/Mymux/">
+<style>
+/* =========================================================
+   CSS CUSTOM PROPERTIES
+   ========================================================= */
+:root {
+  --bg-0:       #080B12;
+  --bg-1:       #0C0F19;
+  --bg-2:       #111522;
+  --bg-3:       #171C2C;
+  --bg-4:       #1E2438;
+  --border:     #252D42;
+  --border-hi:  #37415A;
+
+  --accent:     #00D4AA;
+  --accent-dim: rgba(0,212,170,0.12);
+  --accent-glow:rgba(0,212,170,0.25);
+  --accent-hi:  #00FFCC;
+  --green:      #4ADE80;
+  --green-dim:  rgba(74,222,128,0.12);
+  --yellow:     #F59E0B;
+  --red:        #EF4444;
+  --blue:       #60A5FA;
+  --purple:     #A78BFA;
+
+  --text-0: #F1F5F9;
+  --text-1: #CBD5E1;
+  --text-2: #94A3B8;
+  --text-3: #64748B;
+  --text-4: #3B4663;
+
+  --mono: 'Cascadia Code','Consolas','Monaco','Lucida Console','Courier New',monospace;
+  --sans: 'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+
+  --radius:    8px;
+  --radius-lg: 14px;
+  --t:         220ms ease;
+}
+
+/* =========================================================
+   RESET & BASE
+   ========================================================= */
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+
+html { scroll-behavior:smooth; }
+
+body {
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.65;
+  overflow-x: hidden;
+}
+
+a { color:var(--accent); text-decoration:none; transition:color var(--t); }
+a:hover { color:var(--accent-hi); }
+
+/* =========================================================
+   GLOBAL GRID OVERLAY
+   ========================================================= */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0,212,170,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,212,170,0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Hero radial glow */
+body::after {
+  content: '';
+  position: fixed;
+  top: -20%;
+  right: -10%;
+  width: 70vw;
+  height: 70vw;
+  background: radial-gradient(ellipse at center,
+    rgba(0,212,170,0.045) 0%,
+    transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* =========================================================
+   NAVIGATION
+   ========================================================= */
+nav {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 200;
+  height: 58px;
+  padding: 0 clamp(1rem,4%,3rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(8,11,18,0.82);
+  backdrop-filter: blur(14px) saturate(160%);
+  border-bottom: 1px solid var(--border);
+  transition: border-color var(--t);
+}
+
+.nav-logo {
+  font-family: var(--mono);
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.03em;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.nav-logo .logo-bracket { color: var(--text-4); font-weight: 400; }
+
+.nav-links {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+  list-style: none;
+}
+
+.nav-links a {
+  color: var(--text-2);
+  font-size: 0.875rem;
+  transition: color var(--t);
+}
+
+.nav-links a:hover { color: var(--text-0); }
+
+.nav-cta {
+  background: var(--accent) !important;
+  color: var(--bg-0) !important;
+  padding: 0.4rem 1.1rem !important;
+  border-radius: var(--radius) !important;
+  font-weight: 700 !important;
+  transition: background var(--t), transform var(--t), box-shadow var(--t) !important;
+}
+
+.nav-cta:hover {
+  background: var(--accent-hi) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 20px var(--accent-glow) !important;
+}
+
+/* =========================================================
+   HERO
+   ========================================================= */
+#hero {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(0,1.1fr);
+  gap: clamp(2rem,4vw,5rem);
+  align-items: center;
+  padding: 6rem clamp(1.25rem,5%,5rem) 4rem;
+  max-width: 1360px;
+  margin: 0 auto;
+}
+
+/* ---- Hero text ---- */
+.hero-text { min-width: 0; }
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(0,212,170,0.22);
+  padding: 0.28rem 0.85rem;
+  border-radius: 999px;
+  margin-bottom: 1.5rem;
+}
+
+.badge-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%,100% { box-shadow: 0 0 0 0 rgba(0,212,170,0.6); }
+  50%      { box-shadow: 0 0 0 5px rgba(0,212,170,0); }
+}
+
+h1 {
+  font-family: var(--mono);
+  font-size: clamp(3rem,6.5vw,5.5rem);
+  font-weight: 700;
+  color: var(--text-0);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  margin-bottom: 1.25rem;
+}
+
+h1 .h1-accent { color: var(--accent); }
+
+.hero-en {
+  font-size: clamp(0.95rem,1.5vw,1.1rem);
+  color: var(--text-1);
+  line-height: 1.65;
+  margin-bottom: 0.4rem;
+  max-width: 500px;
+}
+
+.hero-ko {
+  font-size: 0.875rem;
+  color: var(--text-3);
+  line-height: 1.65;
+  margin-bottom: 2.5rem;
+  max-width: 500px;
+}
+
+.hero-cta {
+  display: flex;
+  gap: 0.875rem;
+  flex-wrap: wrap;
+}
+
+/* ---- Buttons ---- */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  background: var(--accent);
+  color: var(--bg-0);
+  font-weight: 700;
+  font-size: 0.975rem;
+  padding: 0.85rem 1.875rem;
+  border-radius: var(--radius);
+  transition: background var(--t), transform var(--t), box-shadow var(--t);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hi);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 36px rgba(0,212,170,0.38);
+  color: var(--bg-0);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--border-hi);
+  color: var(--text-1);
+  font-size: 0.975rem;
+  padding: 0.85rem 1.875rem;
+  border-radius: var(--radius);
+  transition: border-color var(--t), color var(--t), background var(--t), transform var(--t);
+  white-space: nowrap;
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+  transform: translateY(-2px);
+}
+
+/* =========================================================
+   TERMINAL MOCKUP
+   ========================================================= */
+.mockup-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+/* ambient glow behind the terminal */
+.mockup-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -12% -8%;
+  background: radial-gradient(ellipse at 55% 45%,
+    rgba(0,212,170,0.09) 0%,
+    transparent 65%);
+  pointer-events: none;
+}
+
+.term-window {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: clamp(0.62rem,0.85vw,0.75rem);
+  line-height: 1.55;
+  box-shadow:
+    0 0 0 1px rgba(0,212,170,0.07),
+    0 30px 80px rgba(0,0,0,0.7),
+    inset 0 1px 0 rgba(255,255,255,0.03);
+  transform: perspective(1400px) rotateY(-5deg) rotateX(2deg);
+  transition: transform 0.5s cubic-bezier(.25,.8,.25,1);
+}
+
+.term-window:hover {
+  transform: perspective(1400px) rotateY(-2deg) rotateX(1deg) translateY(-5px);
+}
+
+/* Window titlebar */
+.t-bar {
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+  padding: 0 0.875rem;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.t-traffic {
+  display: flex;
+  gap: 6px;
+  margin-right: auto;
+}
+
+.t-traffic span {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  display: block;
+}
+
+.t-traffic .tc { background: #EF4444; }
+.t-traffic .tm { background: #F59E0B; }
+.t-traffic .tx { background: #4ADE80; }
+
+.t-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.65rem;
+  color: var(--text-4);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.t-win-btns {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.t-win-btns span {
+  display: block;
+  width: 10px; height: 1px;
+  background: var(--text-4);
+}
+
+.t-win-btns span:last-child {
+  width: 10px; height: 9px;
+  border: 1px solid var(--text-4);
+  background: transparent;
+}
+
+/* Tabbar */
+.t-tabs {
+  display: flex;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.t-tab {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.65rem;
+  color: var(--text-3);
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.t-tab.on {
+  color: var(--text-0);
+  background: var(--bg-1);
+  position: relative;
+}
+
+.t-tab.on::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.t-tab-pip {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.t-tab-ssh .t-tab-pip { background: var(--green); }
+.t-tab-files .t-tab-pip { background: var(--blue); }
+.t-tab-browser .t-tab-pip { background: var(--purple); }
+
+.t-tab-plus { color: var(--text-4); font-size: 0.75rem; padding: 0.3rem 0.6rem; }
+
+/* Pane grid */
+.t-panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 272px;
+}
+
+.t-pane {
+  padding: 0.7rem 0.875rem;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+.t-pane:nth-child(2n)   { border-right: none; }
+.t-pane:nth-last-child(-n+2) { border-bottom: none; }
+
+.t-pane-hdr {
+  font-size: 0.58rem;
+  color: var(--text-4);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.t-pane-hdr .pip {
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Terminal content helpers */
+.c-prompt { color: var(--accent); }
+.c-path   { color: var(--blue); }
+.c-branch { color: var(--yellow); }
+.c-cmd    { color: var(--text-0); }
+.c-out    { color: var(--text-2); }
+.c-ok     { color: var(--green); }
+.c-dim    { color: var(--text-4); }
+.c-ssh    { color: var(--green); }
+.c-purple { color: var(--purple); }
+.c-file-sel { color: var(--accent); background: var(--accent-dim); }
+
+/* Blinking cursor */
+.cursor {
+  display: inline-block;
+  width: 7px; height: 0.9em;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: blink 1.1s step-end infinite;
+}
+
+@keyframes blink {
+  0%,100% { opacity:1; }
+  50%      { opacity:0; }
+}
+
+.cursor-green {
+  display: inline-block;
+  width: 7px; height: 0.9em;
+  background: var(--green);
+  vertical-align: text-bottom;
+  animation: blink 1.1s step-end infinite;
+  animation-delay: 0.55s;
+}
+
+/* Statusbar */
+.t-status {
+  background: var(--accent);
+  color: var(--bg-0);
+  padding: 0.2rem 0.875rem;
+  font-size: 0.6rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+}
+
+/* =========================================================
+   SECTION COMMON
+   ========================================================= */
+section { position: relative; z-index: 1; }
+
+.inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 5.5rem clamp(1.25rem,5%,4rem);
+}
+
+.s-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--accent);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 0.6rem;
+  opacity: 0.85;
+}
+
+.s-title {
+  font-size: clamp(1.75rem,3vw,2.4rem);
+  font-weight: 700;
+  color: var(--text-0);
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin-bottom: 0.5rem;
+}
+
+.s-sub {
+  font-size: 0.9rem;
+  color: var(--text-3);
+  max-width: 440px;
+  margin-bottom: 3rem;
+}
+
+/* =========================================================
+   FEATURES
+   ========================================================= */
+#features { border-top: 1px solid var(--border); }
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%,320px),1fr));
+  gap: 1.25rem;
+}
+
+.fcard {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.625rem 1.625rem 1.375rem;
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--t), background var(--t),
+              transform var(--t), box-shadow var(--t);
+}
+
+/* Top-edge glow line */
+.fcard::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent) 0%, transparent 60%);
+  opacity: 0;
+  transition: opacity var(--t);
+}
+
+/* Subtle inner glow on hover */
+.fcard::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 30% 0%,
+    rgba(0,212,170,0.07) 0%,
+    transparent 65%);
+  opacity: 0;
+  transition: opacity var(--t);
+  pointer-events: none;
+}
+
+.fcard:hover {
+  border-color: rgba(0,212,170,0.35);
+  background: var(--bg-3);
+  transform: translateY(-4px);
+  box-shadow: 0 16px 48px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,212,170,0.08);
+}
+
+.fcard:hover::before { opacity: 1; }
+.fcard:hover::after  { opacity: 1; }
+
+.fcard-icon {
+  font-size: 2rem;
+  line-height: 1;
+  margin-bottom: 1rem;
+  display: block;
+}
+
+.fcard-en {
+  font-weight: 700;
+  color: var(--text-0);
+  font-size: 1.075rem;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.2rem;
+}
+
+.fcard-ko {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--accent);
+  opacity: 0.75;
+  margin-bottom: 0.9rem;
+  letter-spacing: 0.02em;
+}
+
+.fcard-desc {
+  color: var(--text-2);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+.fcard-desc + .fcard-desc {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-3);
+}
+
+.fcard-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 1.1rem;
+}
+
+.tag {
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  background: var(--bg-4);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  padding: 0.18rem 0.48rem;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+
+/* =========================================================
+   TECH STACK
+   ========================================================= */
+#tech {
+  background: linear-gradient(180deg, var(--bg-0), var(--bg-1));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.tech-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px,1fr));
+  gap: 1rem;
+}
+
+.titem {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.125rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  transition: border-color var(--t), transform var(--t);
+}
+
+.titem:hover {
+  border-color: rgba(0,212,170,0.35);
+  transform: translateY(-2px);
+}
+
+.titem-icon { font-size: 1.75rem; flex-shrink: 0; }
+
+.titem-name {
+  font-weight: 600;
+  color: var(--text-0);
+  font-size: 0.9rem;
+  letter-spacing: -0.01em;
+}
+
+.titem-desc {
+  font-size: 0.73rem;
+  color: var(--text-3);
+  margin-top: 0.1rem;
+}
+
+/* =========================================================
+   DOWNLOAD CTA
+   ========================================================= */
+#download { text-align: center; }
+
+.dl-box {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: clamp(2rem,5vw,3.5rem) clamp(1.5rem,5vw,3rem);
+  max-width: 580px;
+  margin: 0 auto;
+  position: relative;
+  overflow: hidden;
+}
+
+.dl-box::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--accent) 40%,
+    transparent 100%);
+}
+
+.dl-box::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 0%,
+    rgba(0,212,170,0.07) 0%, transparent 65%);
+  pointer-events: none;
+}
+
+.dl-ver {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-3);
+  margin-bottom: 0.6rem;
+  letter-spacing: 0.04em;
+}
+
+.dl-heading {
+  font-size: clamp(1.5rem,3vw,2rem);
+  font-weight: 700;
+  color: var(--text-0);
+  letter-spacing: -0.03em;
+  margin-bottom: 0.4rem;
+}
+
+.dl-sub {
+  color: var(--text-2);
+  font-size: 0.875rem;
+  margin-bottom: 2rem;
+  line-height: 1.65;
+}
+
+.dl-btns {
+  display: flex;
+  justify-content: center;
+  gap: 0.875rem;
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
+}
+
+.dl-build {
+  margin-top: 1.5rem;
+  font-size: 0.775rem;
+  color: var(--text-3);
+}
+
+.dl-build a { color: var(--text-2); }
+.dl-build a:hover { color: var(--accent); }
+
+/* =========================================================
+   FOOTER
+   ========================================================= */
+footer {
+  position: relative;
+  z-index: 1;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+  padding: 2.5rem clamp(1.25rem,5%,4rem);
+}
+
+.footer-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.footer-logo {
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.03em;
+}
+
+.footer-meta {
+  font-size: 0.78rem;
+  color: var(--text-3);
+  margin-top: 0.3rem;
+  line-height: 1.7;
+}
+
+.footer-meta a { color: var(--text-2); }
+.footer-meta a:hover { color: var(--accent); }
+
+.footer-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+}
+
+.footer-links a { color: var(--text-3); }
+.footer-links a:hover { color: var(--accent); }
+
+.footer-right {
+  text-align: right;
+  font-size: 0.78rem;
+  color: var(--text-3);
+}
+
+.footer-stack {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  margin-top: 0.4rem;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+/* =========================================================
+   FADE-IN SCROLL ANIMATION
+   ========================================================= */
+.fade-in {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+
+.fade-in.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+@media (max-width: 920px) {
+  #hero {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    padding-top: 7rem;
+    padding-bottom: 3.5rem;
+  }
+
+  .term-window {
+    transform: none;
+  }
+
+  .term-window:hover {
+    transform: translateY(-5px);
+  }
+}
+
+@media (max-width: 640px) {
+  .nav-links { display: none; }
+
+  h1 { font-size: 2.75rem; }
+
+  .t-panes { grid-template-columns: 1fr; }
+  .t-pane:nth-child(2n) { border-right: none; }
+  .t-pane:nth-last-child(-n+1) { border-bottom: none; }
+  /* show only first two panes on mobile */
+  .t-pane:nth-child(n+3) { display: none; }
+
+  .features-grid { grid-template-columns: 1fr; }
+
+  .footer-inner { flex-direction: column; }
+  .footer-right { text-align: left; }
+  .footer-stack { justify-content: flex-start; }
+}
+
+/* Reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,*::before,*::after { animation-duration:0.01ms !important; transition-duration:0.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- =========================================================
+     NAVIGATION
+     ========================================================= -->
+<nav id="main-nav">
+  <span class="nav-logo">
+    <span class="logo-bracket">[</span>Mymux<span class="logo-bracket">]</span>
+  </span>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#tech">Tech</a></li>
+    <li><a href="https://github.com/ChoiGyber/Mymux" target="_blank" rel="noopener">GitHub</a></li>
+    <li><a href="https://github.com/ChoiGyber/Mymux/releases/latest" class="nav-cta">Download</a></li>
+  </ul>
+</nav>
+
+
+<!-- =========================================================
+     HERO
+     ========================================================= -->
+<section id="hero">
+
+  <!-- LEFT: Copy -->
+  <div class="hero-text fade-in">
+    <div class="hero-badge">
+      <span class="badge-dot"></span>
+      v0.1.9 &nbsp;·&nbsp; Windows &nbsp;·&nbsp; Tauri 2 + Rust
+    </div>
+
+    <h1>My<span class="h1-accent">mux</span></h1>
+
+    <p class="hero-en">
+      A Windows desktop terminal multiplexer &mdash; multiple shells, SSH/SFTP,
+      a file explorer, a file viewer, and an in-app browser in one window.
+    </p>
+    <p class="hero-ko">
+      하나의 창에서 여러 셸·SSH/SFTP·파일 탐색기·파일 뷰어·내장 브라우저를
+      함께 쓰는 Windows 데스크톱 터미널 멀티플렉서.
+    </p>
+
+    <div class="hero-cta">
+      <a href="https://github.com/ChoiGyber/Mymux/releases/latest" class="btn-primary">
+        <!-- Download icon -->
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M7.47 10.78a.75.75 0 001.06 0l3.75-3.75a.75.75 0 00-1.06-1.06L8.75 8.44V1.75a.75.75 0 00-1.5 0v6.69L4.78 5.97a.75.75 0 00-1.06 1.06l3.75 3.75zM3.75 13a.75.75 0 000 1.5h8.5a.75.75 0 000-1.5h-8.5z"/>
+        </svg>
+        Download for Windows
+      </a>
+      <a href="https://github.com/ChoiGyber/Mymux" class="btn-secondary" target="_blank" rel="noopener">
+        <!-- GitHub icon -->
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        View on GitHub
+      </a>
+    </div>
+  </div>
+
+  <!-- RIGHT: Terminal mockup -->
+  <div class="mockup-wrap fade-in" style="transition-delay:.12s" aria-hidden="true">
+    <div class="term-window">
+
+      <!-- Titlebar -->
+      <div class="t-bar">
+        <div class="t-traffic">
+          <span class="tc"></span>
+          <span class="tm"></span>
+          <span class="tx"></span>
+        </div>
+        <div class="t-title">Mymux v0.1.9</div>
+        <div class="t-win-btns">
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="t-tabs" role="tablist">
+        <div class="t-tab on"     role="tab"><span class="t-tab-pip"></span>bash · ~/Project</div>
+        <div class="t-tab t-tab-ssh"   role="tab"><span class="t-tab-pip"></span>ssh · dev-server</div>
+        <div class="t-tab t-tab-files" role="tab"><span class="t-tab-pip"></span>Files</div>
+        <div class="t-tab t-tab-browser" role="tab"><span class="t-tab-pip"></span>Browser</div>
+        <div class="t-tab t-tab-plus">＋</div>
+      </div>
+
+      <!-- 4-pane grid -->
+      <div class="t-panes">
+
+        <!-- Pane 1: Bash -->
+        <div class="t-pane">
+          <div class="t-pane-hdr"><span class="pip"></span>PANE 1 &middot; Git Bash</div>
+          <div><span class="c-path">~/Project/Mymux</span> <span class="c-branch">(main)</span></div>
+          <div><span class="c-prompt">$</span> <span class="c-cmd">cargo tauri build --release</span></div>
+          <div class="c-out">&nbsp;&nbsp;&nbsp;Compiling mymux v0.1.9</div>
+          <div class="c-ok">&nbsp;&nbsp;&nbsp;Finished release in 42.3s</div>
+          <div><span class="c-path">~/Project/Mymux</span> <span class="c-branch">(main)</span></div>
+          <div><span class="c-prompt">$</span> <span class="cursor"></span></div>
+        </div>
+
+        <!-- Pane 2: SSH session -->
+        <div class="t-pane">
+          <div class="t-pane-hdr" style="--pip-color:var(--green)"><span class="pip" style="background:var(--green)"></span>PANE 2 &middot; SSH dev-server</div>
+          <div class="c-dim">Connected to 192.168.1.10:22</div>
+          <div><span class="c-ssh">user@dev-server</span><span class="c-dim">:</span><span class="c-path">~</span><span class="c-ssh">$</span> <span class="c-cmd">htop</span></div>
+          <div class="c-out">PID &nbsp;USER &nbsp;CPU% &nbsp;MEM% &nbsp;CMD</div>
+          <div class="c-out">1842 user &nbsp; 2.1 &nbsp;&nbsp;0.4 &nbsp;node</div>
+          <div class="c-out">2034 user &nbsp; 0.8 &nbsp;&nbsp;1.2 &nbsp;python3</div>
+          <div><span class="c-ssh">user@dev-server</span><span class="c-path">:~</span><span class="c-ssh">$</span> <span class="cursor-green"></span></div>
+        </div>
+
+        <!-- Pane 3: File explorer -->
+        <div class="t-pane">
+          <div class="t-pane-hdr" style="--pip-color:var(--blue)"><span class="pip" style="background:var(--blue)"></span>PANE 3 &middot; File Explorer</div>
+          <div class="c-dim" style="font-size:0.6em;margin-bottom:4px">C: / Users / ChoiGyber / Project</div>
+          <div class="c-dim">&nbsp;&#x25B8; &#128193; .github</div>
+          <div class="c-dim">&nbsp;&#x25B8; &#128193; src-tauri</div>
+          <div class="c-file-sel">&nbsp;&#x25BC; &#128193; src</div>
+          <div class="c-dim">&nbsp;&nbsp;&nbsp;&nbsp;&#128196; app.js</div>
+          <div class="c-dim">&nbsp;&nbsp;&nbsp;&nbsp;&#128196; index.html</div>
+          <div class="c-dim">&nbsp;&#128196; README.md</div>
+        </div>
+
+        <!-- Pane 4: File viewer -->
+        <div class="t-pane">
+          <div class="t-pane-hdr" style="--pip-color:var(--purple)"><span class="pip" style="background:var(--purple)"></span>PANE 4 &middot; File Viewer</div>
+          <div style="color:var(--blue);font-weight:700"># Mymux</div>
+          <div class="c-out" style="margin:3px 0 5px">Windows terminal multiplexer</div>
+          <div style="color:var(--yellow)">## Features</div>
+          <div class="c-dim">&#x2013; Terminal panes</div>
+          <div class="c-dim">&#x2013; SSH / SFTP</div>
+          <div class="c-dim">&#x2013; File Explorer</div>
+          <div class="c-dim">&#x2013; In-app Browser</div>
+        </div>
+
+      </div><!-- /t-panes -->
+
+      <!-- Statusbar -->
+      <div class="t-status">
+        <span>Mymux v0.1.9</span>
+        <span>4 panes &nbsp;&middot;&nbsp; 4 tabs</span>
+        <span>DARK &nbsp;&middot;&nbsp; D2Coding</span>
+      </div>
+
+    </div><!-- /term-window -->
+  </div><!-- /mockup-wrap -->
+
+</section>
+
+
+<!-- =========================================================
+     FEATURES
+     ========================================================= -->
+<section id="features">
+  <div class="inner">
+    <p class="s-label fade-in">// features</p>
+    <h2 class="s-title fade-in">Everything in one window</h2>
+    <p class="s-sub fade-in">한 창 안에서 모든 것을 &mdash; 셸부터 브라우저까지.</p>
+
+    <div class="features-grid">
+
+      <!-- 1. Terminal -->
+      <article class="fcard fade-in">
+        <span class="fcard-icon" role="img" aria-label="Terminal">&#9000;</span>
+        <div class="fcard-en">Terminal</div>
+        <div class="fcard-ko">// terminal</div>
+        <p class="fcard-desc">
+          Tabs and horizontal/vertical split panes. Drag panes to rearrange.
+          Each pane shows its working directory. Choose your default shell:
+          Git Bash, PowerShell, or CMD.
+        </p>
+        <p class="fcard-desc">
+          탭 + 가로/세로 분할 패인, 드래그 재배치, 패인별 작업 디렉터리 표시.
+          기본 셸 Git Bash / PowerShell / CMD 선택.
+        </p>
+        <div class="fcard-tags">
+          <span class="tag">split-pane</span>
+          <span class="tag">git-bash</span>
+          <span class="tag">powershell</span>
+          <span class="tag">cmd</span>
+        </div>
+      </article>
+
+      <!-- 2. SSH/SFTP -->
+      <article class="fcard fade-in" style="transition-delay:.04s">
+        <span class="fcard-icon" role="img" aria-label="SSH">&#128274;</span>
+        <div class="fcard-en">SSH / SFTP</div>
+        <div class="fcard-ko">// ssh_sftp</div>
+        <p class="fcard-desc">
+          Connect to remote servers via SSH using password or key authentication.
+          Browse and manage remote files directly through the built-in SFTP explorer.
+        </p>
+        <p class="fcard-desc">
+          SSH(비밀번호·키) 접속 + 내장 SFTP로 원격 파일 탐색.
+        </p>
+        <div class="fcard-tags">
+          <span class="tag">ssh</span>
+          <span class="tag">sftp</span>
+          <span class="tag">password-auth</span>
+          <span class="tag">key-auth</span>
+        </div>
+      </article>
+
+      <!-- 3. File Explorer -->
+      <article class="fcard fade-in" style="transition-delay:.08s">
+        <span class="fcard-icon" role="img" aria-label="File Explorer">&#128193;</span>
+        <div class="fcard-en">File Explorer</div>
+        <div class="fcard-ko">// file_explorer</div>
+        <p class="fcard-desc">
+          Drive list, favorites, manual path input, and folder tree.
+          Back/forward history, parent folder navigation, and Chrome-style mouse
+          side buttons. Type <code style="font-family:var(--mono);color:var(--accent);font-size:.85em">cd</code> to open a terminal in the current folder.
+        </p>
+        <p class="fcard-desc">
+          드라이브·즐겨찾기·경로 입력·폴더 목록, 히스토리 탐색, 마우스 옆 버튼,
+          <code style="font-family:var(--mono);color:var(--accent);font-size:.85em">cd</code>로 그 폴더에서 터미널 열기.
+        </p>
+        <div class="fcard-tags">
+          <span class="tag">favorites</span>
+          <span class="tag">history</span>
+          <span class="tag">cd</span>
+        </div>
+      </article>
+
+      <!-- 4. File Viewer -->
+      <article class="fcard fade-in" style="transition-delay:.12s">
+        <span class="fcard-icon" role="img" aria-label="File Viewer">&#128196;</span>
+        <div class="fcard-en">File Viewer</div>
+        <div class="fcard-ko">// file_viewer</div>
+        <p class="fcard-desc">
+          Renders Markdown, plain text, and code with syntax highlighting.
+          Sandboxed HTML preview. Multiple open file tabs.
+          Right-click selected text to copy or send directly to a terminal session.
+        </p>
+        <p class="fcard-desc">
+          마크다운/텍스트/코드 렌더링, HTML 샌드박스 미리보기, 여러 파일 탭.
+          선택 영역 우클릭 &rarr; 복사/세션으로 보내기.
+        </p>
+        <div class="fcard-tags">
+          <span class="tag">markdown</span>
+          <span class="tag">syntax-highlight</span>
+          <span class="tag">html-sandbox</span>
+        </div>
+      </article>
+
+      <!-- 5. In-app Browser -->
+      <article class="fcard fade-in" style="transition-delay:.16s">
+        <span class="fcard-icon" role="img" aria-label="Browser">&#127760;</span>
+        <div class="fcard-en">In-app Browser</div>
+        <div class="fcard-ko">// in_app_browser</div>
+        <p class="fcard-desc">
+          <strong style="color:var(--text-0);font-weight:600">Native mode</strong> &mdash;
+          address bar, back/forward, and refresh, just like a real browser.<br>
+          <strong style="color:var(--text-0);font-weight:600">AI Control mode</strong> &mdash;
+          exposes a CDP endpoint so Playwright or MCP can drive it programmatically.
+        </p>
+        <p class="fcard-desc">
+          Native 모드(주소창·앞/뒤·새로고침) + AI 제어 모드(CDP 엔드포인트로 Playwright/MCP 조종).
+        </p>
+        <div class="fcard-tags">
+          <span class="tag">cdp</span>
+          <span class="tag">playwright</span>
+          <span class="tag">mcp</span>
+          <span class="tag">native</span>
+        </div>
+      </article>
+
+      <!-- 6. Quality of Life -->
+      <article class="fcard fade-in" style="transition-delay:.2s">
+        <span class="fcard-icon" role="img" aria-label="Quality of Life">&#10024;</span>
+        <div class="fcard-en">Quality of Life</div>
+        <div class="fcard-ko">// convenience</div>
+        <p class="fcard-desc">
+          Saved commands, session save &amp; restore on exit,
+          light/dark theme with a custom accent color picker.
+          Auto-update delivered via GitHub Releases.
+        </p>
+        <p class="fcard-desc">
+          저장 명령, 종료 시 세션 저장·복원, 라이트/다크 테마 + 강조색, 자동 업데이트(GitHub Releases).
+        </p>
+        <div class="fcard-tags">
+          <span class="tag">session-restore</span>
+          <span class="tag">dark-mode</span>
+          <span class="tag">auto-update</span>
+          <span class="tag">accent-color</span>
+        </div>
+      </article>
+
+    </div><!-- /features-grid -->
+  </div>
+</section>
+
+
+<!-- =========================================================
+     TECH STACK
+     ========================================================= -->
+<section id="tech">
+  <div class="inner">
+    <p class="s-label fade-in">// built_with</p>
+    <h2 class="s-title fade-in">Tech Stack</h2>
+
+    <div class="tech-grid">
+      <div class="titem fade-in">
+        <span class="titem-icon">&#129408;</span>
+        <div>
+          <div class="titem-name">Rust</div>
+          <div class="titem-desc">Backend &amp; system layer</div>
+        </div>
+      </div>
+      <div class="titem fade-in" style="transition-delay:.04s">
+        <span class="titem-icon">&#9889;</span>
+        <div>
+          <div class="titem-name">Tauri 2</div>
+          <div class="titem-desc">Desktop app framework</div>
+        </div>
+      </div>
+      <div class="titem fade-in" style="transition-delay:.08s">
+        <span class="titem-icon">&#129695;</span>
+        <div>
+          <div class="titem-name">WebView2</div>
+          <div class="titem-desc">Windows rendering engine</div>
+        </div>
+      </div>
+      <div class="titem fade-in" style="transition-delay:.12s">
+        <span class="titem-icon">&#128421;</span>
+        <div>
+          <div class="titem-name">Vanilla JS</div>
+          <div class="titem-desc">Zero-dependency frontend</div>
+        </div>
+      </div>
+      <div class="titem fade-in" style="transition-delay:.16s">
+        <span class="titem-icon">&#128279;</span>
+        <div>
+          <div class="titem-name">node-pty</div>
+          <div class="titem-desc">PTY / shell integration</div>
+        </div>
+      </div>
+      <div class="titem fade-in" style="transition-delay:.2s">
+        <span class="titem-icon">&#128640;</span>
+        <div>
+          <div class="titem-name">GitHub Releases</div>
+          <div class="titem-desc">Auto-update delivery</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- =========================================================
+     DOWNLOAD CTA
+     ========================================================= -->
+<section id="download">
+  <div class="inner">
+    <div class="dl-box fade-in">
+      <div class="dl-ver">Latest stable release &mdash; v0.1.9</div>
+      <div class="dl-heading">Ready to try?</div>
+      <p class="dl-sub">
+        무료 오픈소스입니다. Windows에서 바로 설치하세요.<br>
+        Free and open source. Install it on Windows right now.
+      </p>
+      <div class="dl-btns">
+        <a href="https://github.com/ChoiGyber/Mymux/releases/latest" class="btn-primary">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M7.47 10.78a.75.75 0 001.06 0l3.75-3.75a.75.75 0 00-1.06-1.06L8.75 8.44V1.75a.75.75 0 00-1.5 0v6.69L4.78 5.97a.75.75 0 00-1.06 1.06l3.75 3.75zM3.75 13a.75.75 0 000 1.5h8.5a.75.75 0 000-1.5h-8.5z"/>
+          </svg>
+          Download .exe
+        </a>
+        <a href="https://github.com/ChoiGyber/Mymux" class="btn-secondary" target="_blank" rel="noopener">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          Source Code
+        </a>
+      </div>
+      <p class="dl-build">
+        Build from source:
+        <a href="https://github.com/ChoiGyber/Mymux/blob/main/README.md" target="_blank" rel="noopener">README.md</a>
+        &nbsp;&middot;&nbsp;
+        <a href="https://github.com/ChoiGyber/Mymux/blob/main/RELEASING.md" target="_blank" rel="noopener">RELEASING.md</a>
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<!-- =========================================================
+     FOOTER
+     ========================================================= -->
+<footer>
+  <div class="footer-inner">
+
+    <div>
+      <div class="footer-logo">Mymux</div>
+      <div class="footer-meta">
+        Made by
+        <a href="mailto:racji92@gmail.com">ChoiGyber</a>
+        &nbsp;&middot;&nbsp;
+        <a href="mailto:racji92@gmail.com">racji92@gmail.com</a>
+      </div>
+      <div class="footer-meta">
+        <a href="https://github.com/ChoiGyber/Mymux" target="_blank" rel="noopener">
+          github.com/ChoiGyber/Mymux
+        </a>
+      </div>
+    </div>
+
+    <div class="footer-links">
+      <a href="#features">Features</a>
+      <a href="#tech">Tech Stack</a>
+      <a href="https://github.com/ChoiGyber/Mymux/releases/latest" target="_blank" rel="noopener">Download</a>
+      <a href="https://github.com/ChoiGyber/Mymux/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/ChoiGyber/Mymux/blob/main/README.md" target="_blank" rel="noopener">Docs</a>
+    </div>
+
+    <div class="footer-right">
+      <div>Open Source &nbsp;&middot;&nbsp; Free to use</div>
+      <div class="footer-stack">
+        Built with &#129408; Tauri 2 + Rust
+      </div>
+    </div>
+
+  </div>
+</footer>
+
+
+<!-- =========================================================
+     VANILLA JS — scroll fade-in + nav scroll style
+     ========================================================= -->
+<script>
+(function () {
+  'use strict';
+
+  // --- Fade-in via IntersectionObserver ---
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+        io.unobserve(e.target);   // fire once
+      }
+    });
+  }, { threshold: 0.08, rootMargin: '0px 0px -30px 0px' });
+
+  document.querySelectorAll('.fade-in').forEach(function (el) {
+    io.observe(el);
+  });
+
+  // --- Nav border-opacity on scroll ---
+  var nav = document.getElementById('main-nav');
+  var prevY = 0;
+  window.addEventListener('scroll', function () {
+    var y = window.scrollY;
+    if (y > 30) {
+      nav.style.borderBottomColor = 'rgba(55,65,90,0.9)';
+    } else {
+      nav.style.borderBottomColor = '';
+    }
+    prevY = y;
+  }, { passive: true });
+
+  // --- Highlight active section in nav ---
+  var sections = document.querySelectorAll('section[id]');
+  var navAnchors = document.querySelectorAll('.nav-links a');
+
+  var sectionObserver = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) {
+        navAnchors.forEach(function (a) {
+          a.style.color = '';
+        });
+        var active = document.querySelector('.nav-links a[href="#' + e.target.id + '"]');
+        if (active) active.style.color = 'var(--text-0)';
+      }
+    });
+  }, { threshold: 0.4 });
+
+  sections.forEach(function (s) { sectionObserver.observe(s); });
+}());
+</script>
+
+</body>
+</html>
