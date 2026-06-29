@@ -1417,9 +1417,11 @@ async function createPane(parentEl, shell, args, cwd) {
   // xterm/PTY so the keys don't reach the shell or zoom the WebView).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey) {
-      // Paste (Ctrl/Cmd+V, also Ctrl+Shift+V); copy selection (Ctrl+Shift+C).
+      // Paste with Ctrl/Cmd+V (also Ctrl+Shift+V).
       if (e.key === "v" || e.key === "V") { e.preventDefault(); pasteIntoPane(id); return false; }
-      if (e.shiftKey && (e.key === "c" || e.key === "C")) {
+      // Copy the selection with Ctrl/Cmd+C (Shift optional). When nothing is
+      // selected, fall through so Ctrl+C still sends SIGINT to the shell.
+      if (e.key === "c" || e.key === "C") {
         const sel = term.getSelection();
         if (sel) { e.preventDefault(); clipboardWrite(sel); return false; }
       }
@@ -1456,6 +1458,10 @@ async function createPane(parentEl, shell, args, cwd) {
   term.onFocus = () => setFocusedPane(id);
   paneEl.addEventListener("click", () => setFocusedPane(id));
   termWrap.addEventListener("click", () => { setFocusedPane(id); term.focus(); });
+  // A plain mouse drag should select text. dragDropEnabled:false re-enables the
+  // webview's native HTML5 drag, which would otherwise hijack a drag that begins
+  // over terminal text and stop xterm's selection — suppress it inside the pane.
+  termWrap.addEventListener("dragstart", (e) => e.preventDefault());
   // Right-click: copy the selection if any, otherwise paste the clipboard (PuTTY-style).
   termWrap.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
