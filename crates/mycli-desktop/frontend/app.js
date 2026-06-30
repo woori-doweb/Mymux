@@ -16,8 +16,15 @@ async function clipboardWrite(text) {
   } catch {}
 }
 
-// Paste clipboard text into a terminal pane (Ctrl+V / Shift+Insert / right-click).
+// Paste into a terminal pane (Ctrl+V / Shift+Insert / right-click). An image on
+// the clipboard (e.g. a screenshot) is saved to a temp PNG and its path is typed
+// in, so Ctrl+V drops an attachable file path for the running tool (Claude Code
+// / Codex). Falls back to clipboard text when there's no image.
 async function pasteIntoPane(id) {
+  try {
+    const imgPath = await invoke("paste_clipboard_image");
+    if (imgPath) { invoke("pty_write", { id, data: imgPath }); return; }
+  } catch {}
   try {
     const clip = window.__TAURI_PLUGIN_CLIPBOARD_MANAGER__;
     if (clip && clip.readText) {
@@ -61,6 +68,16 @@ let terminalFontSize = (function () {
     if (Number.isInteger(v) && v >= 8 && v <= 40) return v;
   } catch {}
   return 14;
+})();
+// Letter spacing (자간) as a ratio of the font size — adjustable from the toolbar
+// (자−/자+) and persisted. 0 = none; default ≈0.1 (~20% of a cell) because Korean/
+// CJK glyphs look cramped at 0.
+let letterSpacingRatio = (function () {
+  try {
+    const v = parseFloat(localStorage.getItem("mymux.termLetterSpacing"));
+    if (Number.isFinite(v) && v >= 0 && v <= 0.4) return v;
+  } catch {}
+  return 0.1;
 })();
 let savedCmds = [];
 let currentInput = "";
@@ -237,12 +254,13 @@ async function setupListeners() {
     try { shellSel.value = localStorage.getItem("mymux.defaultShell") || "bash"; } catch {}
     shellSel.addEventListener("change", () => {
       try { localStorage.setItem("mymux.defaultShell", shellSel.value); } catch {}
-      toast("기본 셸: " + shellSel.options[shellSel.selectedIndex].text + " (새 터미널부터 적용)");
+      toast("Default shell: " + shellSel.options[shellSel.selectedIndex].text + " (applies to new terminals)");
     });
   }
   btnAdd.addEventListener("click", () => openModal());
   const cmdSearch = document.getElementById("cmd-search");
   if (cmdSearch) cmdSearch.addEventListener("input", () => renderCmdList(savedCmds));
+  wireSearchClear(cmdSearch);
   btnCancel.addEventListener("click", closeModal);
   modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
   form.addEventListener("submit", handleSave);
@@ -252,6 +270,7 @@ async function setupListeners() {
   explorerMode.addEventListener("change", onExplorerModeChange);
   const expSearch = document.getElementById("explorer-search");
   if (expSearch) expSearch.addEventListener("input", () => renderFileList(explorerEntries));
+  wireSearchClear(expSearch);
   const btnExpBack = document.getElementById("btn-explorer-back");
   const btnExpFwd = document.getElementById("btn-explorer-forward");
   if (btnExpBack) btnExpBack.addEventListener("click", explorerBack);
@@ -374,6 +393,18 @@ async function setupListeners() {
   const btnBrowser = document.getElementById("btn-toggle-browser");
   if (btnBrowser) btnBrowser.addEventListener("click", toggleBrowserEnabled);
 
+  // Terminal text zoom (top bar A−/A+) — same effect as Ctrl -/+.
+  const btnFontDec = document.getElementById("btn-font-dec");
+  if (btnFontDec) btnFontDec.addEventListener("click", () => adjustTerminalFontSize(-1));
+  const btnFontInc = document.getElementById("btn-font-inc");
+  if (btnFontInc) btnFontInc.addEventListener("click", () => adjustTerminalFontSize(1));
+
+  // Letter spacing (top bar 자−/자+) — adjust the persisted 자간 ratio live.
+  const btnTrackDec = document.getElementById("btn-track-dec");
+  if (btnTrackDec) btnTrackDec.addEventListener("click", () => adjustLetterSpacing(-0.025));
+  const btnTrackInc = document.getElementById("btn-track-inc");
+  if (btnTrackInc) btnTrackInc.addEventListener("click", () => adjustLetterSpacing(0.025));
+
   // File viewer close button.
   const vClose = document.getElementById("viewer-close");
   if (vClose) vClose.addEventListener("click", closeViewer);
@@ -469,7 +500,7 @@ function renderFileList(entries) {
       <span class="file-name ${nameClass}">${esc(entry.name)}</span>
       <span class="file-size">${size}</span>
       <span class="file-item-actions">
-        ${entry.is_dir ? `<button class="fav-btn${favOn ? " on" : ""}" title="즐겨찾기">${favOn ? "★" : "☆"}</button>` : ""}
+        ${entry.is_dir ? `<button class="fav-btn${favOn ? " on" : ""}" title="Favorite">${favOn ? "★" : "☆"}</button>` : ""}
         <button class="cd-btn" title="Open a new terminal here">cd</button>
       </span>
     `;
@@ -516,12 +547,12 @@ function onExplorerContextMenu(e) {
   const items = [];
   if (entry) {
     if (local) {
-      items.push({ act: "copy", label: "복사" });
-      items.push({ act: "cut", label: "자르기" });
+      items.push({ act: "copy", label: "Copy" });
+      items.push({ act: "cut", label: "Cut" });
     }
-    items.push({ act: "copypath", label: "경로 복사" });
+    items.push({ act: "copypath", label: "Copy path" });
   }
-  if (local) items.push({ act: "paste", label: "붙여넣기", disabled: !(fileClipboard && fileClipboard.path) });
+  if (local) items.push({ act: "paste", label: "Paste", disabled: !(fileClipboard && fileClipboard.path) });
   if (!items.length) return;
   menu.innerHTML = "";
   for (const it of items) {
@@ -547,13 +578,13 @@ async function handleExplorerCtxAction(act) {
   const entry = explorerCtxEntry;
   if (act === "copy" && entry) {
     fileClipboard = { path: entry.path, name: entry.name, mode: "copy" };
-    toast("복사: " + entry.name);
+    toast("Copied: " + entry.name);
   } else if (act === "cut" && entry) {
     fileClipboard = { path: entry.path, name: entry.name, mode: "cut" };
-    toast("잘라내기: " + entry.name);
+    toast("Cut: " + entry.name);
   } else if (act === "copypath" && entry) {
     clipboardWrite(entry.path);
-    toast("경로를 복사했습니다");
+    toast("Path copied");
   } else if (act === "paste") {
     await filePaste();
   }
@@ -568,7 +599,7 @@ async function filePaste() {
       await invoke("fs_move_path", { src: fileClipboard.path, destDir: currentExplorerPath });
       fileClipboard = null; // moved — clear so it isn't pasted again
     }
-    toast("붙여넣기 완료");
+    toast("Pasted");
     loadExplorer();
   } catch (e) {
     toast(String(e), true);
@@ -686,8 +717,8 @@ function ensureViewerTab() {
     tab = document.createElement("div");
     tab.className = "browser-tab"; // reuse the pinned-tab styling
     tab.id = "viewer-tab";
-    tab.innerHTML = `<span>📄</span><span>Viewer</span><span class="tab-close" title="닫기">&times;</span>`;
-    tab.title = "파일 뷰어";
+    tab.innerHTML = `<span>📄</span><span>Viewer</span><span class="tab-close" title="Close">&times;</span>`;
+    tab.title = "File viewer";
     tab.addEventListener("click", (e) => {
       if (e.target.classList.contains("tab-close")) { closeViewer(); return; }
       setViewerView(true);
@@ -750,12 +781,12 @@ function handleViewerCtxAction(act) {
   if (!text) return;
   if (act === "copy") {
     clipboardWrite(text);
-    toast("복사했습니다");
+    toast("Copied");
   } else if (act === "send") {
-    if (!activeTermId) { toast("열린 세션이 없습니다.", true); return; }
+    if (!activeTermId) { toast("No open sessions.", true); return; }
     invoke("pty_write", { id: activeTermId, data: text }); // no trailing Enter — user reviews then runs
     terminals.get(activeTermId)?.term.focus();
-    toast("세션으로 보냈습니다");
+    toast("Sent to session");
   }
 }
 
@@ -828,7 +859,7 @@ async function openLocalLink(target) {
   if (viewable) {
     openFileViewer({ path: target, name, is_dir: false, is_symlink: false, size: 0 });
   } else {
-    toast("탐색기에서 위치를 열었습니다: " + name);
+    toast("Opened in Explorer: " + name);
   }
 }
 
@@ -862,8 +893,8 @@ function restorePanelState() {
 function updatePanelToggleIcons() {
   const sb = document.getElementById("btn-toggle-sidebar");
   const sp = document.getElementById("btn-toggle-sessions");
-  if (sb) sb.title = sidebar.classList.contains("collapsed") ? "사이드바 펼치기" : "사이드바 접기";
-  if (sp) sp.title = sessionPanel.classList.contains("collapsed") ? "세션 패널 펼치기" : "세션 패널 접기";
+  if (sb) sb.title = sidebar.classList.contains("collapsed") ? "Expand sidebar" : "Collapse sidebar";
+  if (sp) sp.title = sessionPanel.classList.contains("collapsed") ? "Expand session panel" : "Collapse session panel";
 }
 
 // ── Local path helpers (Windows-first; tolerate / and \) ──
@@ -909,7 +940,7 @@ async function openFileViewer(entry) {
   const isText = VIEWER_TEXT_EXTS.has(ext) || lower === "dockerfile" || lower.endsWith(".gitignore") || ext === "";
   const sftpId = currentSftpId; // when set, the entry is remote — read over SFTP
   if (!isText) {
-    if (sftpId != null) { toast("원격 바이너리 파일은 미리보기를 지원하지 않습니다.", true); return; }
+    if (sftpId != null) { toast("Preview isn't supported for remote binary files.", true); return; }
     invoke("open_external", { path: entry.path }).catch((e) => toast(String(e), true));
     return;
   }
@@ -930,7 +961,7 @@ async function openFileViewer(entry) {
       : await invoke("read_text_file", { path: entry.path });
   } catch (e) {
     if (String(e).includes("BINARY")) {
-      if (sftpId != null) { toast("바이너리 파일은 미리보기를 지원하지 않습니다.", true); return; }
+      if (sftpId != null) { toast("Preview isn't supported for binary files.", true); return; }
       invoke("open_external", { path: entry.path }).catch(() => {});
       return;
     }
@@ -991,21 +1022,41 @@ function autosaveEnabled() {
   try { return localStorage.getItem("mymux.autosave") === "true"; } catch { return false; }
 }
 
+// Wire a search input's × clear button: show the × only when there is text,
+// and clear + refocus + re-run the input handler when it is clicked.
+function wireSearchClear(input) {
+  if (!input) return;
+  const wrap = input.closest(".search-wrap");
+  if (!wrap) return;
+  const btn = wrap.querySelector(".search-clear");
+  const sync = () => wrap.classList.toggle("has-text", input.value.length > 0);
+  input.addEventListener("input", sync);
+  if (btn) {
+    btn.addEventListener("click", () => {
+      input.value = "";
+      sync();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+  }
+  sync();
+}
+
 function buildEditor(file) {
   const wrap = document.createElement("div");
   wrap.className = "editor";
   wrap.innerHTML = `
     <div class="editor-find hidden">
-      <input class="ef-find" placeholder="찾기" spellcheck="false" />
-      <button class="ef-prev" title="이전">↑</button>
-      <button class="ef-next" title="다음">↓</button>
-      <input class="ef-replace" placeholder="바꾸기" spellcheck="false" />
-      <button class="ef-rep">바꾸기</button>
-      <button class="ef-repall">모두</button>
-      <span class="ef-sep">줄</span>
-      <input class="ef-goto" type="number" min="1" title="줄 번호" />
-      <button class="ef-go">이동</button>
-      <button class="ef-close" title="닫기">&times;</button>
+      <input class="ef-find" placeholder="Find" spellcheck="false" />
+      <button class="ef-prev" title="Previous">↑</button>
+      <button class="ef-next" title="Next">↓</button>
+      <input class="ef-replace" placeholder="Replace" spellcheck="false" />
+      <button class="ef-rep">Replace</button>
+      <button class="ef-repall">All</button>
+      <span class="ef-sep">Line</span>
+      <input class="ef-goto" type="number" min="1" title="Line number" />
+      <button class="ef-go">Go</button>
+      <button class="ef-close" title="Close">&times;</button>
     </div>
     <div class="editor-main">
       <div class="editor-gutter"></div>
@@ -1065,7 +1116,7 @@ function wireFindBar(wrap, ta) {
       idx = val.indexOf(term, ta.selectionEnd);
       if (idx < 0) idx = val.indexOf(term, 0); // wrap around
     }
-    if (idx < 0) { toast("찾을 수 없음"); return; }
+    if (idx < 0) { toast("Not found"); return; }
     ta.focus();
     ta.setSelectionRange(idx, idx + term.length);
     // Scroll the match into view (approximate by line).
@@ -1124,9 +1175,9 @@ async function saveViewerFile(file) {
     file.dirty = false;
     renderViewerTabs();
     renderViewerTools();
-    toast("저장됨: " + file.name);
+    toast("Saved: " + file.name);
   } catch (e) {
-    toast("저장 실패: " + String(e), true);
+    toast("Save failed: " + String(e), true);
   }
 }
 
@@ -1156,7 +1207,7 @@ function renderViewerTools() {
     const eye = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
     const pencil = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>`;
     editBtn.innerHTML = f.editing ? eye : pencil;
-    editBtn.title = f.editing ? "미리보기" : "편집";
+    editBtn.title = f.editing ? "Preview" : "Edit";
   }
   if (saveBtn) {
     saveBtn.classList.toggle("dirty", !!f.dirty);
@@ -1178,7 +1229,7 @@ function renderViewerTabs() {
     const t = document.createElement("div");
     t.className = "viewer-file-tab" + (f.id === activeViewerId ? " active" : "");
     t.title = f.path;
-    t.innerHTML = `<span class="vft-name">${f.dirty ? "● " : ""}${esc(f.name)}</span><span class="vft-close" title="닫기">&times;</span>`;
+    t.innerHTML = `<span class="vft-name">${f.dirty ? "● " : ""}${esc(f.name)}</span><span class="vft-close" title="Close">&times;</span>`;
     t.addEventListener("click", (e) => {
       if (e.target.classList.contains("vft-close")) { closeViewerFile(f.id); return; }
       activateViewerFile(f.id);
@@ -1282,7 +1333,7 @@ function renderExplorerFavorites() {
     const chip = document.createElement("div");
     chip.className = "fav-chip";
     chip.title = f.path;
-    chip.innerHTML = `<span class="fav-chip-star">★</span><span class="fav-chip-name">${esc(f.name)}</span><button class="fav-chip-x" title="제거">&times;</button>`;
+    chip.innerHTML = `<span class="fav-chip-star">★</span><span class="fav-chip-name">${esc(f.name)}</span><button class="fav-chip-x" title="Remove">&times;</button>`;
     chip.querySelector(".fav-chip-star").addEventListener("click", () => cdToTerminal(f.path));
     chip.querySelector(".fav-chip-name").addEventListener("click", () => cdToTerminal(f.path));
     chip.querySelector(".fav-chip-x").addEventListener("click", (e) => {
@@ -1364,8 +1415,14 @@ async function createPane(parentEl, shell, args, cwd) {
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   fitAddon.fit();
 
-  const cols = Math.max(term.cols, 80);
-  const rows = Math.max(term.rows, 24);
+  // Spawn the PTY at the pane's ACTUAL fitted grid — not a forced 80×24 floor.
+  // A narrow split pane is often < 80 cols; forcing the PTY to 80 while xterm
+  // displays fewer makes the program (e.g. Claude Code) lay out to 80 cols, so
+  // its long lines and header rules overflow the visible grid and get truncated
+  // at the right edge instead of wrapping. Fall back to 80×24 only when fit()
+  // hasn't measured yet (cols/rows would be 0).
+  const cols = term.cols || 80;
+  const rows = term.rows || 24;
 
   const id = await invoke("pty_spawn", {
     shell: shell || null,
@@ -1383,6 +1440,22 @@ async function createPane(parentEl, shell, args, cwd) {
     : (cwd ? baseName(cwd) : (shell || "Terminal"));
   terminals.set(id, { term, fitAddon, paneEl, type: shell === "ssh" ? "ssh" : "local", label: sessionLabel, cwd: cwd || null });
 
+  // A brand-new pane's final size isn't settled at spawn (flex sizing, font
+  // load, a split ratio applied just after). The container-level observer only
+  // fires on window/panel resize — never when a fresh pane lays out — so without
+  // this the spawn-time fit can be too wide and the program (e.g. Claude Code)
+  // renders past the visible edge, lines truncated, until the user toggles
+  // sessions (which forces a refit). Observe this pane's host so the PTY grid
+  // reconciles the moment its size settles or changes. Debounced to one frame;
+  // refitAllPanes() skips panes whose pixel size is unchanged, so it's cheap.
+  // GC'd with termWrap when the pane closes (no manual disconnect needed).
+  let roPending = false;
+  new ResizeObserver(() => {
+    if (roPending) return;
+    roPending = true;
+    requestAnimationFrame(() => { roPending = false; refitAllPanes(); });
+  }).observe(termWrap);
+
   // Status bar: label + split/close controls. The cwd chip tracks the pane's
   // current directory (setPaneCwd updates it on cd). Blank it when it equals the
   // label so a folder-named session doesn't show the same name twice (e.g.
@@ -1391,7 +1464,7 @@ async function createPane(parentEl, shell, args, cwd) {
   const cwdLabel = cwd ? baseName(cwd) : "~";
   const cwdText = cwdLabel === sessionLabel ? "" : cwdLabel;
   statusBar.innerHTML = `
-    <span class="pane-grip" title="드래그해서 패인 이동">&#10287;</span>
+    <span class="pane-grip" title="Drag to move pane">&#10287;</span>
     <span class="pane-label">${esc(sessionLabel)}</span>
     ${shell !== "ssh" ? `<span class="pane-cwd" title="${esc(cwd || "")}">${esc(cwdText)}</span>` : ""}
     <span class="pane-actions">
@@ -1860,7 +1933,7 @@ function movePaneToTab(ptyId, targetTabIdx) {
     setFocusedPane(ptyId);
     refreshSessionList();
     requestAnimationFrame(() => refitAllPanes());
-    if (srcEmptied) toast(`마지막 세션이라 '${srcLabel}' 탭이 닫혔습니다`);
+    if (srcEmptied) toast(`Closed the '${srcLabel}' tab — it was the last session`);
   } catch (e) {
     toast("탭이동 오류: " + (e && e.message), true);
     console.error("movePaneToTab failed", e);
@@ -1940,12 +2013,28 @@ function setTerminalFontSize(size) {
   terminalFontSize = Math.max(8, Math.min(40, size));
   try { localStorage.setItem("mymux.termFontSize", String(terminalFontSize)); } catch {}
   for (const [, t] of terminals) {
-    try { t.term.options.fontSize = terminalFontSize; } catch {}
+    try {
+      t.term.options.fontSize = terminalFontSize;
+      t.term.options.letterSpacing = terminalFontSize * letterSpacingRatio; // keep tracking across zoom
+    } catch {}
   }
   refitAllPanes(true); // font change keeps pixel size but must re-grid every pane
 }
 function adjustTerminalFontSize(delta) {
   setTerminalFontSize(terminalFontSize + delta);
+}
+// Letter spacing (자간) — persisted ratio of font size, applied to every pane.
+// Mirrors setTerminalFontSize; a wider cell means fewer cols, so re-grid + refit.
+function setLetterSpacingRatio(ratio) {
+  letterSpacingRatio = Math.max(0, Math.min(0.4, Math.round(ratio * 1000) / 1000));
+  try { localStorage.setItem("mymux.termLetterSpacing", String(letterSpacingRatio)); } catch {}
+  for (const [, t] of terminals) {
+    try { t.term.options.letterSpacing = terminalFontSize * letterSpacingRatio; } catch {}
+  }
+  refitAllPanes(true);
+}
+function adjustLetterSpacing(delta) {
+  setLetterSpacingRatio(letterSpacingRatio + delta);
 }
 
 // Cycle focus through the active tab's panes in reading order
@@ -2114,7 +2203,7 @@ async function connectSshFields(targetVal, portVal, password, keyfile, tmux, tmu
   const target = (targetVal || "").trim();
   if (!target) return false;
   const parts = target.split("@");
-  if (parts.length !== 2) { toast("형식: user@hostname", true); return false; }
+  if (parts.length !== 2) { toast("Format: user@hostname", true); return false; }
   await doSshConnect({
     target,
     username: parts[0],
@@ -2198,8 +2287,8 @@ function renderSshDropdown() {
     const item = document.createElement("div");
     item.className = "ssh-dd-item";
     item.innerHTML = `<span class="ssh-dd-name"></span>` +
-      (c.keyPath ? `<button class="ssh-dd-tmux" type="button" title="tmux로 바로 접속">⚡</button>` : "") +
-      `<button class="ssh-dd-x" type="button" title="삭제">&times;</button>`;
+      (c.keyPath ? `<button class="ssh-dd-tmux" type="button" title="Connect into tmux">⚡</button>` : "") +
+      `<button class="ssh-dd-x" type="button" title="Delete">&times;</button>`;
     const label = c.target + (c.port && c.port != 22 ? `:${c.port}` : "") + (c.keyPath ? "  🔑" : "");
     item.querySelector(".ssh-dd-name").textContent = label;
     item.querySelector(".ssh-dd-name").addEventListener("click", () => { applySshConn(c); toggleSshDropdown(false); });
@@ -2214,7 +2303,7 @@ function toggleSshDropdown(show) {
   if (!list) return;
   if (show === undefined) show = list.classList.contains("hidden");
   if (show) {
-    if (!getSshSaved().length) { list.classList.add("hidden"); toast("저장된 주소가 없습니다."); return; }
+    if (!getSshSaved().length) { list.classList.add("hidden"); toast("No saved addresses."); return; }
     renderSshDropdown();
     list.classList.remove("hidden");
   } else {
@@ -2248,7 +2337,7 @@ function buildSshCommandString(target, port, keyPath, tmux, tmuxName) {
 // Save the modal's connection as a Commands-tab shortcut (Send/dblclick to run).
 async function saveSshAsCommand() {
   const target = (document.getElementById("ssh-modal-input").value || "").trim();
-  if (!target) { toast("주소를 입력하세요 (user@host)", true); return; }
+  if (!target) { toast("Enter an address (user@host)", true); return; }
   const port = document.getElementById("ssh-modal-port").value;
   const keyfile = (document.getElementById("ssh-modal-keyfile").value || "").trim();
   const tmuxChk = document.getElementById("ssh-tmux");
@@ -2257,18 +2346,18 @@ async function saveSshAsCommand() {
   const command = buildSshCommandString(target, port, keyfile, tmux, tmuxName);
   const name = target + (tmux ? (tmuxName ? ` (tmux:${tmuxName})` : " (tmux)") : "");
   try {
-    await invoke("add_command", { name, command, description: "SSH 접속 단축키" });
+    await invoke("add_command", { name, command, description: "SSH connection shortcut" });
     await loadCommands();
-    toast("Commands 탭에 저장됨 — Send로 접속");
+    toast("Saved to Commands — connect with Send");
   } catch (e) {
-    toast("저장 실패: " + String(e), true);
+    toast("Save failed: " + String(e), true);
   }
 }
 
 // One-click: SSH in with the saved key and start/attach a tmux session.
 function quickConnectTmux(c) {
   const parts = (c.target || "").split("@");
-  if (parts.length !== 2) { toast("형식: user@hostname", true); return; }
+  if (parts.length !== 2) { toast("Format: user@hostname", true); return; }
   closeSshModal();
   doSshConnect({
     target: c.target,
@@ -2352,7 +2441,7 @@ function applyBrowserEnabled() {
   const tab = document.getElementById("browser-tab");
   if (tab) tab.style.display = on ? "" : "none";
   const btn = document.getElementById("btn-toggle-browser");
-  if (btn) { btn.classList.toggle("active", on); btn.title = on ? "브라우저 끄기" : "브라우저 켜기"; }
+  if (btn) { btn.classList.toggle("active", on); btn.title = on ? "Turn off browser" : "Turn on browser"; }
   if (!on) {
     // Turning the browser off is also the escape hatch for a stuck native
     // overlay: leave the view if open, and force-hide the child WebView either way.
@@ -2370,7 +2459,7 @@ function initBrowserPanel() {
   const tab = document.createElement("div");
   tab.className = "browser-tab";
   tab.id = "browser-tab";
-  tab.innerHTML = `${ICON.globe}<span>Browser</span><span class="tab-close" title="닫기">&times;</span>`;
+  tab.innerHTML = `${ICON.globe}<span>Browser</span><span class="tab-close" title="Close">&times;</span>`;
   tab.title = "Playwright/CDP browser";
   tab.addEventListener("click", (e) => {
     if (e.target.classList.contains("tab-close")) { setBrowserView(false); return; }
@@ -2911,7 +3000,7 @@ function promptSshPasswordRestore(s) {
     const btnConnect = document.getElementById("sshpw-connect");
     const btnSkip = document.getElementById("sshpw-skip");
     document.getElementById("sshpw-target").textContent =
-      `${s.username}@${s.host}:${s.port} — 비밀번호를 입력해 재접속`;
+      `${s.username}@${s.host}:${s.port} — enter your password to reconnect`;
     input.value = "";
     modal.classList.remove("hidden");
     setTimeout(() => input.focus(), 50);
@@ -3022,6 +3111,10 @@ function createXterm() {
   return new Terminal({
     cursorBlink: true,
     fontSize: terminalFontSize,
+    // Letter spacing (자간) — a persisted ratio of the font size so it scales with
+    // Ctrl +/- zoom. Default ≈0.1 (~20% of a monospace cell) because Korean/CJK
+    // glyphs look cramped at 0; adjustable from the toolbar (자−/자+).
+    letterSpacing: terminalFontSize * letterSpacingRatio,
     fontFamily: '"D2Coding", "Cascadia Code", "Consolas", "Noto Sans KR", monospace',
     fontWeight: 300,
     fontWeightBold: 500,
@@ -3035,8 +3128,8 @@ function addTab(tabIdx, label) {
   tab.dataset.id = tabIdx;
   tab.innerHTML = `
     <span>${esc(label)}</span>
-    <span class="tab-rename" title="이름 변경">&#9998;</span>
-    <span class="tab-close" title="닫기">&times;</span>
+    <span class="tab-rename" title="Rename">&#9998;</span>
+    <span class="tab-close" title="Close">&times;</span>
   `;
   tab.addEventListener("click", (e) => {
     if (e.target.classList.contains("tab-close")) {
@@ -3175,7 +3268,7 @@ function refreshSessionList() {
     const group = document.createElement("li");
     group.className = "session-group";
     group.textContent = tab.label || `Tab ${tabIdx + 1}`;
-    group.title = "더블클릭하여 탭 이름 변경 · 세션을 여기로 끌어다 놓으면 이 탭으로 이동";
+    group.title = "Double-click to rename · drop a session here to move it to this tab";
     group.addEventListener("dblclick", () => startRenameTab(tabIdx, group));
     group.addEventListener("dragover", (e) => { e.preventDefault(); group.classList.add("drop-target"); });
     group.addEventListener("dragleave", () => group.classList.remove("drop-target"));
@@ -3217,7 +3310,7 @@ function refreshSessionList() {
       const closeBtn = document.createElement("button");
       closeBtn.className = "session-close";
       closeBtn.textContent = "×";
-      closeBtn.title = "세션 닫기";
+      closeBtn.title = "Close session";
 
       li.append(dotEl, nameEl, renameBtn, paneNo, closeBtn);
 
@@ -3525,15 +3618,15 @@ function renderCmdList(cmds) {
     const li = document.createElement("li");
     li.className = "cmd-item" + (cmd.favorite ? " is-fav" : "");
     li.innerHTML = `
-      <button class="cmd-x" title="삭제 (바로 삭제)">&times;</button>
+      <button class="cmd-x" title="Delete (no confirm)">&times;</button>
       <div class="cmd-name">${esc(cmd.name)}</div>
       <div class="cmd-row">
         <span class="cmd-text">${esc(cmd.command)}</span>
         <span class="cmd-actions">
-          <button class="fav-btn${cmd.favorite ? " on" : ""}" title="즐겨찾기">${cmd.favorite ? "★" : "☆"}</button>
-          <button class="copy-btn" title="복사">Copy</button>
-          <button class="edit-btn" title="편집">Edit</button>
-          <button class="send-btn" title="터미널로 전송">Send</button>
+          <button class="fav-btn${cmd.favorite ? " on" : ""}" title="Favorite">${cmd.favorite ? "★" : "☆"}</button>
+          <button class="copy-btn" title="Copy">Copy</button>
+          <button class="edit-btn" title="Edit">Edit</button>
+          <button class="send-btn" title="Send to terminal">Send</button>
         </span>
       </div>
       ${cmd.description ? `<div class="cmd-desc">${esc(cmd.description)}</div>` : ""}
@@ -3561,7 +3654,7 @@ async function quickDeleteCmd(cmd) {
   try {
     await invoke("delete_command", { id: cmd.id });
     await loadCommands();
-    toast("삭제됨");
+    toast("Deleted");
   } catch (e) {
     toast("Error: " + e, true);
   }
@@ -3905,21 +3998,21 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     if (!newVersion) return; // already up to date
 
-    btn.title = `새 버전 ${newVersion} — 클릭하면 업데이트`;
+    btn.title = `New version ${newVersion} — click to update`;
     btn.classList.remove("hidden");
 
     btn.addEventListener("click", async () => {
       if (btn.disabled) return;
       btn.disabled = true;
       const original = btn.textContent;
-      btn.textContent = "업데이트 중…";
+      btn.textContent = "Updating…";
       try {
         // Downloads, installs, and relaunches into the new version.
         await inv("update_install");
       } catch (err) {
         btn.disabled = false;
         btn.textContent = original;
-        if (typeof toast === "function") toast("업데이트 실패: " + err, true);
+        if (typeof toast === "function") toast("Update failed: " + err, true);
         else console.error("update_install failed:", err);
       }
     });
@@ -3934,42 +4027,42 @@ window.addEventListener("DOMContentLoaded", () => {
 
 const GUIDE_CLAUDE =
   "\r\n" +
-  "\x1b[1;36m══════ Claude Code 설치 ══════\x1b[0m\r\n" +
+  "\x1b[1;36m══════ Install Claude Code ══════\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[90mNode.js 18+ 가 필요합니다.\x1b[0m\r\n" +
+  "\x1b[90mRequires Node.js 18+.\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ npm (모든 OS)\x1b[0m\r\n" +
+  "\x1b[1;32m▶ npm (all platforms)\x1b[0m\r\n" +
   "  \x1b[33mnpm install -g @anthropic-ai/claude-code\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ 네이티브 설치\x1b[0m\r\n" +
+  "\x1b[1;32m▶ Native install\x1b[0m\r\n" +
   "  \x1b[90mmacOS/Linux\x1b[0m\r\n" +
   "  \x1b[33mcurl -fsSL https://claude.ai/install.sh | bash\x1b[0m\r\n" +
   "  \x1b[90mWindows (PowerShell)\x1b[0m\r\n" +
   "  \x1b[33mirm https://claude.ai/install.ps1 | iex\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ 실행\x1b[0m   \x1b[33mclaude\x1b[0m\r\n" +
-  "\x1b[90m문서: docs.claude.com/claude-code\x1b[0m\r\n" +
+  "\x1b[1;32m▶ Run\x1b[0m   \x1b[33mclaude\x1b[0m\r\n" +
+  "\x1b[90mDocs: docs.claude.com/claude-code\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[2m↓ 아래 셸에 명령을 붙여넣어 설치하세요.\x1b[0m\r\n" +
+  "\x1b[2m↓ Paste a command into the shell below to install.\x1b[0m\r\n" +
   "\r\n";
 
 const GUIDE_CODEX =
   "\r\n" +
-  "\x1b[1;35m══════ Codex CLI 설치 ══════\x1b[0m\r\n" +
+  "\x1b[1;35m══════ Install Codex CLI ══════\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[90mOpenAI Codex CLI. ChatGPT 계정 또는\x1b[0m\r\n" +
-  "\x1b[90mAPI 키가 필요합니다.\x1b[0m\r\n" +
+  "\x1b[90mOpenAI Codex CLI. Requires a ChatGPT account\x1b[0m\r\n" +
+  "\x1b[90mor an API key.\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ npm (모든 OS)\x1b[0m\r\n" +
+  "\x1b[1;32m▶ npm (all platforms)\x1b[0m\r\n" +
   "  \x1b[33mnpm install -g @openai/codex\x1b[0m\r\n" +
   "\r\n" +
   "\x1b[1;32m▶ Homebrew (macOS/Linux)\x1b[0m\r\n" +
   "  \x1b[33mbrew install codex\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ 실행\x1b[0m   \x1b[33mcodex\x1b[0m\r\n" +
-  "\x1b[90m문서: github.com/openai/codex\x1b[0m\r\n" +
+  "\x1b[1;32m▶ Run\x1b[0m   \x1b[33mcodex\x1b[0m\r\n" +
+  "\x1b[90mDocs: github.com/openai/codex\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[2m↓ 아래 셸에 명령을 붙여넣어 설치하세요.\x1b[0m\r\n" +
+  "\x1b[2m↓ Paste a command into the shell below to install.\x1b[0m\r\n" +
   "\r\n";
 
 // Decide whether to show the install guide based on what is already installed.

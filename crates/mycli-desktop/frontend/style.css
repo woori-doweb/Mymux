@@ -62,7 +62,7 @@ html { --accent: #0f9ef0; --accent-hover: #3db8ff; }
 
 html, body {
   height: 100%;
-  font-family: "Noto Sans KR", "Malgun Gothic", "맑은 고딕", sans-serif;
+  font-family: "Noto Sans KR", "Malgun Gothic", sans-serif;
   font-weight: 300;
   font-size: 14px;
   color: var(--text);
@@ -323,16 +323,44 @@ html[data-theme="light"] #toolbar-actions #btn-update:hover {
 }
 
 #explorer-search {
-  margin: 0 8px 4px;
-  padding: 5px 8px;
+  width: 100%;
+  margin: 0;
+  padding: 5px 26px 5px 8px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
-  flex-shrink: 0;
+  box-sizing: border-box;
 }
 #explorer-search:focus { outline: none; border-color: var(--accent); }
+
+/* Clearable search inputs (explorer + commands) */
+.search-wrap { position: relative; display: flex; align-items: center; flex-shrink: 0; }
+#panel-explorer .search-wrap { margin: 0 8px 4px; }
+#panel-commands .search-wrap { margin: 4px 6px; }
+.search-wrap > input { flex: 1; min-width: 0; }
+.search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.search-wrap.has-text .search-clear { display: flex; }
+.search-clear:hover { color: var(--text); background: rgba(127, 127, 127, 0.18); }
 #file-list {
   list-style: none;
   overflow-y: auto;
@@ -509,14 +537,15 @@ html[data-theme="light"] #toolbar-actions #btn-update:hover {
 }
 
 #cmd-search {
-  margin: 4px 6px;
-  padding: 5px 8px;
+  width: 100%;
+  margin: 0;
+  padding: 5px 26px 5px 8px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
-  flex-shrink: 0;
+  box-sizing: border-box;
 }
 #cmd-search:focus { outline: none; border-color: var(--accent); }
 #command-list {

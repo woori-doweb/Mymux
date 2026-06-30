@@ -216,8 +216,13 @@ pub fn pty_spawn(
 
     let pair = pty_system
         .openpty(PtySize {
-            rows: rows.max(24),
-            cols: cols.max(80),
+            // Honor the caller's fitted grid; only guard against a degenerate 0.
+            // Never force an 80×24 floor here — that would make a narrow pane's
+            // PTY wider than the visible xterm grid, so wrapped lines and header
+            // rules overflow and get truncated at the right edge instead of
+            // wrapping. The frontend already sends the real fitted size.
+            rows: rows.max(1),
+            cols: cols.max(1),
             pixel_width: 0,
             pixel_height: 0,
         })

@@ -30,15 +30,15 @@ fn store() -> Result<CommandStore, String> {
 /// name in any shell (PowerShell / Git Bash / CMD), so typing e.g. `cl` offers
 /// `claude --dangerously-skip-permissions`.
 const DEFAULT_COMMANDS: &[(&str, &str, &str)] = &[
-    ("cl", "claude --dangerously-skip-permissions", "Claude Code (권한 확인 스킵)"),
-    ("cc", "claude --continue", "Claude Code 이어서 진행"),
-    ("cr", "claude --resume", "Claude Code 세션 재개"),
-    ("cp", "claude update", "Claude Code 업데이트"),
-    ("cy", "codex --yolo", "Codex (yolo 모드)"),
-    ("co", "codex", "Codex 실행"),
-    ("cor", "codex resume", "Codex 세션 재개"),
-    ("cle", "clear", "화면 지우기"),
-    ("c&p", "git add -A && git commit -m \"update\" && git push", "커밋 후 푸시"),
+    ("cl", "claude --dangerously-skip-permissions", "Claude Code (skip permission prompts)"),
+    ("cc", "claude --continue", "Claude Code: continue"),
+    ("cr", "claude --resume", "Claude Code: resume session"),
+    ("cp", "claude update", "Update Claude Code"),
+    ("cy", "codex --yolo", "Codex (yolo mode)"),
+    ("co", "codex", "Run Codex"),
+    ("cor", "codex resume", "Codex: resume session"),
+    ("cle", "clear", "Clear the screen"),
+    ("c&p", "git add -A && git commit -m \"update\" && git push", "Commit and push"),
 ];
 
 /// Seed built-in shortcuts once (tracked by a marker file so deletions stick).
@@ -120,7 +120,7 @@ pub fn read_text_file(path: String) -> Result<String, String> {
     use std::io::Read;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     if meta.len() > 2_000_000 {
-        return Err("파일이 너무 큽니다 (2MB 초과)".into());
+        return Err("File is too large (over 2 MB)".into());
     }
     let mut buf = Vec::new();
     std::fs::File::open(&path)
@@ -170,6 +170,35 @@ pub fn pick_key_file(app: tauri::AppHandle) -> Option<String> {
         .map(|f| f.to_string())
 }
 
+/// If the clipboard holds an image, save it as a temp PNG and return its path;
+/// otherwise return None. The terminal paste path calls this first so Ctrl+V of
+/// a screenshot drops a file path the running tool (Claude Code / Codex) can
+/// attach, instead of pasting nothing. Falls back to text paste when None.
+#[tauri::command]
+pub fn paste_clipboard_image(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use image::ImageEncoder;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let img = match app.clipboard().read_image() {
+        Ok(img) => img,
+        Err(_) => return Ok(None), // no image on the clipboard
+    };
+    let (width, height) = (img.width(), img.height());
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("mymux-clip-{nanos}.png"));
+
+    let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+    image::codecs::png::PngEncoder::new(std::io::BufWriter::new(file))
+        .write_image(img.rgba(), width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|e| e.to_string())?;
+
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 /// Recursively copy a file or directory tree.
 fn copy_recursive(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
     if src.is_dir() {
@@ -192,13 +221,13 @@ fn copy_recursive(src: &std::path::Path, dest: &std::path::Path) -> std::io::Res
 #[tauri::command]
 pub fn fs_copy_path(src: String, dest_dir: String) -> Result<(), String> {
     let s = std::path::PathBuf::from(&src);
-    let name = s.file_name().ok_or("잘못된 경로")?;
+    let name = s.file_name().ok_or("Invalid path")?;
     let d = std::path::Path::new(&dest_dir).join(name);
     if d == s {
-        return Err("같은 위치입니다.".into());
+        return Err("Same location.".into());
     }
     if d.exists() {
-        return Err("같은 이름의 항목이 이미 있습니다.".into());
+        return Err("An item with the same name already exists.".into());
     }
     copy_recursive(&s, &d).map_err(|e| e.to_string())
 }
@@ -208,13 +237,13 @@ pub fn fs_copy_path(src: String, dest_dir: String) -> Result<(), String> {
 #[tauri::command]
 pub fn fs_move_path(src: String, dest_dir: String) -> Result<(), String> {
     let s = std::path::PathBuf::from(&src);
-    let name = s.file_name().ok_or("잘못된 경로")?;
+    let name = s.file_name().ok_or("Invalid path")?;
     let d = std::path::Path::new(&dest_dir).join(name);
     if d == s {
-        return Err("같은 위치입니다.".into());
+        return Err("Same location.".into());
     }
     if d.exists() {
-        return Err("같은 이름의 항목이 이미 있습니다.".into());
+        return Err("An item with the same name already exists.".into());
     }
     if std::fs::rename(&s, &d).is_ok() {
         return Ok(());

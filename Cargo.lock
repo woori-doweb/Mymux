@@ -3018,6 +3018,7 @@ version = "0.1.11"
 dependencies = [
  "async-trait",
  "dirs",
+ "image",
  "mycli-core",
  "portable-pty",
  "russh",

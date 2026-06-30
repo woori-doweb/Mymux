@@ -377,7 +377,7 @@ pub fn sftp_read_text_file(
         if let Ok(meta) = session.sftp.metadata(&path).await {
             if let Some(sz) = meta.size {
                 if sz > 2_000_000 {
-                    return Err("파일이 너무 큽니다 (2MB 초과)".to_string());
+                    return Err("File is too large (over 2 MB)".to_string());
                 }
             }
         }

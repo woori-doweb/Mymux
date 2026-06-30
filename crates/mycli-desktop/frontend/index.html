@@ -15,6 +15,10 @@
     <div id="toolbar-actions">
       <button id="btn-update" class="hidden" title="A new version is available — click to update">⬆ Update</button>
       <button id="btn-toggle-browser" title="Show / hide the browser tab">🌐</button>
+      <button id="btn-font-dec" title="Smaller text (Ctrl -)">A&#8722;</button>
+      <button id="btn-font-inc" title="Larger text (Ctrl +)">A+</button>
+      <button id="btn-track-dec" title="Tighter letter spacing">&gt;-&lt;</button>
+      <button id="btn-track-inc" title="Wider letter spacing">&lt;-&gt;</button>
       <button id="btn-split-h" title="Split focused pane horizontally (Ctrl+Shift+D)">&#8596;</button>
       <button id="btn-split-v" title="Split focused pane vertically (Ctrl+Shift+E)">&#8597;</button>
       <span id="accent-swatches" title="Accent color">
@@ -45,7 +49,7 @@
 
       <!-- Explorer panel -->
       <div id="panel-explorer" class="sidebar-panel active">
-        <input type="text" id="explorer-goto" placeholder="경로 입력 후 Enter — 예: E:\Project" spellcheck="false" />
+        <input type="text" id="explorer-goto" placeholder="Enter a path, then press Enter — e.g. E:\Project" spellcheck="false" />
         <div id="explorer-source">
           <select id="explorer-mode">
             <option value="local">Local PC</option>
@@ -54,12 +58,15 @@
         <div id="explorer-drives"></div>
         <div id="explorer-favorites"></div>
         <div id="explorer-nav">
-          <button id="btn-explorer-back" class="explorer-nav-btn" title="뒤로 (마우스 뒤로 버튼)" disabled>&#9664;</button>
-          <button id="btn-explorer-forward" class="explorer-nav-btn" title="앞으로 (마우스 앞으로 버튼)" disabled>&#9654;</button>
-          <button id="btn-explorer-up" class="explorer-nav-btn" title="상위 폴더로 이동">&#11014;</button>
+          <button id="btn-explorer-back" class="explorer-nav-btn" title="Back (mouse back button)" disabled>&#9664;</button>
+          <button id="btn-explorer-forward" class="explorer-nav-btn" title="Forward (mouse forward button)" disabled>&#9654;</button>
+          <button id="btn-explorer-up" class="explorer-nav-btn" title="Go to parent folder">&#11014;</button>
           <span id="explorer-path" title="Current path">/</span>
         </div>
-        <input type="text" id="explorer-search" placeholder="이 폴더에서 검색…" spellcheck="false" autocomplete="off" />
+        <div class="search-wrap">
+          <input type="text" id="explorer-search" placeholder="Search this folder…" spellcheck="false" autocomplete="off" />
+          <button type="button" id="explorer-search-clear" class="search-clear" title="Clear" tabindex="-1">&times;</button>
+        </div>
         <ul id="file-list"></ul>
       </div>
 
@@ -69,7 +76,10 @@
           <span>Saved Commands</span>
           <button id="btn-add" title="Add command">+</button>
         </div>
-        <input type="text" id="cmd-search" placeholder="명령어 검색…" spellcheck="false" autocomplete="off" />
+        <div class="search-wrap">
+          <input type="text" id="cmd-search" placeholder="Search commands…" spellcheck="false" autocomplete="off" />
+          <button type="button" id="cmd-search-clear" class="search-clear" title="Clear" tabindex="-1">&times;</button>
+        </div>
         <ul id="command-list"></ul>
         <div id="empty-state" class="hidden">
           <p>No commands saved.</p>
@@ -87,18 +97,18 @@
         <div class="browser-head">
           <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.6 2.7 3.9 5.9 3.9 9s-1.3 6.3-3.9 9c-2.6-2.7-3.9-5.9-3.9-9S9.4 5.7 12 3z"/></svg> Browser</h2>
           <div class="browser-mode">
-            <button id="mode-native" class="mode-btn active" title="앱 내장 WebView로 직접 브라우징"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg> Native</button>
-            <button id="mode-ai" class="mode-btn" title="AI(Playwright)가 조종 — CDP 스크린캐스트"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="10" rx="2"/><path d="M12 9V5.5"/><circle cx="12" cy="4" r="1.3"/><path d="M9.5 14h.01M14.5 14h.01"/></svg> AI 제어</button>
+            <button id="mode-native" class="mode-btn active" title="Browse directly in the built-in WebView"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg> Native</button>
+            <button id="mode-ai" class="mode-btn" title="Driven by AI (Playwright) — CDP screencast"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="10" rx="2"/><path d="M12 9V5.5"/><circle cx="12" cy="4" r="1.3"/><path d="M9.5 14h.01M14.5 14h.01"/></svg> AI Control</button>
           </div>
           <div id="browser-status" class="browser-status stopped">○ Stopped</div>
         </div>
 
         <!-- Native mode: address bar (drives the embedded child WebView) -->
         <div class="browser-nav" id="browser-nav">
-          <button id="nav-back" class="secondary" title="뒤로">&#9664;</button>
-          <button id="nav-forward" class="secondary" title="앞으로">&#9654;</button>
-          <button id="nav-reload" class="secondary" title="새로고침">&#8635;</button>
-          <input type="text" id="nav-url" placeholder="주소 입력 — 예: github.com" spellcheck="false" />
+          <button id="nav-back" class="secondary" title="Back">&#9664;</button>
+          <button id="nav-forward" class="secondary" title="Forward">&#9654;</button>
+          <button id="nav-reload" class="secondary" title="Reload">&#8635;</button>
+          <input type="text" id="nav-url" placeholder="Enter an address — e.g. github.com" spellcheck="false" />
           <button id="nav-go">Go</button>
         </div>
 
@@ -115,13 +125,13 @@
         <div id="browser-viewport">
           <img id="browser-screen" alt="" draggable="false" />
           <div id="browser-placeholder">
-            <p><b>Native</b>: 주소를 입력하면 앱 내장 브라우저가 여기 표시됩니다.</p>
-            <p class="muted"><b>AI 제어</b> 모드로 바꾸면 AI(Playwright MCP)가 조종하는 화면이 표시됩니다.</p>
+            <p><b>Native</b>: Enter an address and the built-in browser appears here.</p>
+            <p class="muted">Switch to <b>AI Control</b> mode to see the screen driven by AI (Playwright MCP).</p>
           </div>
         </div>
 
         <details class="browser-conn" id="browser-conn" style="display:none">
-          <summary>AI 연결 설정 (Playwright MCP)</summary>
+          <summary>AI connection settings (Playwright MCP)</summary>
           <div class="browser-info">
             <div class="info-row">
               <label>CDP Endpoint</label>
@@ -134,7 +144,7 @@
               <button class="copy-btn secondary" data-copy="mcp-cli">Copy</button>
             </div>
             <div class="info-row">
-              <label>Claude Code 등록</label>
+              <label>Claude Code registration</label>
               <code id="browser-mcp-add">—</code>
               <button class="copy-btn secondary" data-copy="mcp-add">Copy</button>
             </div>
@@ -147,12 +157,12 @@
         <div class="viewer-head">
           <div id="viewer-tabs" class="viewer-tabs"></div>
           <div id="viewer-tools" class="viewer-tools">
-            <button id="viewer-edit-toggle" class="vtool" title="편집"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
-            <button id="viewer-find-btn" class="vtool" title="찾기 (Ctrl+F)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
-            <label class="vtool-chk" title="자동 저장"><input type="checkbox" id="viewer-autosave" /> 자동</label>
-            <button id="viewer-save-btn" class="vtool" title="저장 (Ctrl+S)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></button>
+            <button id="viewer-edit-toggle" class="vtool" title="Edit"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
+            <button id="viewer-find-btn" class="vtool" title="Find (Ctrl+F)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+            <label class="vtool-chk" title="Auto-save"><input type="checkbox" id="viewer-autosave" /> Auto</label>
+            <button id="viewer-save-btn" class="vtool" title="Save (Ctrl+S)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></button>
           </div>
-          <button id="viewer-close" class="vtool" title="뷰어 닫기"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <button id="viewer-close" class="vtool" title="Close viewer"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <div id="viewer-body" class="viewer-body"></div>
       </div>
@@ -185,13 +195,13 @@
       <div id="session-resizer" title="드래그해서 세션 패널 너비 조절"></div>
       <div id="session-header">
         <span>Sessions</span>
-        <button id="btn-toggle-sessions" class="panel-collapse" title="세션 패널 접기/펼치기"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><line x1="8" y1="3.5" x2="8" y2="12.5"/></svg></button>
+        <button id="btn-toggle-sessions" class="panel-collapse" title="Collapse / expand session panel"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><line x1="8" y1="3.5" x2="8" y2="12.5"/></svg></button>
       </div>
       <ul id="session-list">
         <li class="session-empty">No active sessions.</li>
       </ul>
       <div id="session-footer">
-        <button id="btn-github" title="GitHub 저장소를 기본 브라우저로 열기">
+        <button id="btn-github" title="Open the GitHub repository in your default browser">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
           <span>Github - Mymux</span>
         </button>
