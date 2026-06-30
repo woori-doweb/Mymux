@@ -83,20 +83,56 @@ sudo systemctl status mymux-console
 journalctl -u mymux-console -f
 ```
 
-## 8. Nginx reverse proxy
+## 8. Domain, DNS & TLS (`console.orchestration.kr`)
+
+This app owns the **entire root (`/`)** of its hostname — the front-end uses
+root-absolute `/api`, `/ws`, and redirects, so it gets a **dedicated vhost on its
+own (sub)domain**, never a sub-path of a shared host. The shipped config targets
+`console.orchestration.kr`.
+
+1. **DNS** — point the name at this host's Tailscale IP so it stays tailnet-only:
+
+   ```
+   console.orchestration.kr  A  <this host's Tailscale 100.x IP>
+   ```
+
+   The name resolves publicly but the address is unroutable from the public
+   internet, so the "not a public service" model is preserved.
+
+2. **TLS** — the IP is private, so HTTP-01 can't reach it; issue via **DNS-01**.
+   `orchestration.kr` is on Cloudflare (`*.ns.cloudflare.com`), so use the
+   cloudflare plugin with a scoped API token:
+
+   ```bash
+   # Debian/Ubuntu: sudo apt install python3-certbot-dns-cloudflare
+   # Credentials (chmod 600) — token needs Zone:DNS:Edit + Zone:Zone:Read on the zone:
+   sudo install -m 0600 deploy/cloudflare.ini.example /etc/letsencrypt/cloudflare.ini
+   sudo $EDITOR /etc/letsencrypt/cloudflare.ini   # paste the real token
+
+   sudo certbot certonly --dns-cloudflare \
+     --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
+     --dns-cloudflare-propagation-seconds 30 \
+     --deploy-hook "systemctl reload nginx" \
+     -d console.orchestration.kr
+   # → /etc/letsencrypt/live/console.orchestration.kr/{fullchain,privkey}.pem
+   ```
+
+   The `--deploy-hook` makes Nginx pick up auto-renewed certs; `certbot renew`
+   reuses the saved DNS-01 credentials, so renewal needs no manual steps.
+
+3. **`public_url`** — set it to the exact browser origin in `config.toml`
+   (`https://console.orchestration.kr`, no path/port). The WebSocket same-origin
+   check rejects terminals if this differs from what the browser sends.
+
+## 9. Nginx reverse proxy
 
 ```bash
 sudo cp deploy/nginx.mymux-console.conf /etc/nginx/conf.d/mymux-console.conf
-# put the TLS cert/key where the config expects them, then:
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-The config restricts to `100.64.0.0/10` (Tailscale) and proxies `/ws/` with the
-upgrade headers + long timeouts.
-
-## 9. Tailscale / IP restriction
-
-The reverse proxy `allow`s only the Tailscale range. The app additionally
+The config restricts to `100.64.0.0/10` (Tailscale), redirects HTTP→HTTPS, and
+proxies `/ws/` with the upgrade headers + long timeouts. The app additionally
 enforces `network.allowed_client_cidrs` and honors `X-Forwarded-For` **only**
 from `trusted_proxy_ips`. Tighten the Nginx `allow` to specific 100.x hosts for
 production.

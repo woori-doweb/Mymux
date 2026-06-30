@@ -1,0 +1,15 @@
+# Cloudflare API credentials for certbot DNS-01 (console.orchestration.kr).
+#
+# Copy to /etc/letsencrypt/cloudflare.ini and lock it down — it is a secret:
+#   sudo install -m 0600 -o root -g root deploy/cloudflare.ini.example \
+#       /etc/letsencrypt/cloudflare.ini
+#   sudo $EDITOR /etc/letsencrypt/cloudflare.ini   # paste the real token
+#
+# Create a SCOPED API token in the Cloudflare dashboard
+# (My Profile → API Tokens → Create Token → "Edit zone DNS" template):
+#   Permissions : Zone → DNS  → Edit
+#                 Zone → Zone → Read
+#   Zone Resources : Include → Specific zone → orchestration.kr
+# A scoped token is preferred over the legacy global API key.
+
+dns_cloudflare_api_token = PASTE_YOUR_SCOPED_CLOUDFLARE_API_TOKEN_HERE

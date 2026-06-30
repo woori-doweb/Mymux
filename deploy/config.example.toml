@@ -5,7 +5,10 @@
 
 [server]
 bind = "127.0.0.1:7070"
-public_url = "https://mymux-console.tailnet.local"
+# MUST equal the exact origin the browser uses (scheme + host, no path, no
+# default port). Nginx serves this app at the root of console.orchestration.kr;
+# the WebSocket same-origin check rejects terminals if this does not match.
+public_url = "https://console.orchestration.kr"
 static_dir = "/opt/mymux-console/static"
 database_url = "sqlite:/var/lib/mymux-console/mymux.db"
 

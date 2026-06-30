@@ -16,3 +16,8 @@ release/
 *.key
 *.key.pub
 mymux_updater.key*
+
+# Cloudflare API credentials for certbot DNS-01 — NEVER commit the real file
+# (only the .example template is tracked)
+cloudflare.ini
+deploy/cloudflare.ini
