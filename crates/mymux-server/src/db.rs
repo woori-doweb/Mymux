@@ -62,6 +62,9 @@ pub async fn migrate(pool: &SqlitePool) -> Result<(), AppError> {
     sqlx::raw_sql(include_str!("../migrations/0002_saved_commands.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0003_command_defaults.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

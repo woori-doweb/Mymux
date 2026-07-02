@@ -59,6 +59,57 @@ pub struct CommandInput {
     pub favorite: bool,
 }
 
+/// Built-in shortcut commands, seeded once per user. Copied verbatim from the
+/// desktop app's DEFAULT_COMMANDS (mycli-desktop/src/commands.rs).
+const DEFAULT_COMMANDS: &[(&str, &str, &str)] = &[
+    ("cl", "claude --dangerously-skip-permissions", "Claude Code (권한 확인 스킵)"),
+    ("cc", "claude --continue", "Claude Code 이어서 진행"),
+    ("cr", "claude --resume", "Claude Code 세션 재개"),
+    ("cp", "claude update", "Claude Code 업데이트"),
+    ("cy", "codex --yolo", "Codex (yolo 모드)"),
+    ("co", "codex", "Codex 실행"),
+    ("cor", "codex resume", "Codex 세션 재개"),
+    ("cle", "clear", "화면 지우기"),
+    (
+        "c&p",
+        "git add -A && git commit -m \"update\" && git push",
+        "커밋 후 푸시",
+    ),
+];
+
+/// Seed the built-in commands for a user the first time we see them. The marker
+/// table makes this idempotent and keeps later deletions from reappearing.
+async fn seed_defaults(state: &AppState, user_id: &str) -> AppResult<()> {
+    let now = util::now_rfc3339();
+    let res =
+        sqlx::query("INSERT OR IGNORE INTO command_seed_marker (user_id, seeded_at) VALUES (?, ?)")
+            .bind(user_id)
+            .bind(&now)
+            .execute(&state.db)
+            .await?;
+    if res.rows_affected() == 0 {
+        return Ok(()); // already seeded for this user
+    }
+    for (name, command, description) in DEFAULT_COMMANDS {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO saved_commands \
+             (id, owner_user_id, name, command, description, favorite, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+        )
+        .bind(&id)
+        .bind(user_id)
+        .bind(*name)
+        .bind(*command)
+        .bind(*description)
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.db)
+        .await?;
+    }
+    Ok(())
+}
+
 const MAX_NAME: usize = 100;
 const MAX_COMMAND: usize = 4000;
 const MAX_DESCRIPTION: usize = 500;
@@ -92,6 +143,7 @@ pub async fn list_commands(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> AppResult<Json<Vec<CommandDto>>> {
+    seed_defaults(&state, &user.id).await?;
     let rows = sqlx::query_as::<_, Row>(
         "SELECT id, name, command, description, favorite, created_at \
          FROM saved_commands WHERE owner_user_id = ? \
