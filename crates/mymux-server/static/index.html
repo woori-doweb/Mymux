@@ -12,8 +12,10 @@
     <span class="brand">Mymux Console</span>
     <span id="whoami"></span>
     <span class="spacer"></span>
-    <button id="btn-new">+ Terminal</button>
-    <button id="btn-close">Close</button>
+    <button id="btn-new" title="새 탭">+ Tab</button>
+    <button id="btn-split-h" title="좌우 분할 (Ctrl+Shift+D)">⬌</button>
+    <button id="btn-split-v" title="상하 분할 (Ctrl+Shift+E)">⬍</button>
+    <button id="btn-close" title="포커스된 페인 닫기 (Ctrl+Shift+W)">Close</button>
     <button id="btn-logout">Logout</button>
   </header>
   <main id="layout">
@@ -36,7 +38,16 @@
         <ul id="audit-list"></ul>
       </div>
     </aside>
-    <section id="term-area"><div id="terminal"></div><div id="ac-popup" class="hidden"><ul id="ac-list"></ul></div></section>
+    <section id="term-area">
+      <div id="tab-bar"></div>
+      <div id="tab-content">
+        <div id="tab-welcome">
+          <p><strong>+ Tab</strong> 으로 새 터미널을 여세요.</p>
+          <p class="muted">분할: 상단 <strong>⬌ / ⬍</strong> (또는 Ctrl+Shift+D / E) · 페인 닫기 Ctrl+Shift+W</p>
+        </div>
+      </div>
+      <div id="ac-popup" class="hidden"><ul id="ac-list"></ul></div>
+    </section>
   </main>
 
   <div id="cmd-modal" class="overlay hidden">

@@ -8,7 +8,7 @@ and the current status.
 
 ## Flagged by the operator
 
-### 1. Left UI / terminal "differentiation" (tabs + panes) — **missing, and previously untracked**
+### 1. Left UI / terminal "differentiation" (tabs + panes) — **done (this change)**
 
 Desktop had a **tabs > panes > session-tree** model:
 
@@ -25,6 +25,13 @@ click-to-switch only. Not listed in `MYMUX_SERVER.md §12`.
 
 **Portability:** frontend-only — each pane reuses one existing
 `/ws/terminals/:id`; N xterm instances in a CSS grid. Backend unchanged.
+
+**Ported (this change):** tabs (a binary split-tree of panes each), toolbar
+`+ Tab` / `⬌` / `⬍` / `Close` and shortcuts `Ctrl+Shift+D` (split left/right),
+`Ctrl+Shift+E` (split top/bottom), `Ctrl+Shift+W` (close pane), `Ctrl+Shift+N`
+(new tab); draggable dividers; click/typing to focus a pane; the sidebar list
+reattaches an existing server terminal into a new tab (reload/admin recovery).
+Not yet ported: per-tab session-tree drag-between-tabs, tab/pane rename.
 
 ### 2. Saved commands / "paste command directly" — **implemented (this change)**
 
@@ -49,7 +56,7 @@ full command. Tracking is a best-effort local mirror of the input line.
 
 | Feature | Desktop source | Server | Portability | Status |
 |---|---|---|---|---|
-| Terminal tabs/splits (분화) | index 18-19,83 | flat list | frontend-only | **pending (P1)** |
+| Terminal tabs/splits (분화) | index 18-19,83 | ✓ tabs+splits | frontend-only | **done (this change)** |
 | Saved commands + insert | commands.rs, index 67-78 | — | DB+REST+UI | **done (this change)** |
 | Command autocomplete popup | index 217 | ✓ | frontend + commands API | **done (this change)** |
 | File explorer (drives/favs/search/ops) | index 46-64, explorer.rs | — | needs `workspace_root` sandbox | pending (P2) |
@@ -63,7 +70,7 @@ full command. Tracking is a best-effort local mirror of the input line.
 
 ## Port priority (multi-user server)
 
-1. Terminal tabs/splits (분화) — highest UX value, backend unchanged.
+1. **Terminal tabs/splits (분화) — DONE.**
 2. **Saved commands + insertion — DONE.**
 3. **Command autocomplete — DONE.**
 4. File explorer / viewer — with a `workspace_root` sandbox.

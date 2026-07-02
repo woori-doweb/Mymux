@@ -1,9 +1,22 @@
 // Mymux Console — static front-end (no build chain). Talks to the mymux-server
 // HTTP/WS API. xterm.js + fit addon are vendored under /vendor.
+//
+// Workspace model: tabs → a binary split-tree of panes. Each pane owns one
+// server terminal (one /ws/terminals/:id socket + one xterm instance). Saved
+// commands and autocomplete act on the *focused* pane.
 (function () {
   'use strict';
   const $ = (s) => document.querySelector(s);
-  let term = null, fit = null, ws = null, current = null, me = null;
+
+  let me = null;
+  let tabs = [];          // { id, name, root(node), contentEl, focusedPaneId }
+  let panes = [];         // flat list of live panes
+  let activeTabId = null;
+  let focused = null;     // focused pane
+  let seq = 0;
+  const uid = (p) => p + (++seq);
+
+  // Saved commands + autocomplete state
   let commands = [], cmdEditingId = null, cmdFilter = '';
   let acItems = [], acIndex = -1, acNavigated = false, lineBuf = '', acDismissed = false;
 
@@ -14,24 +27,6 @@
     return r;
   }
 
-  function initTerm() {
-    term = new Terminal({ cursorBlink: true, fontFamily: 'monospace', fontSize: 14, theme: { background: '#0b0e14' } });
-    fit = new FitAddon.FitAddon();
-    term.loadAddon(fit);
-    term.open($('#terminal'));
-    fit.fit();
-    term.onData((d) => { sendRaw(d); trackInput(d); });
-    term.attachCustomKeyEventHandler(acKeyHandler);
-    window.addEventListener('resize', doFit);
-  }
-
-  function doFit() {
-    try {
-      fit.fit();
-      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-    } catch (e) { /* not ready */ }
-  }
-
   // Server sends PTY output as base64(standard) of raw bytes.
   function b64ToBytes(b64) {
     const bin = atob(b64);
@@ -40,13 +35,32 @@
     return out;
   }
 
-  function attach(id) {
-    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
-    current = id;
-    lineBuf = ''; acDismissed = false; acHide(false);
+  // ── Panes ─────────────────────────────────────────────────────────
+  function wsUrl(termId) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(proto + '://' + location.host + '/ws/terminals/' + id);
-    ws.onopen = () => { doFit(); term.focus(); };
+    return proto + '://' + location.host + '/ws/terminals/' + termId;
+  }
+
+  function makePane(termId) {
+    const el = document.createElement('div');
+    el.className = 'pane';
+    const host = document.createElement('div');
+    host.className = 'pane-term';
+    el.appendChild(host);
+
+    const term = new Terminal({ cursorBlink: true, fontFamily: 'monospace', fontSize: 14, theme: { background: '#0b0e14' } });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(host);
+
+    const pane = { id: uid('p'), tabId: null, termId, term, fit, ws: null, el, host, node: null };
+    el.addEventListener('mousedown', () => { if (focused !== pane) focusPane(pane); });
+    term.onData((d) => { if (focused !== pane) focusPane(pane); sendRaw(d); trackInput(d); });
+    term.attachCustomKeyEventHandler(keyHandler);
+
+    const ws = new WebSocket(wsUrl(termId));
+    pane.ws = ws;
+    ws.onopen = () => { fitSoon(pane); if (focused === pane) term.focus(); };
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (m.type === 'output') term.write(b64ToBytes(m.data));
@@ -54,43 +68,257 @@
       else if (m.type === 'error') term.write('\r\n\x1b[31m[error] ' + m.message + '\x1b[0m\r\n');
     };
     ws.onclose = () => { /* keep buffer on screen */ };
-    highlight();
+    panes.push(pane);
+    return pane;
   }
 
-  function highlight() {
-    document.querySelectorAll('#term-list li').forEach((li) => li.classList.toggle('active', li.dataset.id === current));
+  function fitPane(pane) {
+    try {
+      pane.fit.fit();
+      if (pane.ws && pane.ws.readyState === 1) {
+        pane.ws.send(JSON.stringify({ type: 'resize', cols: pane.term.cols, rows: pane.term.rows }));
+      }
+    } catch (e) { /* not laid out yet */ }
+  }
+  function fitSoon(pane) { requestAnimationFrame(() => fitPane(pane)); }
+  function fitTree(node) { requestAnimationFrame(() => forEachPane(node, fitPane)); }
+
+  function forEachPane(node, fn) {
+    if (!node) return;
+    if (node.type === 'pane') fn(node.pane);
+    else { forEachPane(node.a, fn); forEachPane(node.b, fn); }
+  }
+  function firstPane(node) {
+    if (!node) return null;
+    if (node.type === 'pane') return node.pane;
+    return firstPane(node.a) || firstPane(node.b);
+  }
+
+  function focusPane(pane) {
+    if (!pane) return;
+    focused = pane;
+    document.querySelectorAll('.pane.focused').forEach((e) => e.classList.remove('focused'));
+    pane.el.classList.add('focused');
+    lineBuf = ''; acDismissed = false; acHide(false);   // reset autocomplete on focus change
+    const t = tabById(pane.tabId); if (t) t.focusedPaneId = pane.id;
+    try { pane.term.focus(); } catch (e) {}
+  }
+
+  async function createServerTerminal() {
+    const cols = focused ? focused.term.cols : 120;
+    const rows = focused ? focused.term.rows : 36;
+    const r = await api('/api/terminals', { method: 'POST', body: JSON.stringify({ cols, rows }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'terminal create failed'); return null; }
+    const t = await r.json();
+    return t.id;
+  }
+
+  // ── Split-tree DOM ────────────────────────────────────────────────
+  // node = { type:'pane', pane } | { type:'split', dir:'row'|'col', ratio, a, b, el, divider, parent }
+  function nodeEl(node) { return node.type === 'pane' ? node.pane.el : node.el; }
+
+  function applyFlex(split) {
+    const g = split.ratio;
+    nodeEl(split.a).style.flex = g + ' 1 0%';
+    nodeEl(split.b).style.flex = (1 - g) + ' 1 0%';
+  }
+
+  function wireDivider(split) {
+    split.divider.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const onMove = (ev) => {
+        const r = split.el.getBoundingClientRect();
+        const ratio = split.dir === 'row' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height;
+        split.ratio = Math.min(0.9, Math.max(0.1, ratio));
+        applyFlex(split);
+        requestAnimationFrame(() => forEachPane(split, fitPane));
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('dragging');
+        forEachPane(split, fitPane);
+      };
+      document.body.classList.add('dragging');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // Build the split's DOM element. NOTE: this MOVES the existing child elements
+  // (nodeEl(a), nodeEl(b)) into the new container — callers rely on that.
+  function buildSplitEl(split) {
+    const el = document.createElement('div');
+    el.className = 'split ' + split.dir;
+    const divider = document.createElement('div');
+    divider.className = 'divider';
+    el.appendChild(nodeEl(split.a));
+    el.appendChild(divider);
+    el.appendChild(nodeEl(split.b));
+    split.el = el;
+    split.divider = divider;
+    applyFlex(split);
+    wireDivider(split);
+    return el;
+  }
+
+  async function splitFocused(dir) {
+    const t = tabById(activeTabId);
+    if (!t || !focused) return;
+    const oldNode = focused.node;      // captured before await
+    const oldEl = nodeEl(oldNode);
+    const termId = await createServerTerminal();
+    if (!termId) return;
+
+    const q = makePane(termId);
+    q.tabId = t.id;
+    const qNode = { type: 'pane', pane: q, parent: null };
+    q.node = qNode;
+
+    const grandEl = oldEl.parentNode;
+    const nextSib = oldEl.nextSibling;
+    const split = { type: 'split', dir, ratio: 0.5, a: oldNode, b: qNode, el: null, divider: null, parent: oldNode.parent };
+    oldNode.parent = split; qNode.parent = split;
+
+    const splitEl = buildSplitEl(split);         // moves oldEl into splitEl
+    grandEl.insertBefore(splitEl, nextSib);      // put the split where oldEl was
+
+    if (!split.parent) { t.root = split; }
+    else {
+      if (split.parent.a === oldNode) split.parent.a = split; else split.parent.b = split;
+      applyFlex(split.parent);                   // splitEl now occupies oldEl's flex slot
+    }
+    fitTree(split);
+    focusPane(q);
+  }
+
+  function closePane(pane) {
+    const t = tabById(pane.tabId);
+    if (!t) return;
+    const node = pane.node;
+    if (node === t.root) { closeTab(t); return; }   // last pane in the tab → closeTab cleans up
+
+    api('/api/terminals/' + pane.termId, { method: 'DELETE' }).catch(() => {});
+    try { pane.ws.close(); } catch (e) {}
+    try { pane.term.dispose(); } catch (e) {}
+    panes = panes.filter((p) => p !== pane);
+
+    const parent = node.parent;                     // a split
+    const sibling = parent.a === node ? parent.b : parent.a;
+    const parentEl = parent.el;
+    const grandEl = parentEl.parentNode;
+    const nextSib = parentEl.nextSibling;
+    const sibEl = nodeEl(sibling);
+    grandEl.insertBefore(sibEl, nextSib);           // hoist sibling out of the collapsing split
+    grandEl.removeChild(parentEl);
+
+    sibling.parent = parent.parent;
+    if (!sibling.parent) { t.root = sibling; sibEl.style.flex = ''; }
+    else {
+      if (sibling.parent.a === parent) sibling.parent.a = sibling; else sibling.parent.b = sibling;
+      applyFlex(sibling.parent);
+    }
+    const nf = firstPane(t.root);
+    if (nf) focusPane(nf);
+    fitTree(t.root);
+  }
+
+  // ── Tabs ──────────────────────────────────────────────────────────
+  function tabById(id) { return tabs.find((t) => t.id === id); }
+  function activeTab() { return tabById(activeTabId); }
+
+  async function newTab(existingTermId) {
+    const termId = existingTermId || await createServerTerminal();
+    if (!termId) return;
+    const pane = makePane(termId);
+    const node = { type: 'pane', pane, parent: null };
+    pane.node = node;
+    const contentEl = document.createElement('div');
+    contentEl.className = 'tab-root';
+    contentEl.appendChild(pane.el);
+    $('#tab-content').appendChild(contentEl);
+    const tab = { id: uid('t'), name: 'Tab ' + (tabs.length + 1), root: node, contentEl, focusedPaneId: pane.id };
+    pane.tabId = tab.id;
+    tabs.push(tab);
+    activateTab(tab.id);
+  }
+
+  function activateTab(id) {
+    activeTabId = id;
+    tabs.forEach((t) => { t.contentEl.style.display = (t.id === id) ? 'flex' : 'none'; });
+    updateWelcome();
+    renderTabs();
+    const t = tabById(id);
+    if (!t) return;
+    const p = panes.find((x) => x.id === t.focusedPaneId) || firstPane(t.root);
+    if (p) focusPane(p);
+    fitTree(t.root);
+  }
+
+  function closeTab(t) {
+    forEachPane(t.root, (p) => {
+      api('/api/terminals/' + p.termId, { method: 'DELETE' }).catch(() => {});
+      try { p.ws.close(); } catch (e) {}
+      try { p.term.dispose(); } catch (e) {}
+    });
+    panes = panes.filter((p) => p.tabId !== t.id);
+    t.contentEl.remove();
+    tabs = tabs.filter((x) => x !== t);
+    if (activeTabId === t.id) {
+      if (tabs.length) activateTab(tabs[tabs.length - 1].id);
+      else { activeTabId = null; focused = null; updateWelcome(); renderTabs(); }
+    } else { renderTabs(); }
+  }
+
+  function renderTabs() {
+    const bar = $('#tab-bar');
+    bar.innerHTML = '';
+    tabs.forEach((t) => {
+      const chip = document.createElement('div');
+      chip.className = 'tab-chip' + (t.id === activeTabId ? ' active' : '');
+      const label = document.createElement('span');
+      label.className = 'tab-label';
+      label.textContent = t.name;
+      label.onclick = () => activateTab(t.id);
+      const x = document.createElement('button');
+      x.className = 'tab-x'; x.type = 'button'; x.textContent = '×'; x.title = '탭 닫기';
+      x.onclick = (e) => { e.stopPropagation(); closeTab(t); };
+      chip.appendChild(label); chip.appendChild(x);
+      bar.appendChild(chip);
+    });
+    const add = document.createElement('button');
+    add.className = 'tab-add'; add.type = 'button'; add.textContent = '+'; add.title = '새 탭 (Ctrl+Shift+N)';
+    add.onclick = () => newTab();
+    bar.appendChild(add);
+  }
+
+  function updateWelcome() {
+    $('#tab-welcome').classList.toggle('hidden', tabs.length > 0);
+  }
+
+  // Sidebar click: focus the pane already showing this terminal, else open it
+  // in a new tab (reattach — e.g. after a page reload, or an admin viewing it).
+  function openTerm(termId) {
+    const p = panes.find((x) => x.termId === termId);
+    if (p) { activateTab(p.tabId); focusPane(p); return; }
+    newTab(termId);
   }
 
   async function refreshList() {
-    const r = await api('/api/terminals');
-    const list = await r.json();
+    let list;
+    try { const r = await api('/api/terminals'); list = await r.json(); } catch (e) { return; }
+    const shown = new Set(panes.map((p) => p.termId));
     const ul = $('#term-list');
     ul.innerHTML = '';
     list.forEach((t) => {
       const li = document.createElement('li');
       li.textContent = (t.ownerUsername || '') + ' · ' + t.id.slice(0, 14) + (t.exited ? ' (exited)' : '');
       li.dataset.id = t.id;
-      if (t.id === current) li.className = 'active';
-      li.onclick = () => attach(t.id);
+      if (shown.has(t.id)) li.className = 'active';
+      li.title = shown.has(t.id) ? '열려 있음 — 클릭해 포커스' : '클릭해 새 탭으로 열기';
+      li.onclick = () => openTerm(t.id);
       ul.appendChild(li);
     });
-  }
-
-  async function newTerminal() {
-    const r = await api('/api/terminals', { method: 'POST', body: JSON.stringify({ cols: (term && term.cols) || 120, rows: (term && term.rows) || 36 }) });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'create failed'); return; }
-    const t = await r.json();
-    await refreshList();
-    attach(t.id);
-  }
-
-  async function closeCurrent() {
-    if (!current) return;
-    await api('/api/terminals/' + current, { method: 'DELETE' });
-    if (ws) { try { ws.close(); } catch (e) {} }
-    current = null;
-    await refreshList();
-    if (term) term.clear();
   }
 
   async function logout() {
@@ -114,15 +342,16 @@
   }
 
   // ── Saved Commands ──────────────────────────────────────────────────
-  // Insert into the active terminal. execute=true appends Enter (runs it);
+  // Insert into the focused terminal. execute=true appends Enter (runs it);
   // execute=false pastes without a newline so the user can review first.
   function sendToActive(text, execute) {
-    if (!current || !ws || ws.readyState !== 1) {
-      alert('활성 터미널이 없습니다. 먼저 터미널을 열거나 선택하세요.');
+    const w = focused && focused.ws;
+    if (!focused || !w || w.readyState !== 1) {
+      alert('활성 터미널이 없습니다. 상단 + Tab 으로 터미널을 여세요.');
       return;
     }
-    ws.send(JSON.stringify({ type: 'input', data: execute ? text + '\r' : text }));
-    if (term) term.focus();
+    w.send(JSON.stringify({ type: 'input', data: execute ? text + '\r' : text }));
+    focused.term.focus();
   }
 
   async function loadCommands() {
@@ -163,7 +392,7 @@
       txt.textContent = c.command;                     // textContent → no XSS
       li.appendChild(name);
       li.appendChild(txt);
-      // Row click pastes the command (no newline) into the active terminal.
+      // Row click pastes the command (no newline) into the focused terminal.
       li.onclick = () => sendToActive(c.command, false);
       const actions = document.createElement('div');
       actions.className = 'cmd-actions';
@@ -233,10 +462,10 @@
   // ── Command autocomplete (type-ahead over the terminal) ─────────────
   // Best-effort: we mirror the current input line locally and, when it
   // prefix-matches a saved command name/text, show a popup. Accepting erases
-  // the typed prefix and inserts the full command (no newline, so it doesn't
-  // auto-run). Heuristic tracking — good at a prompt, not a full line editor.
+  // the typed prefix and inserts the full command (no newline).
   function sendRaw(d) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'input', data: d }));
+    const w = focused && focused.ws;
+    if (w && w.readyState === 1) w.send(JSON.stringify({ type: 'input', data: d }));
   }
 
   function trackInput(d) {
@@ -290,7 +519,7 @@
     sendRaw('\x7f'.repeat(lineBuf.length) + c.command);   // erase typed prefix, insert full cmd
     lineBuf = c.command;
     acHide(true);
-    if (term) term.focus();
+    if (focused) focused.term.focus();
   }
 
   function acHide(dismiss) {
@@ -299,10 +528,17 @@
     if (dismiss) acDismissed = true;
   }
 
-  // Runs before xterm processes a key; return false to swallow it (keeps it off
-  // the PTY). Only intercepts while the popup is visible.
-  function acKeyHandler(e) {
+  // Runs before xterm processes a key; return false to swallow it. Handles
+  // workspace shortcuts (any time) and autocomplete nav (while popup is open).
+  function keyHandler(e) {
     if (e.type !== 'keydown') return true;
+    if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'd') { e.preventDefault(); splitFocused('row'); return false; }
+      if (k === 'e') { e.preventDefault(); splitFocused('col'); return false; }
+      if (k === 'w') { e.preventDefault(); if (focused) closePane(focused); return false; }
+      if (k === 'n') { e.preventDefault(); newTab(); return false; }
+    }
     if ($('#ac-popup').classList.contains('hidden')) return true;
     switch (e.key) {
       case 'ArrowDown': acMove(1); return false;
@@ -320,18 +556,22 @@
     const r = await api('/api/auth/me');
     me = await r.json();
     $('#whoami').textContent = me.username + ' (' + me.role + ')';
-    initTerm();
     await refreshList();
     await loadAudit();
     await loadCommands();
-    $('#btn-new').onclick = newTerminal;
-    $('#btn-close').onclick = closeCurrent;
+    renderTabs();
+    updateWelcome();
+    $('#btn-new').onclick = () => newTab();
+    $('#btn-split-h').onclick = () => splitFocused('row');
+    $('#btn-split-v').onclick = () => splitFocused('col');
+    $('#btn-close').onclick = () => { if (focused) closePane(focused); };
     $('#btn-logout').onclick = logout;
     $('#btn-cmd-add').onclick = () => openCmdModal(null);
     $('#cmd-search').oninput = (e) => { cmdFilter = e.target.value; renderCommands(); };
     $('#cmd-cancel').onclick = closeCmdModal;
     $('#cmd-form').onsubmit = saveCmd;
     $('#cmd-modal').onclick = (e) => { if (e.target.id === 'cmd-modal') closeCmdModal(); };
+    window.addEventListener('resize', () => { const t = activeTab(); if (t) forEachPane(t.root, fitPane); });
     setInterval(refreshList, 5000);
   }
 

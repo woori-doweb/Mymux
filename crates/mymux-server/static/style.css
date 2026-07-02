@@ -95,8 +95,36 @@ body {
 #audit-list li { font-size: 11px; color: var(--muted); padding: 3px 0; font-family: monospace; }
 .hidden { display: none; }
 
-#term-area { flex: 1; padding: 8px; min-width: 0; position: relative; }
-#terminal { width: 100%; height: 100%; }
+#term-area { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
+
+/* ── Tabs ── */
+#tab-bar { display: flex; align-items: stretch; gap: 4px; padding: 6px 6px 0; background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tab-chip { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; background: #12161f; cursor: pointer; white-space: nowrap; }
+.tab-chip.active { background: var(--bg); border-color: var(--accent); }
+.tab-chip .tab-label { font-size: 13px; }
+.tab-chip .tab-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+.tab-chip .tab-x:hover { color: var(--danger); }
+.tab-add { background: #1a2030; border: 1px solid var(--border); border-radius: 6px; color: var(--fg); cursor: pointer; font-size: 15px; padding: 0 10px; }
+.tab-add:hover { border-color: var(--accent); }
+
+#tab-content { flex: 1; position: relative; min-height: 0; }
+.tab-root { position: absolute; inset: 8px; display: flex; }
+#tab-welcome { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 4px; color: var(--fg); }
+
+/* ── Panes & splits ── */
+.pane, .split { flex: 1 1 0%; min-width: 0; min-height: 0; }
+.pane { position: relative; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.pane.focused { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.pane-term { position: absolute; inset: 4px; }
+.split { display: flex; }
+.split.row { flex-direction: row; }
+.split.col { flex-direction: column; }
+.divider { flex: 0 0 6px; background: var(--border); }
+.split.row > .divider { cursor: col-resize; }
+.split.col > .divider { cursor: row-resize; }
+.divider:hover { background: var(--accent); }
+body.dragging { cursor: grabbing; user-select: none; }
+body.dragging iframe, body.dragging .pane-term { pointer-events: none; }
 
 /* ── Command autocomplete popup ── */
 #ac-popup {
