@@ -5,6 +5,7 @@
   const $ = (s) => document.querySelector(s);
   let term = null, fit = null, ws = null, current = null, me = null;
   let commands = [], cmdEditingId = null, cmdFilter = '';
+  let acItems = [], acIndex = -1, acNavigated = false, lineBuf = '', acDismissed = false;
 
   // fetch wrapper: cookies ride along automatically (same origin); 401 -> login.
   async function api(path, opts) {
@@ -19,7 +20,8 @@
     term.loadAddon(fit);
     term.open($('#terminal'));
     fit.fit();
-    term.onData((d) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'input', data: d })); });
+    term.onData((d) => { sendRaw(d); trackInput(d); });
+    term.attachCustomKeyEventHandler(acKeyHandler);
     window.addEventListener('resize', doFit);
   }
 
@@ -41,6 +43,7 @@
   function attach(id) {
     if (ws) { try { ws.close(); } catch (e) {} ws = null; }
     current = id;
+    lineBuf = ''; acDismissed = false; acHide(false);
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(proto + '://' + location.host + '/ws/terminals/' + id);
     ws.onopen = () => { doFit(); term.focus(); };
@@ -225,6 +228,92 @@
     if (!confirm('삭제할까요? — ' + c.name)) return;
     const r = await api('/api/commands/' + c.id, { method: 'DELETE' });
     if (r.ok) await loadCommands();
+  }
+
+  // ── Command autocomplete (type-ahead over the terminal) ─────────────
+  // Best-effort: we mirror the current input line locally and, when it
+  // prefix-matches a saved command name/text, show a popup. Accepting erases
+  // the typed prefix and inserts the full command (no newline, so it doesn't
+  // auto-run). Heuristic tracking — good at a prompt, not a full line editor.
+  function sendRaw(d) {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'input', data: d }));
+  }
+
+  function trackInput(d) {
+    if (d.charCodeAt(0) === 27) return;             // escape seq (arrows/fn) — ignore
+    for (const ch of d) {
+      const code = ch.charCodeAt(0);
+      if (ch === '\r' || ch === '\n' || code === 3) { lineBuf = ''; acDismissed = false; acHide(false); }
+      else if (code === 127 || code === 8) { lineBuf = lineBuf.slice(0, -1); }
+      else if (code >= 32) { lineBuf += ch; }
+    }
+    if (!acDismissed) acRefresh();
+  }
+
+  function acRefresh() {
+    const q = lineBuf.trim().toLowerCase();
+    if (!q) { acHide(false); return; }
+    acItems = commands.filter((c) =>
+      c.name.toLowerCase().startsWith(q) || c.command.toLowerCase().startsWith(q)
+    ).slice(0, 8);
+    if (!acItems.length) { acHide(false); return; }
+    acIndex = 0; acNavigated = false;
+    renderAc();
+    $('#ac-popup').classList.remove('hidden');
+  }
+
+  function renderAc() {
+    const ul = $('#ac-list');
+    ul.innerHTML = '';
+    acItems.forEach((c, i) => {
+      const li = document.createElement('li');
+      if (i === acIndex) li.className = 'sel';
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = c.name;
+      const t = document.createElement('span'); t.className = 'c'; t.textContent = c.command;
+      li.appendChild(n); li.appendChild(t);
+      // mousedown (not click) so the terminal doesn't lose focus first.
+      li.addEventListener('mousedown', (e) => { e.preventDefault(); acIndex = i; acAccept(); });
+      ul.appendChild(li);
+    });
+  }
+
+  function acMove(delta) {
+    if (!acItems.length) return;
+    acIndex = (acIndex + delta + acItems.length) % acItems.length;
+    acNavigated = true;
+    renderAc();
+  }
+
+  function acAccept() {
+    const c = acItems[acIndex];
+    if (!c) { acHide(true); return; }
+    sendRaw('\x7f'.repeat(lineBuf.length) + c.command);   // erase typed prefix, insert full cmd
+    lineBuf = c.command;
+    acHide(true);
+    if (term) term.focus();
+  }
+
+  function acHide(dismiss) {
+    $('#ac-popup').classList.add('hidden');
+    acItems = []; acIndex = -1; acNavigated = false;
+    if (dismiss) acDismissed = true;
+  }
+
+  // Runs before xterm processes a key; return false to swallow it (keeps it off
+  // the PTY). Only intercepts while the popup is visible.
+  function acKeyHandler(e) {
+    if (e.type !== 'keydown') return true;
+    if ($('#ac-popup').classList.contains('hidden')) return true;
+    switch (e.key) {
+      case 'ArrowDown': acMove(1); return false;
+      case 'ArrowUp': acMove(-1); return false;
+      case 'Tab': acAccept(); return false;
+      case 'Enter':
+        if (acNavigated) { acAccept(); return false; }   // a suggestion was picked → accept
+        acHide(false); return true;                       // otherwise let Enter run the line
+      case 'Escape': acHide(true); return false;
+      default: return true;
+    }
   }
 
   async function boot() {

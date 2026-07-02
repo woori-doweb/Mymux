@@ -40,7 +40,10 @@ seeded shortcuts (`cl`,`cc`,`cr`,…), search, plus three insertion paths:
 **Ported to the server** as a per-user feature: table `saved_commands`
 (owner-scoped), `/api/commands` CRUD (auth-gated), a sidebar panel, and
 insertion into the active WebSocket terminal — **row click = paste (no newline,
-safe default)**, **▶ Run = execute (with Enter)**. Autocomplete is a follow-up.
+safe default)**, **▶ Run = execute (with Enter)**. **Autocomplete is also done**
+(this change): typing at the terminal shows a prefix-matched popup (↑↓ navigate,
+Tab/Enter accept, Esc dismiss); accepting erases the typed prefix and inserts the
+full command. Tracking is a best-effort local mirror of the input line.
 
 ## Full gap table
 
@@ -48,7 +51,7 @@ safe default)**, **▶ Run = execute (with Enter)**. Autocomplete is a follow-up
 |---|---|---|---|---|
 | Terminal tabs/splits (분화) | index 18-19,83 | flat list | frontend-only | **pending (P1)** |
 | Saved commands + insert | commands.rs, index 67-78 | — | DB+REST+UI | **done (this change)** |
-| Command autocomplete popup | index 217 | — | frontend + commands API | pending (P1 follow-up) |
+| Command autocomplete popup | index 217 | ✓ | frontend + commands API | **done (this change)** |
 | File explorer (drives/favs/search/ops) | index 46-64, explorer.rs | — | needs `workspace_root` sandbox | pending (P2) |
 | File viewer/editor (find/autosave) | index 146-158 | — | needs sandbox | pending (P2) |
 | In-app browser (WebView + Playwright/CDP) | index 86-143, browser.rs | — | **desktop-only** (WebView) | excluded |
@@ -62,7 +65,7 @@ safe default)**, **▶ Run = execute (with Enter)**. Autocomplete is a follow-up
 
 1. Terminal tabs/splits (분화) — highest UX value, backend unchanged.
 2. **Saved commands + insertion — DONE.**
-3. Command autocomplete — on top of (2).
+3. **Command autocomplete — DONE.**
 4. File explorer / viewer — with a `workspace_root` sandbox.
 5. Themes / context menu — polish.
 
