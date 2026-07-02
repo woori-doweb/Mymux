@@ -53,9 +53,13 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool, AppError> {
     Ok(pool)
 }
 
-/// Apply the initial schema (idempotent — uses CREATE TABLE IF NOT EXISTS).
+/// Apply all schema migrations (idempotent — every statement uses
+/// CREATE TABLE/INDEX IF NOT EXISTS, so re-running is a no-op on existing DBs).
 pub async fn migrate(pool: &SqlitePool) -> Result<(), AppError> {
     sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0002_saved_commands.sql"))
         .execute(pool)
         .await?;
     Ok(())

@@ -97,3 +97,63 @@ body {
 
 #term-area { flex: 1; padding: 8px; min-width: 0; }
 #terminal { width: 100%; height: 100%; }
+
+/* ── Saved Commands ── */
+.muted { color: var(--muted); font-size: 12px; }
+#cmd-box { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.side-head { display: flex; align-items: center; justify-content: space-between; }
+button.mini {
+  background: #1a2030; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg); width: 24px; height: 24px; line-height: 1; cursor: pointer; font-size: 15px;
+}
+button.mini:hover { border-color: var(--accent); }
+#cmd-search {
+  width: 100%; margin: 6px 0 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--fg); padding: 6px 8px; font-size: 13px;
+}
+#cmd-search:focus { outline: none; border-color: var(--accent); }
+#cmd-list { list-style: none; margin: 0; padding: 0; }
+#cmd-list li {
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 8px; margin-bottom: 6px;
+  cursor: pointer; position: relative;
+}
+#cmd-list li:hover { background: #1a2030; }
+#cmd-list li.fav { border-left: 2px solid var(--accent); }
+#cmd-list .cmd-name { font-size: 13px; font-weight: 600; display: block; }
+#cmd-list .cmd-text {
+  font-family: monospace; font-size: 11px; color: var(--muted);
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
+}
+#cmd-list .cmd-actions { display: flex; gap: 4px; margin-top: 6px; }
+#cmd-list .cmd-actions button {
+  background: #1a2030; border: 1px solid var(--border); border-radius: 5px; color: var(--fg);
+  padding: 2px 7px; font-size: 11px; cursor: pointer;
+}
+#cmd-list .cmd-actions button:hover { border-color: var(--accent); }
+#cmd-list .cmd-actions .run { color: var(--accent); }
+#cmd-list .cmd-actions .del:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ── Modal ── */
+.overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 22px; width: min(380px, calc(100% - 32px));
+  display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.modal-card h2 { margin: 0 0 4px; font-size: 16px; }
+.modal-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.modal-card input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--fg); padding: 9px 11px; font-size: 14px;
+}
+.modal-card input:focus { outline: none; border-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.modal-actions button {
+  background: var(--accent); border: none; border-radius: 8px; color: #fff;
+  padding: 9px 16px; font-weight: 600; cursor: pointer;
+}
+.modal-actions button.ghost { background: #1a2030; border: 1px solid var(--border); color: var(--fg); }

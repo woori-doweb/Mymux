@@ -4,6 +4,7 @@
   'use strict';
   const $ = (s) => document.querySelector(s);
   let term = null, fit = null, ws = null, current = null, me = null;
+  let commands = [], cmdEditingId = null, cmdFilter = '';
 
   // fetch wrapper: cookies ride along automatically (same origin); 401 -> login.
   async function api(path, opts) {
@@ -109,6 +110,123 @@
     });
   }
 
+  // ── Saved Commands ──────────────────────────────────────────────────
+  // Insert into the active terminal. execute=true appends Enter (runs it);
+  // execute=false pastes without a newline so the user can review first.
+  function sendToActive(text, execute) {
+    if (!current || !ws || ws.readyState !== 1) {
+      alert('활성 터미널이 없습니다. 먼저 터미널을 열거나 선택하세요.');
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'input', data: execute ? text + '\r' : text }));
+    if (term) term.focus();
+  }
+
+  async function loadCommands() {
+    try {
+      const r = await api('/api/commands');
+      commands = await r.json();
+    } catch (e) { return; }
+    renderCommands();
+  }
+
+  function mkCmdBtn(label, cls, fn) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = label;
+    b.onclick = (ev) => { ev.stopPropagation(); fn(); };
+    return b;
+  }
+
+  function renderCommands() {
+    const ul = $('#cmd-list');
+    ul.innerHTML = '';
+    const f = cmdFilter.trim().toLowerCase();
+    const items = commands.filter((c) => !f
+      || c.name.toLowerCase().includes(f)
+      || c.command.toLowerCase().includes(f)
+      || (c.description || '').toLowerCase().includes(f));
+    $('#cmd-empty').classList.toggle('hidden', commands.length !== 0);
+    items.forEach((c) => {
+      const li = document.createElement('li');
+      if (c.favorite) li.className = 'fav';
+      if (c.description) li.title = c.description;
+      const name = document.createElement('span');
+      name.className = 'cmd-name';
+      name.textContent = (c.favorite ? '★ ' : '') + c.name;
+      const txt = document.createElement('span');
+      txt.className = 'cmd-text';
+      txt.textContent = c.command;                     // textContent → no XSS
+      li.appendChild(name);
+      li.appendChild(txt);
+      // Row click pastes the command (no newline) into the active terminal.
+      li.onclick = () => sendToActive(c.command, false);
+      const actions = document.createElement('div');
+      actions.className = 'cmd-actions';
+      actions.appendChild(mkCmdBtn('▶ Run', 'run', () => sendToActive(c.command, true)));
+      actions.appendChild(mkCmdBtn(c.favorite ? '★' : '☆', 'fav-btn', () => toggleFav(c)));
+      actions.appendChild(mkCmdBtn('✎', 'edit', () => openCmdModal(c)));
+      actions.appendChild(mkCmdBtn('×', 'del', () => deleteCmd(c)));
+      li.appendChild(actions);
+      ul.appendChild(li);
+    });
+  }
+
+  function openCmdModal(cmd) {
+    cmdEditingId = cmd ? cmd.id : null;
+    $('#cmd-modal-title').textContent = cmd ? '명령 편집' : '명령 추가';
+    $('#cmd-name').value = cmd ? cmd.name : '';
+    $('#cmd-command').value = cmd ? cmd.command : '';
+    $('#cmd-desc').value = cmd ? (cmd.description || '') : '';
+    $('#cmd-modal-error').textContent = '';
+    $('#cmd-modal').classList.remove('hidden');
+    $('#cmd-name').focus();
+  }
+
+  function closeCmdModal() {
+    $('#cmd-modal').classList.add('hidden');
+    cmdEditingId = null;
+  }
+
+  async function saveCmd(e) {
+    e.preventDefault();
+    const body = {
+      name: $('#cmd-name').value.trim(),
+      command: $('#cmd-command').value.trim(),
+      description: $('#cmd-desc').value.trim(),
+    };
+    if (!body.name || !body.command) {
+      $('#cmd-modal-error').textContent = '이름과 명령은 필수입니다.';
+      return;
+    }
+    if (cmdEditingId) {
+      const existing = commands.find((c) => c.id === cmdEditingId);
+      body.favorite = existing ? existing.favorite : false;   // edit form doesn't carry it
+    }
+    const path = cmdEditingId ? '/api/commands/' + cmdEditingId : '/api/commands';
+    const r = await api(path, { method: cmdEditingId ? 'PUT' : 'POST', body: JSON.stringify(body) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      $('#cmd-modal-error').textContent = j.error || '저장 실패';
+      return;
+    }
+    closeCmdModal();
+    await loadCommands();
+  }
+
+  async function toggleFav(c) {
+    const body = { name: c.name, command: c.command, description: c.description || '', favorite: !c.favorite };
+    const r = await api('/api/commands/' + c.id, { method: 'PUT', body: JSON.stringify(body) });
+    if (r.ok) await loadCommands();
+  }
+
+  async function deleteCmd(c) {
+    if (!confirm('삭제할까요? — ' + c.name)) return;
+    const r = await api('/api/commands/' + c.id, { method: 'DELETE' });
+    if (r.ok) await loadCommands();
+  }
+
   async function boot() {
     const r = await api('/api/auth/me');
     me = await r.json();
@@ -116,9 +234,15 @@
     initTerm();
     await refreshList();
     await loadAudit();
+    await loadCommands();
     $('#btn-new').onclick = newTerminal;
     $('#btn-close').onclick = closeCurrent;
     $('#btn-logout').onclick = logout;
+    $('#btn-cmd-add').onclick = () => openCmdModal(null);
+    $('#cmd-search').oninput = (e) => { cmdFilter = e.target.value; renderCommands(); };
+    $('#cmd-cancel').onclick = closeCmdModal;
+    $('#cmd-form').onsubmit = saveCmd;
+    $('#cmd-modal').onclick = (e) => { if (e.target.id === 'cmd-modal') closeCmdModal(); };
     setInterval(refreshList, 5000);
   }
 

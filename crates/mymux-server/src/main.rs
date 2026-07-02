@@ -6,6 +6,7 @@
 
 mod audit;
 mod auth;
+mod commands;
 mod config;
 mod db;
 mod error;

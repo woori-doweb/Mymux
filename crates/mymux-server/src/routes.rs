@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, HeaderValue, header};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -14,6 +14,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::audit;
 use crate::auth::{self, AuthUser};
+use crate::commands;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::util;
@@ -28,6 +29,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/terminals", get(list_terminals).post(create_terminal))
         .route("/api/terminals/:id", delete(close_terminal))
+        .route(
+            "/api/commands",
+            get(commands::list_commands).post(commands::create_command),
+        )
+        .route(
+            "/api/commands/:id",
+            put(commands::update_command).delete(commands::delete_command),
+        )
         .route("/api/audit", get(audit::list_audit))
         .route("/ws/terminals/:id", get(ws_terminal::ws_terminal))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))

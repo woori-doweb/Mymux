@@ -20,6 +20,17 @@
     <aside id="sidebar">
       <h2>Terminals</h2>
       <ul id="term-list"></ul>
+
+      <div id="cmd-box">
+        <div class="side-head">
+          <h2>Saved Commands</h2>
+          <button id="btn-cmd-add" class="mini" title="명령 추가">+</button>
+        </div>
+        <input type="text" id="cmd-search" placeholder="명령어 검색…" autocomplete="off" spellcheck="false" />
+        <ul id="cmd-list"></ul>
+        <p id="cmd-empty" class="muted hidden">저장된 명령이 없습니다. <strong>+</strong> 로 추가하세요.</p>
+      </div>
+
       <div id="audit-box" class="hidden">
         <h2>Recent audit</h2>
         <ul id="audit-list"></ul>
@@ -27,6 +38,21 @@
     </aside>
     <section id="term-area"><div id="terminal"></div></section>
   </main>
+
+  <div id="cmd-modal" class="overlay hidden">
+    <form id="cmd-form" class="modal-card">
+      <h2 id="cmd-modal-title">명령 추가</h2>
+      <label>이름<input type="text" id="cmd-name" required maxlength="100" placeholder="예: Git Status" autocomplete="off" spellcheck="false" /></label>
+      <label>명령<input type="text" id="cmd-command" required maxlength="4000" placeholder="예: git status" autocomplete="off" spellcheck="false" /></label>
+      <label>설명<input type="text" id="cmd-desc" maxlength="500" placeholder="설명 (선택)" autocomplete="off" spellcheck="false" /></label>
+      <p id="cmd-modal-error" class="error"></p>
+      <div class="modal-actions">
+        <button type="button" id="cmd-cancel" class="ghost">취소</button>
+        <button type="submit">저장</button>
+      </div>
+    </form>
+  </div>
+
   <script src="vendor/xterm.min.js"></script>
   <script src="vendor/addon-fit.min.js"></script>
   <script src="app.js"></script>
