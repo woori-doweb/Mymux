@@ -264,7 +264,7 @@ async function setupListeners() {
 
   const shellSel = document.getElementById("default-shell");
   if (shellSel) {
-    try { shellSel.value = localStorage.getItem("mymux.defaultShell") || "bash"; } catch {}
+    try { shellSel.value = localStorage.getItem("mymux.defaultShell") || "powershell"; } catch {}
     shellSel.addEventListener("change", () => {
       try { localStorage.setItem("mymux.defaultShell", shellSel.value); } catch {}
       toast("Default shell: " + shellSel.options[shellSel.selectedIndex].text + " (applies to new terminals)");
@@ -1802,10 +1802,11 @@ function flashPaneNotify(id) {
 }
 
 // Resolve the user's default-shell preference into an identifier for the
-// backend (undefined → Git Bash default; "powershell" → pwsh -NoLogo; "cmd.exe").
+// backend. Unset preference defaults to PowerShell ("powershell" → pwsh, or
+// built-in powershell.exe when pwsh is absent); "bash" → undefined → Git Bash.
 function getDefaultShellId() {
-  let pref = "bash";
-  try { pref = localStorage.getItem("mymux.defaultShell") || "bash"; } catch {}
+  let pref = "powershell";
+  try { pref = localStorage.getItem("mymux.defaultShell") || "powershell"; } catch {}
   if (pref === "powershell") return "powershell";
   if (pref === "cmd") return "cmd.exe";
   return undefined;

@@ -10,6 +10,22 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ## v0.1.14 — 2026-07-03
 
+### Changed / 변경
+- **PowerShell is the initial default shell / 초기 기본 쉘이 PowerShell로 변경.**
+  New installs open PowerShell for new terminals (pwsh if installed, otherwise
+  the built-in Windows PowerShell). Git Bash and CMD remain one click away in
+  the toolbar dropdown, and an explicit choice you already made is kept.
+
+  새로 설치하면 새 터미널이 PowerShell로 열립니다(pwsh가 있으면 pwsh, 없으면
+  Windows 내장 PowerShell). Git Bash/CMD는 툴바 드롭다운에서 바로 선택할 수
+  있고, 이미 직접 고른 쉘 설정은 그대로 유지됩니다.
+- **Publisher is now "ChoiGyber" / 게시자 표기를 "ChoiGyber"로 변경.**
+  The installer and the Windows installed-apps list showed "mycli" as the
+  publisher; both now show "ChoiGyber".
+
+  설치기와 Windows 앱 목록의 게시자가 "mycli"로 표시되던 것을 "ChoiGyber"로
+  바꿨습니다.
+
 ### Added / 새 기능
 - **App version shown in the session panel / 세션 패널에 앱 버전 표시.**
   The GitHub button at the bottom right now shows the running version

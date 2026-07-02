@@ -26,6 +26,7 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "publisher": "ChoiGyber",
     "windows": {
       "nsis": {
         "installerHooks": "./installer-hooks.nsh"
