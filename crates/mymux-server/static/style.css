@@ -93,7 +93,7 @@ body {
 #term-list li:hover { background: #1a2030; }
 #term-list li.active { background: #16314a; color: #fff; }
 #audit-list li { font-size: 11px; color: var(--muted); padding: 3px 0; font-family: monospace; }
-.hidden { display: none; }
+.hidden { display: none !important; }   /* must beat .overlay{display:flex} / #tab-welcome{display:flex} */
 
 #term-area { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
 
