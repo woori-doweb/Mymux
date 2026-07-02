@@ -54,7 +54,19 @@
     term.open(host);
 
     const pane = { id: uid('p'), tabId: null, termId, term, fit, ws: null, el, host, node: null };
-    el.addEventListener('mousedown', () => { if (focused !== pane) focusPane(pane); });
+    // Focus on click; middle-click pastes the system clipboard (PuTTY/X11 style).
+    el.addEventListener('mousedown', (e) => {
+      focusPane(pane);
+      if (e.button === 1) { e.preventDefault(); pasteInto(pane); }
+    });
+    // focusin is authoritative: whatever gains DOM focus in this pane owns focus,
+    // so a single click can't bounce back to the previously-focused pane.
+    el.addEventListener('focusin', () => focusPane(pane));
+    // Drag-select auto-copy (PuTTY-style): finishing a selection copies it.
+    el.addEventListener('mouseup', () => {
+      const sel = pane.term.getSelection();
+      if (sel && navigator.clipboard) navigator.clipboard.writeText(sel).catch(() => {});
+    });
     term.onData((d) => { if (focused !== pane) focusPane(pane); sendRaw(d); trackInput(d); });
     term.attachCustomKeyEventHandler(keyHandler);
 
@@ -95,13 +107,26 @@
   }
 
   function focusPane(pane) {
-    if (!pane) return;
+    if (!pane || focused === pane) return;   // idempotent — re-entrant focusin must not bounce/reset
     focused = pane;
     document.querySelectorAll('.pane.focused').forEach((e) => e.classList.remove('focused'));
     pane.el.classList.add('focused');
     lineBuf = ''; acDismissed = false; acHide(false);   // reset autocomplete on focus change
     const t = tabById(pane.tabId); if (t) t.focusedPaneId = pane.id;
     try { pane.term.focus(); } catch (e) {}
+  }
+
+  // Read the system clipboard and paste into a pane via xterm's paste() — which
+  // wraps it in bracketed-paste when the app enabled it, so multi-line pastes
+  // don't run line by line.
+  function pasteInto(pane) {
+    const p = pane || focused;
+    if (!p) return;
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      alert('이 브라우저는 클립보드 읽기를 지원하지 않습니다. Ctrl+V 를 사용하세요.');
+      return;
+    }
+    navigator.clipboard.readText().then((t) => { if (t) { p.term.paste(t); p.term.focus(); } }).catch(() => {});
   }
 
   async function createServerTerminal() {
@@ -565,6 +590,7 @@
     $('#btn-split-h').onclick = () => splitFocused('row');
     $('#btn-split-v').onclick = () => splitFocused('col');
     $('#btn-close').onclick = () => { if (focused) closePane(focused); };
+    $('#btn-paste').onclick = () => pasteInto(focused);
     $('#btn-logout').onclick = logout;
     $('#btn-cmd-add').onclick = () => openCmdModal(null);
     $('#cmd-search').oninput = (e) => { cmdFilter = e.target.value; renderCommands(); };
