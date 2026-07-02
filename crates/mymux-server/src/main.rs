@@ -58,6 +58,32 @@ enum UserCommands {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Change a user's password (prompts) and revoke their active sessions.
+    SetPassword {
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Disable a user (blocks login) and revoke their active sessions.
+    Disable {
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Re-enable a disabled user.
+    Enable {
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// List users (username, role, status).
+    List {
+        #[arg(long)]
+        config: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -75,14 +101,23 @@ async fn main() {
 async fn run() -> Result<(), String> {
     match Cli::parse().command {
         Commands::Serve { config } => serve(&config).await,
-        Commands::User {
-            command:
-                UserCommands::Create {
-                    username,
-                    role,
-                    config,
-                },
-        } => create_user(&config, &username, &role).await,
+        Commands::User { command } => match command {
+            UserCommands::Create {
+                username,
+                role,
+                config,
+            } => create_user(&config, &username, &role).await,
+            UserCommands::SetPassword { username, config } => {
+                set_password(&config, &username).await
+            }
+            UserCommands::Disable { username, config } => {
+                set_disabled(&config, &username, true).await
+            }
+            UserCommands::Enable { username, config } => {
+                set_disabled(&config, &username, false).await
+            }
+            UserCommands::List { config } => list_users(&config).await,
+        },
     }
 }
 
@@ -183,5 +218,125 @@ async fn create_user(config_path: &Path, username: &str, role: &str) -> Result<(
     .map_err(|e| e.to_string())?;
 
     println!("created user '{username}' with role '{}'", role.as_str());
+    Ok(())
+}
+
+/// Open the DB from a config path and run migrations (shared by the user admin
+/// subcommands).
+async fn open_db(config_path: &Path) -> Result<sqlx::SqlitePool, String> {
+    let config = Config::load(config_path)?;
+    let db = db::connect(&config.server.database_url)
+        .await
+        .map_err(|e| e.to_string())?;
+    db::migrate(&db).await.map_err(|e| e.to_string())?;
+    Ok(db)
+}
+
+/// Prompt for a new password twice and validate it (min 8 chars, must match).
+fn prompt_new_password(username: &str) -> Result<String, String> {
+    let pw = rpassword::prompt_password(format!("New password for {username}: "))
+        .map_err(|e| e.to_string())?;
+    let pw2 = rpassword::prompt_password("Confirm password: ").map_err(|e| e.to_string())?;
+    if pw != pw2 {
+        return Err("passwords do not match".into());
+    }
+    if pw.len() < 8 {
+        return Err("password must be at least 8 characters".into());
+    }
+    Ok(pw)
+}
+
+async fn set_password(config_path: &Path, username: &str) -> Result<(), String> {
+    let db = open_db(config_path).await?;
+    let uid: Option<String> = sqlx::query_scalar("SELECT id FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(&db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let uid = uid.ok_or_else(|| format!("user '{username}' not found"))?;
+
+    let pw = prompt_new_password(username)?;
+    let hash = auth::hash_password(&pw).map_err(|e| e.to_string())?;
+    let now = util::now_rfc3339();
+    sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+        .bind(&hash)
+        .bind(&now)
+        .bind(&uid)
+        .execute(&db)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Revoke live sessions so the old password can't keep a session alive.
+    let revoked =
+        sqlx::query("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
+            .bind(&now)
+            .bind(&uid)
+            .execute(&db)
+            .await
+            .map_err(|e| e.to_string())?;
+    println!(
+        "password updated for '{username}'; revoked {} active session(s)",
+        revoked.rows_affected()
+    );
+    Ok(())
+}
+
+async fn set_disabled(config_path: &Path, username: &str, disabled: bool) -> Result<(), String> {
+    let db = open_db(config_path).await?;
+    let now = util::now_rfc3339();
+    let res = sqlx::query("UPDATE users SET disabled = ?, updated_at = ? WHERE username = ?")
+        .bind(disabled as i64)
+        .bind(&now)
+        .bind(username)
+        .execute(&db)
+        .await
+        .map_err(|e| e.to_string())?;
+    if res.rows_affected() == 0 {
+        return Err(format!("user '{username}' not found"));
+    }
+    if disabled {
+        // Kick any live sessions of the now-disabled user.
+        let revoked = sqlx::query(
+            "UPDATE sessions SET revoked_at = ? \
+             WHERE user_id = (SELECT id FROM users WHERE username = ?) AND revoked_at IS NULL",
+        )
+        .bind(&now)
+        .bind(username)
+        .execute(&db)
+        .await
+        .map_err(|e| e.to_string())?;
+        println!(
+            "disabled '{username}'; revoked {} active session(s)",
+            revoked.rows_affected()
+        );
+    } else {
+        println!("enabled '{username}'");
+    }
+    Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct UserListRow {
+    username: String,
+    role: String,
+    disabled: i64,
+    created_at: String,
+}
+
+async fn list_users(config_path: &Path) -> Result<(), String> {
+    let db = open_db(config_path).await?;
+    let rows = sqlx::query_as::<_, UserListRow>(
+        "SELECT username, role, disabled, created_at FROM users ORDER BY username COLLATE NOCASE",
+    )
+    .fetch_all(&db)
+    .await
+    .map_err(|e| e.to_string())?;
+    println!("{:<20} {:<10} {:<9} CREATED", "USERNAME", "ROLE", "STATUS");
+    for r in rows {
+        let status = if r.disabled != 0 { "disabled" } else { "active" };
+        println!(
+            "{:<20} {:<10} {:<9} {}",
+            r.username, r.role, status, r.created_at
+        );
+    }
     Ok(())
 }
