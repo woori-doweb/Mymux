@@ -24,7 +24,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 32px;
-  width: 320px;
+  width: min(320px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -36,9 +36,10 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--fg);
-  padding: 10px 12px;
-  font-size: 14px;
+  padding: 12px;
+  font-size: 16px;   /* >=16px so iOS doesn't zoom on focus */
 }
+.login-page { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 .login-card input:focus { outline: none; border-color: var(--accent); }
 .login-card button {
   background: var(--accent);
@@ -125,6 +126,44 @@ body {
 .divider:hover { background: var(--accent); }
 body.dragging { cursor: grabbing; user-select: none; }
 body.dragging iframe, body.dragging .pane-term { pointer-events: none; }
+
+/* ── Mobile (P0/P1) — desktop layout above 768px is unchanged ── */
+.console-body { height: 100dvh; height: var(--app-h, 100dvh); display: flex; flex-direction: column; overflow: hidden; }
+.console-body #topbar { flex: 0 0 auto; }
+.console-body #layout { flex: 1 1 auto; height: auto; min-height: 0; }
+
+#btn-menu { display: none; background: #1a2030; border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 6px 10px; cursor: pointer; }
+#drawer-backdrop { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 39; }
+#keybar { display: none; }
+#topbar button { touch-action: manipulation; }
+
+@media (max-width: 768px) {
+  #topbar { gap: 8px; padding: 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); overflow-x: auto; }
+  #btn-menu { display: inline-block; }
+  #whoami, #btn-split-h, #btn-split-v { display: none; }
+
+  #sidebar {
+    position: fixed; top: 0; left: 0; z-index: 40; height: 100%; width: min(300px, 85vw);
+    transform: translateX(-100%); transition: transform .2s ease; box-shadow: 2px 0 16px rgba(0, 0, 0, .5);
+  }
+  #sidebar.open { transform: translateX(0); }
+  #drawer-backdrop.open { display: block; }
+
+  #keybar {
+    display: flex; gap: 6px; overflow-x: auto; flex: 0 0 auto;
+    padding: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom));
+    background: var(--panel); border-top: 1px solid var(--border);
+  }
+  #keybar button {
+    flex: 0 0 auto; min-width: 42px; min-height: 42px;
+    background: #1a2030; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--fg); font-size: 14px; cursor: pointer;
+  }
+  #keybar button:active { background: var(--accent); color: #fff; }
+  #kb-ctrl.active { background: var(--accent); color: #fff; }
+
+  .tab-root { inset: 4px; }
+}
 
 /* ── Command autocomplete popup ── */
 #ac-popup {

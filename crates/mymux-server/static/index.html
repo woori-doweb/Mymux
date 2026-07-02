@@ -2,13 +2,14 @@
 <html lang="ko" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0" />
   <title>Mymux Console</title>
   <link rel="stylesheet" href="vendor/xterm.min.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
+<body class="console-body">
   <header id="topbar">
+    <button id="btn-menu" title="메뉴" aria-label="menu">☰</button>
     <span class="brand">Mymux Console</span>
     <span id="whoami"></span>
     <span class="spacer"></span>
@@ -47,9 +48,25 @@
           <p class="muted">분할: 상단 <strong>⬌ / ⬍</strong> (또는 Ctrl+Shift+D / E) · 페인 닫기 Ctrl+Shift+W</p>
         </div>
       </div>
+      <div id="keybar" aria-hidden="true">
+        <button data-k="esc">Esc</button>
+        <button data-k="tab">Tab</button>
+        <button data-k="ctrl" id="kb-ctrl">Ctrl</button>
+        <button data-k="c-c">^C</button>
+        <button data-k="up">↑</button>
+        <button data-k="down">↓</button>
+        <button data-k="left">←</button>
+        <button data-k="right">→</button>
+        <button data-k="lit:|">|</button>
+        <button data-k="lit:/">/</button>
+        <button data-k="lit:~">~</button>
+        <button data-k="lit:-">-</button>
+      </div>
       <div id="ac-popup" class="hidden"><ul id="ac-list"></ul></div>
     </section>
   </main>
+
+  <div id="drawer-backdrop"></div>
 
   <div id="cmd-modal" class="overlay hidden">
     <form id="cmd-form" class="modal-card">

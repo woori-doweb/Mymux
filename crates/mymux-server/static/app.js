@@ -19,6 +19,8 @@
   // Saved commands + autocomplete state
   let commands = [], cmdEditingId = null, cmdFilter = '';
   let acItems = [], acIndex = -1, acNavigated = false, lineBuf = '', acDismissed = false;
+  let ctrlArmed = false;
+  const KEY_SEQ = { esc: '\x1b', tab: '\t', 'c-c': '\x03', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' };
 
   // fetch wrapper: cookies ride along automatically (same origin); 401 -> login.
   async function api(path, opts) {
@@ -67,7 +69,11 @@
       const sel = pane.term.getSelection();
       if (sel && navigator.clipboard) navigator.clipboard.writeText(sel).catch(() => {});
     });
-    term.onData((d) => { if (focused !== pane) focusPane(pane); sendRaw(d); trackInput(d); });
+    term.onData((d) => {
+      if (focused !== pane) focusPane(pane);
+      if (ctrlArmed && d.length === 1) { d = applyCtrl(d); ctrlArmed = false; updateCtrlBtn(); }
+      sendRaw(d); trackInput(d);
+    });
     term.attachCustomKeyEventHandler(keyHandler);
 
     const ws = new WebSocket(wsUrl(termId));
@@ -324,6 +330,7 @@
   // Sidebar click: focus the pane already showing this terminal, else open it
   // in a new tab (reattach — e.g. after a page reload, or an admin viewing it).
   function openTerm(termId) {
+    closeDrawer();                 // on mobile, close the drawer once a terminal is chosen
     const p = panes.find((x) => x.termId === termId);
     if (p) { activateTab(p.tabId); focusPane(p); return; }
     newTab(termId);
@@ -376,6 +383,7 @@
       return;
     }
     w.send(JSON.stringify({ type: 'input', data: execute ? text + '\r' : text }));
+    closeDrawer();                 // on mobile, reveal the terminal after choosing a command
     focused.term.focus();
   }
 
@@ -577,6 +585,26 @@
     }
   }
 
+  // ── Mobile (drawer, keyboard-aware height, accessory key bar) ───────
+  function setAppHeight() {
+    const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    document.documentElement.style.setProperty('--app-h', h + 'px');
+    const t = activeTab(); if (t) forEachPane(t.root, fitPane);
+  }
+  function openDrawer() { $('#sidebar').classList.add('open'); $('#drawer-backdrop').classList.add('open'); }
+  function closeDrawer() { $('#sidebar').classList.remove('open'); $('#drawer-backdrop').classList.remove('open'); }
+  function updateCtrlBtn() { const b = $('#kb-ctrl'); if (b) b.classList.toggle('active', ctrlArmed); }
+  function applyCtrl(d) {
+    const u = d.toUpperCase().charCodeAt(0);
+    return (u >= 64 && u <= 95) ? String.fromCharCode(u & 31) : d;   // Ctrl-@ .. Ctrl-_
+  }
+  function keybarKey(k) {
+    if (k === 'ctrl') { ctrlArmed = !ctrlArmed; updateCtrlBtn(); return; }
+    if (k.indexOf('lit:') === 0) { sendRaw(k.slice(4)); return; }
+    const seq = KEY_SEQ[k];
+    if (seq !== undefined) sendRaw(seq);
+  }
+
   async function boot() {
     const r = await api('/api/auth/me');
     me = await r.json();
@@ -597,7 +625,19 @@
     $('#cmd-cancel').onclick = closeCmdModal;
     $('#cmd-form').onsubmit = saveCmd;
     $('#cmd-modal').onclick = (e) => { if (e.target.id === 'cmd-modal') closeCmdModal(); };
-    window.addEventListener('resize', () => { const t = activeTab(); if (t) forEachPane(t.root, fitPane); });
+    $('#btn-menu').onclick = openDrawer;
+    $('#drawer-backdrop').onclick = closeDrawer;
+    document.querySelectorAll('#keybar button').forEach((b) => {
+      // pointerdown + preventDefault so tapping a key doesn't blur the terminal
+      // (which would dismiss the soft keyboard).
+      b.addEventListener('pointerdown', (e) => { e.preventDefault(); keybarKey(b.dataset.k); });
+    });
+    setAppHeight();
+    window.addEventListener('resize', setAppHeight);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', setAppHeight);
+      window.visualViewport.addEventListener('scroll', setAppHeight);
+    }
     setInterval(refreshList, 5000);
   }
 
