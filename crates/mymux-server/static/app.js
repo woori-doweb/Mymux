@@ -50,7 +50,15 @@
     host.className = 'pane-term';
     el.appendChild(host);
 
-    const term = new Terminal({ cursorBlink: true, fontFamily: 'monospace', fontSize: 14, theme: { background: '#0b0e14' } });
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: '"D2Coding", "JetBrains Mono", "Cascadia Mono", Consolas, monospace',
+      fontSize: 14,
+      letterSpacing: 0,     // CJK 2:1 폭 비율 유지 — 자간 추가 시 정렬 붕괴
+      lineHeight: 1.2,
+      customGlyphs: true,   // 박스 드로잉 문자가 lineHeight 조정에도 끊기지 않도록
+      theme: { background: '#0b0e14' },
+    });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(host);
@@ -354,6 +362,7 @@
   }
 
   async function logout() {
+    if (!confirm('로그아웃할까요?')) return;
     try { await api('/api/auth/logout', { method: 'POST' }); } catch (e) {}
     location.href = '/login.html';
   }

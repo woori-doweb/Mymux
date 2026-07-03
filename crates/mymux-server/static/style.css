@@ -140,7 +140,11 @@ body.dragging iframe, body.dragging .pane-term { pointer-events: none; }
 @media (max-width: 768px) {
   #topbar { gap: 8px; padding: 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); overflow-x: auto; }
   #btn-menu { display: inline-block; }
-  #whoami, #btn-split-h, #btn-split-v { display: none; }
+  /* split-h/split-v stay visible — #topbar already scrolls (overflow-x: auto)
+     and hiding them shifted every later button (Close/Paste/Logout) two slots
+     left, so a tap aimed at the old "Close" position landed on "Logout". */
+  #whoami { display: none; }
+  #topbar button { flex: 0 0 auto; }
 
   #sidebar {
     position: fixed; top: 0; left: 0; z-index: 40; height: 100%; width: min(300px, 85vw);
