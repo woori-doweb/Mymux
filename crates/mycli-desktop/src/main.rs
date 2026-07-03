@@ -72,7 +72,7 @@ fn main() {
             update::update_install,
             tools::tool_installed,
         ])
-        .setup(|app| {
+        .setup(|_app| {
             // WebView2 fires no DOM focus / hasFocus / visibility / focus=true
             // event when the window is re-activated via Alt-Tab, so the frontend
             // cannot tell it regained focus and the terminal cursor stays hollow.
@@ -81,6 +81,7 @@ fn main() {
             #[cfg(windows)]
             {
                 use tauri::{Emitter, Manager};
+                let app = _app;
                 let app_handle = app.handle().clone();
                 if let Some(win) = app.get_webview_window("main") {
                     if let Ok(h) = win.hwnd() {

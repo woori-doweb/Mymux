@@ -69,7 +69,7 @@ Built with **Tauri 2 + Rust** (WebView2 frontend). Made by **ChoiGyber**.
 
 ## Build / 빌드
 
-### Prerequisites / 사전 준비
+### Prerequisites (Windows) / 사전 준비 (Windows)
 - **Rust** (stable, MSVC toolchain) and **Cargo**.
 - **WebView2 Runtime** (preinstalled on Windows 11).
 - **NASM** assembler on `PATH` — required to compile `aws-lc-sys` (the SSH crypto
@@ -94,6 +94,32 @@ The binary is produced at `target\release\Mymux.exe`.
 >
 > 프론트엔드는 `crates/mycli-desktop/frontend`(정적 HTML/CSS/JS)에 있고 빌드 시
 > 바이너리에 임베드됩니다(별도 번들러 단계 없음).
+
+### Build on macOS / macOS에서 빌드
+Windows-only pieces (ConPTY sideload, NSIS hooks) live in
+`crates/mycli-desktop/tauri.windows.conf.json`, so a Mac build needs no config
+changes. Windows 전용 요소는 플랫폼별 설정 파일로 분리되어 있어 맥에서는 별도
+설정 없이 빌드됩니다.
+
+```bash
+# Prerequisites (first time only) / 사전 준비 (최초 1회)
+xcode-select --install        # C compiler / linker
+brew install cmake            # compiles aws-lc-sys, the SSH crypto backend
+                              # (the macOS counterpart of NASM on Windows)
+
+# Development binary / 개발용 바이너리
+cargo build -p mycli-desktop --release   # → target/release/Mymux
+
+# .app / .dmg bundle (needs tauri-cli; updater artifacts need the signing key)
+cargo install tauri-cli --version "^2"
+cd crates/mycli-desktop
+cargo tauri build --target universal-apple-darwin
+```
+
+> `createUpdaterArtifacts: true` means `cargo tauri build` requires
+> `TAURI_SIGNING_PRIVATE_KEY` (see [`RELEASING.md`](RELEASING.md) §3). For a
+> local unsigned check, use the plain `cargo build` line above.
+> 번들(서명) 없이 확인만 할 때는 위의 `cargo build`만으로 충분합니다.
 
 ### Frontend changes not showing? / 프론트엔드 변경이 안 보일 때
 WebView2 caches the embedded assets. After rebuilding, clear the HTTP cache so the

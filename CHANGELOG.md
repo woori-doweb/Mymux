@@ -8,6 +8,41 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.15 — 2026-07-03
+
+### Fixed / 버그 수정
+- **Korean text no longer breaks intermittently in the terminal / 터미널에서
+  한글이 간헐적으로 깨져 보이던 문제 수정.**
+  Terminal output is read from the PTY in fixed-size chunks, and a Korean
+  character (3 bytes in UTF-8) that straddled a chunk boundary was decoded as
+  the broken-character symbol (`�`). Incomplete byte sequences are now carried
+  over to the next read, so characters always arrive whole.
+
+  터미널 출력을 일정 크기 단위로 읽는 과정에서 한글 한 글자(UTF-8 3바이트)가
+  경계에 걸리면 깨진 문자(`�`)로 표시되던 문제를 수정했습니다. 이제 잘린
+  바이트를 다음 읽기로 이월해 글자가 항상 온전하게 표시됩니다.
+- **Panes stay scrolled to the bottom when splitting/closing/moving panes /
+  패인 분할·닫기·이동 후에도 스크롤이 맨 아래에 유지.**
+  Rearranging a live pane (split, close, drag-retile, move to another tab)
+  made the browser reset its scroll position, so a long session would freeze
+  on older output with the prompt hidden below. The bottom-follow state is now
+  preserved across all pane rearrangements.
+
+  세션이 길게 쌓인 패인을 분할·닫기·드래그 재배치·탭 이동하면 스크롤이 위로
+  튀어 프롬프트가 화면 아래에 숨던 문제를 수정했습니다. 재배치 후에도 맨 아래
+  따라가기 상태가 유지됩니다.
+
+### Added / 새 기능
+- **macOS is now buildable from source / macOS 소스 빌드 지원.**
+  Windows-only pieces (ConPTY sideload, NSIS hooks) moved to a platform-scoped
+  config; on macOS/Linux terminals now launch the user's `$SHELL` as a login
+  shell and the shell picker's Windows ids resolve sensibly. See the README
+  for build steps. (No macOS installer is published yet.)
+
+  Windows 전용 구성 요소를 플랫폼별 설정으로 분리해 macOS에서도 소스 빌드가
+  가능해졌습니다. macOS/Linux에서는 사용자의 `$SHELL`이 로그인 셸로 실행됩니다.
+  빌드 방법은 README 참고. (macOS 설치 파일 배포는 아직 없습니다.)
+
 ## v0.1.14 — 2026-07-03
 
 ### Changed / 변경

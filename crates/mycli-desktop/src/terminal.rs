@@ -25,8 +25,7 @@ impl TerminalManager {
     }
 }
 
-/// Find an executable on the PATH (Windows).
-#[cfg(windows)]
+/// Find an executable on the PATH.
 fn find_in_path(exe: &str) -> Option<std::path::PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
@@ -255,9 +254,21 @@ fn powershell_builder(candidates: &[&str]) -> Option<CommandBuilder> {
     None
 }
 
+/// Unix: launch `shell` as a LOGIN shell (`-l`). Login — not merely
+/// interactive — matters on macOS: /etc/zprofile runs path_helper there, so a
+/// non-login shell is missing Homebrew and user PATH entries. This mirrors
+/// what Terminal.app/iTerm2 do for every new tab.
+#[cfg(not(windows))]
+fn login_shell(shell: std::path::PathBuf) -> CommandBuilder {
+    let mut c = CommandBuilder::new(shell);
+    c.arg("-l");
+    c
+}
+
 /// Default shell. On Windows prefer Git Bash (clean, no product banner); if it
 /// isn't installed, fall back to PowerShell with `-NoLogo` so the startup
-/// banner is suppressed.
+/// banner is suppressed. On Unix (macOS/Linux) spawn the user's `$SHELL` as a
+/// login shell.
 fn default_shell_builder() -> CommandBuilder {
     #[cfg(windows)]
     {
@@ -279,8 +290,15 @@ fn default_shell_builder() -> CommandBuilder {
         if let Some(c) = powershell_builder(&["pwsh.exe", "powershell.exe"]) {
             return c;
         }
+        CommandBuilder::new_default_prog()
     }
-    CommandBuilder::new_default_prog()
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var("SHELL")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| "/bin/sh".into());
+        login_shell(shell)
+    }
 }
 
 /// Resolve a shell identifier into a launchable command. Known ids get the
@@ -323,6 +341,31 @@ fn build_command(shell: Option<&str>, args: Option<&Vec<String>>) -> CommandBuil
         }
     }
 
+    #[cfg(not(windows))]
+    {
+        // The UI stores Windows-centric ids ("powershell" is the shipped
+        // default preference) — resolve them to something that exists here
+        // instead of failing to spawn a literal "powershell"/"cmd.exe".
+        match s.to_lowercase().as_str() {
+            "powershell" | "pwsh" | "pwsh.exe" | "powershell.exe" | "windows-powershell" => {
+                if let Some(p) = find_in_path("pwsh") {
+                    let mut c = CommandBuilder::new(p);
+                    c.arg("-NoLogo");
+                    return c;
+                }
+                return default_shell_builder();
+            }
+            "cmd" | "cmd.exe" => return default_shell_builder(),
+            "bash" | "git-bash" => {
+                return login_shell(find_in_path("bash").unwrap_or_else(|| "/bin/bash".into()));
+            }
+            "zsh" => {
+                return login_shell(find_in_path("zsh").unwrap_or_else(|| "/bin/zsh".into()));
+            }
+            _ => {}
+        }
+    }
+
     let mut c = CommandBuilder::new(s);
     if let Some(args) = args {
         for a in args {
@@ -330,6 +373,29 @@ fn build_command(shell: Option<&str>, args: Option<&Vec<String>>) -> CommandBuil
         }
     }
     c
+}
+
+/// Streaming UTF-8 decode: append `incoming` to `pending`, return the decoded
+/// complete prefix, and leave an incomplete trailing sequence (≤3 bytes) in
+/// `pending` for the next read. PTY reads are raw byte chunks, so a multi-byte
+/// character (Hangul is 3 bytes in UTF-8) can be split across two reads;
+/// decoding each chunk independently turns the split character into U+FFFD —
+/// visible as randomly "broken" Korean/CJK in the terminal. Genuinely invalid
+/// bytes (not mere truncation) still decode lossily as before.
+fn decode_utf8_stream(pending: &mut Vec<u8>, incoming: &[u8]) -> String {
+    pending.extend_from_slice(incoming);
+    let chunk = std::mem::take(pending);
+    match std::str::from_utf8(&chunk) {
+        Ok(s) => s.to_string(),
+        // error_len() == None ⇔ the only problem is an incomplete sequence at
+        // the very end: decode the valid prefix now, carry the tail.
+        Err(e) if e.error_len().is_none() => {
+            let valid = e.valid_up_to();
+            *pending = chunk[valid..].to_vec();
+            String::from_utf8_lossy(&chunk[..valid]).into_owned()
+        }
+        Err(_) => String::from_utf8_lossy(&chunk).into_owned(),
+    }
 }
 
 #[tauri::command]
@@ -389,16 +455,25 @@ pub fn pty_spawn(
     // Reader thread: PTY stdout -> buffer
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
+        let mut pending: Vec<u8> = Vec::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let data = decode_utf8_stream(&mut pending, &buf[..n]);
+                    if data.is_empty() {
+                        continue;
+                    }
                     let mut out = buf_clone.lock().unwrap();
                     out.push(data);
                 }
                 Err(_) => break,
             }
+        }
+        // EOF with a dangling partial sequence — it can't complete anymore.
+        if !pending.is_empty() {
+            let mut out = buf_clone.lock().unwrap();
+            out.push(String::from_utf8_lossy(&pending).into_owned());
         }
         *exit_clone.lock().unwrap() = true;
     });
@@ -486,6 +561,44 @@ pub fn pty_close(
     let mut sessions = state.sessions.lock().unwrap();
     sessions.remove(&id);
     Ok(())
+}
+
+#[cfg(test)]
+mod utf8_stream_tests {
+    use super::decode_utf8_stream;
+
+    // A Hangul syllable split across two PTY reads must not become U+FFFD.
+    #[test]
+    fn hangul_split_across_reads() {
+        let bytes = "한글".as_bytes(); // 3 bytes each
+        let mut pending = Vec::new();
+        let first = decode_utf8_stream(&mut pending, &bytes[..4]);
+        let second = decode_utf8_stream(&mut pending, &bytes[4..]);
+        assert_eq!(first, "한");
+        assert_eq!(second, "글");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn byte_at_a_time_reassembles() {
+        let bytes = "가나다 abc 🙂".as_bytes();
+        let mut pending = Vec::new();
+        let mut out = String::new();
+        for b in bytes {
+            out.push_str(&decode_utf8_stream(&mut pending, &[*b]));
+        }
+        assert_eq!(out, "가나다 abc 🙂");
+        assert!(pending.is_empty());
+    }
+
+    // Genuinely invalid bytes must still be replaced, not carried forever.
+    #[test]
+    fn invalid_bytes_still_replaced() {
+        let mut pending = Vec::new();
+        let s = decode_utf8_stream(&mut pending, &[b'a', 0xFF, b'b']);
+        assert_eq!(s, "a\u{FFFD}b");
+        assert!(pending.is_empty());
+    }
 }
 
 #[cfg(all(test, windows))]

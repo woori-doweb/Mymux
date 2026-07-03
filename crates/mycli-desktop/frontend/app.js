@@ -1849,6 +1849,36 @@ async function spawnTerminal(shell, cwd) {
   }
 }
 
+// Reparenting a live pane (split/close/drag-retile/move-to-tab) detaches its
+// .xterm-viewport, and the browser resets that element's scrollTop to 0. xterm
+// hears the stray scroll event and believes the user scrolled up, so every
+// later bottom-pin check — refitAllPanes' wasAtBottom, xterm's own
+// follow-output — sees "not at bottom". Net effect: shrink a long session by
+// splitting it and the viewport freezes on the old content region, the last
+// lines (prompt included) hidden below the fold. Capture who sat at the bottom
+// BEFORE the DOM move; the returned repin re-scrolls them now and on the next
+// two frames (the reset event lands within the first frame, and the post-move
+// refit runs a frame later — cover both sides).
+function captureBottomPins() {
+  const pinned = [];
+  for (const [id, t] of terminals) {
+    try {
+      const buf = t.term.buffer.active;
+      if (buf.viewportY >= buf.baseY) pinned.push(id);
+    } catch {}
+  }
+  const apply = () => {
+    for (const id of pinned) {
+      const t = terminals.get(id);
+      if (t) try { t.term.scrollToBottom(); } catch {}
+    }
+  };
+  return () => {
+    apply();
+    requestAnimationFrame(() => { apply(); requestAnimationFrame(apply); });
+  };
+}
+
 // Split the focused pane
 async function splitPane(direction, cwd) {
   if (!focusedPaneId) return;
@@ -1866,9 +1896,12 @@ async function splitPane(direction, cwd) {
   splitContainer.className = `pane-container ${direction}`;
   splitContainer.style.cssText = "flex:1;";
 
-  // Move existing pane into split
+  // Move existing pane into split (scroll pin captured first — see
+  // captureBottomPins for why reparenting breaks bottom-follow).
+  const repin = captureBottomPins();
   parent.replaceChild(splitContainer, paneEl);
   splitContainer.appendChild(paneEl);
+  repin();
 
   // Add divider
   const divider = document.createElement("div");
@@ -1885,9 +1918,11 @@ async function splitPane(direction, cwd) {
     if (nti) nti.session = { kind: "local", shell: splitShell || null, cwd: cwd || null };
     refreshSessionList();
 
-    // Refit all panes in this tab
+    // Refit all panes in this tab, then re-assert the bottom pin — the spawn
+    // spans several frames, past the repin scheduled at the DOM move.
     await new Promise((r) => requestAnimationFrame(r));
     refitAllPanes();
+    repin();
   } catch (err) {
     toast("Split failed: " + err, true);
   }
@@ -1954,7 +1989,9 @@ function closePane(ptyId) {
   terminals.delete(ptyId);
   tab.panes = tab.panes.filter((p) => p !== ptyId);
 
-  // If split container now has only one child (+ divider), unwrap it
+  // If split container now has only one child (+ divider), unwrap it — a
+  // reparent of the surviving pane/subtree, so preserve its bottom pin.
+  const repin = captureBottomPins();
   const divider = splitContainer.querySelector(".pane-divider");
   if (divider) divider.remove();
 
@@ -1970,6 +2007,7 @@ function closePane(ptyId) {
   }
   refreshSessionList();
   refitAllPanes();
+  repin();
 }
 
 function findTabForPane(ptyId) {
@@ -1993,6 +2031,8 @@ function movePaneToTab(ptyId, targetTabIdx) {
 
   try {
     // Detach from the source tree (collapses now-empty split containers).
+    // Both the moved leaf and collapsed siblings get reparented — keep pins.
+    const repin = captureBottomPins();
     detachAndCollapse(leaf, srcTab);
     srcTab.panes = srcTab.panes.filter((p) => p !== ptyId);
 
@@ -2017,7 +2057,7 @@ function movePaneToTab(ptyId, targetTabIdx) {
     switchToTab(targetTabIdx);
     setFocusedPane(ptyId);
     refreshSessionList();
-    requestAnimationFrame(() => refitAllPanes());
+    requestAnimationFrame(() => { refitAllPanes(); repin(); });
     if (srcEmptied) toast(`Closed the '${srcLabel}' tab — it was the last session`);
   } catch (e) {
     toast("탭이동 오류: " + (e && e.message), true);
@@ -2257,6 +2297,8 @@ function movePane(srcId, targetId, position) {
   const srcLeaf = src.paneEl;
   const targetLeaf = target.paneEl;
 
+  // Re-tiling reparents both leaves (and any collapsed sibling) — keep pins.
+  const repin = captureBottomPins();
   detachAndCollapse(srcLeaf, tab);
 
   const parent = targetLeaf.parentElement;
@@ -2281,9 +2323,10 @@ function movePane(srcId, targetId, position) {
     split.append(targetLeaf, divider, srcLeaf);
   }
   setupDividerDrag(divider, split, vertical ? "vertical" : "horizontal");
+  repin();
 
   setFocusedPane(srcId);
-  requestAnimationFrame(() => refitAllPanes());
+  requestAnimationFrame(() => { refitAllPanes(); repin(); });
 }
 
 async function connectSsh() {

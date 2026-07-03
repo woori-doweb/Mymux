@@ -141,17 +141,31 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
 }
 
 /// Open a path with the OS default application (used for binary/exe files).
+/// The path is always passed as a single structured argument — never through a
+/// shell — so metacharacters in file names can't inject commands.
 #[tauri::command]
 pub fn open_external(path: String) -> Result<(), String> {
     #[cfg(windows)]
     {
-        // explorer.exe with the path as a single structured argument is not
-        // subject to `cmd` metacharacter parsing (avoids command injection).
         // CREATE_NO_WINDOW (0x0800_0000) → no flashing console window.
         use std::os::windows::process::CommandExt;
         std::process::Command::new("explorer")
             .arg(&path)
             .creation_flags(0x0800_0000)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
