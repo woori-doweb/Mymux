@@ -926,7 +926,7 @@ footer {
   <div class="hero-text fade-in">
     <div class="hero-badge">
       <span class="badge-dot"></span>
-      v0.1.9 &nbsp;·&nbsp; Windows &nbsp;·&nbsp; Tauri 2 + Rust
+      v0.1.16 &nbsp;·&nbsp; Windows &nbsp;·&nbsp; Tauri 2 + Rust
     </div>
 
     <h1>My<span class="h1-accent">mux</span></h1>
@@ -969,7 +969,7 @@ footer {
           <span class="tm"></span>
           <span class="tx"></span>
         </div>
-        <div class="t-title">Mymux v0.1.9</div>
+        <div class="t-title">Mymux v0.1.16</div>
         <div class="t-win-btns">
           <span></span>
           <span></span>
@@ -993,7 +993,7 @@ footer {
           <div class="t-pane-hdr"><span class="pip"></span>PANE 1 &middot; Git Bash</div>
           <div><span class="c-path">~/Project/Mymux</span> <span class="c-branch">(main)</span></div>
           <div><span class="c-prompt">$</span> <span class="c-cmd">cargo tauri build --release</span></div>
-          <div class="c-out">&nbsp;&nbsp;&nbsp;Compiling mymux v0.1.9</div>
+          <div class="c-out">&nbsp;&nbsp;&nbsp;Compiling mymux v0.1.16</div>
           <div class="c-ok">&nbsp;&nbsp;&nbsp;Finished release in 42.3s</div>
           <div><span class="c-path">~/Project/Mymux</span> <span class="c-branch">(main)</span></div>
           <div><span class="c-prompt">$</span> <span class="cursor"></span></div>
@@ -1038,7 +1038,7 @@ footer {
 
       <!-- Statusbar -->
       <div class="t-status">
-        <span>Mymux v0.1.9</span>
+        <span>Mymux v0.1.16</span>
         <span>4 panes &nbsp;&middot;&nbsp; 4 tabs</span>
         <span>DARK &nbsp;&middot;&nbsp; D2Coding</span>
       </div>
@@ -1090,15 +1090,20 @@ footer {
         <p class="fcard-desc">
           Connect to remote servers via SSH using password or key authentication.
           Browse and manage remote files directly through the built-in SFTP explorer.
+          Save connections for one-click reconnect, and attach straight into a
+          <strong style="color:var(--text-0);font-weight:600">tmux</strong> session on connect.
         </p>
         <p class="fcard-desc">
-          SSH(비밀번호·키) 접속 + 내장 SFTP로 원격 파일 탐색.
+          SSH(비밀번호·키) 접속 + 내장 SFTP로 원격 파일 탐색. 접속 정보 저장으로 재접속,
+          연결 시 <strong style="color:var(--text-0);font-weight:600">tmux</strong> 세션 바로 연결.
         </p>
         <div class="fcard-tags">
           <span class="tag">ssh</span>
           <span class="tag">sftp</span>
           <span class="tag">password-auth</span>
           <span class="tag">key-auth</span>
+          <span class="tag">tmux</span>
+          <span class="tag">saved-hosts</span>
         </div>
       </article>
 
@@ -1174,16 +1179,21 @@ footer {
         <p class="fcard-desc">
           Saved commands, session save &amp; restore on exit,
           light/dark theme with a custom accent color picker.
-          Auto-update delivered via GitHub Releases.
+          Smart clipboard (Ctrl+C/V, OSC&nbsp;52, IME-safe, drag-to-copy, image paste)
+          and adjustable font size &amp; letter spacing. Auto-update via GitHub Releases.
         </p>
         <p class="fcard-desc">
-          저장 명령, 종료 시 세션 저장·복원, 라이트/다크 테마 + 강조색, 자동 업데이트(GitHub Releases).
+          저장 명령, 종료 시 세션 저장·복원, 라이트/다크 테마 + 강조색,
+          스마트 클립보드(Ctrl+C/V·OSC&nbsp;52·한글 IME 안전·드래그 복사·이미지 붙여넣기),
+          글자 크기·자간 조절, 자동 업데이트(GitHub Releases).
         </p>
         <div class="fcard-tags">
           <span class="tag">session-restore</span>
           <span class="tag">dark-mode</span>
           <span class="tag">auto-update</span>
           <span class="tag">accent-color</span>
+          <span class="tag">clipboard</span>
+          <span class="tag">ime-safe</span>
         </div>
       </article>
 
@@ -1232,8 +1242,8 @@ footer {
       <div class="titem fade-in" style="transition-delay:.16s">
         <span class="titem-icon">&#128279;</span>
         <div>
-          <div class="titem-name">node-pty</div>
-          <div class="titem-desc">PTY / shell integration</div>
+          <div class="titem-name">portable-pty</div>
+          <div class="titem-desc">ConPTY / shell integration</div>
         </div>
       </div>
       <div class="titem fade-in" style="transition-delay:.2s">
@@ -1254,7 +1264,7 @@ footer {
 <section id="download">
   <div class="inner">
     <div class="dl-box fade-in">
-      <div class="dl-ver">Latest stable release &mdash; v0.1.9</div>
+      <div class="dl-ver">Latest stable release &mdash; v0.1.16</div>
       <div class="dl-heading">Ready to try?</div>
       <p class="dl-sub">
         무료 오픈소스입니다. Windows에서 바로 설치하세요.<br>
