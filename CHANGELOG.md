@@ -8,7 +8,7 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
-## Unreleased
+## v0.1.17 — 2026-07-04
 
 ### Added / 새 기능
 - **Scrollback search / 스크롤백 검색 (Ctrl+Shift+F).**
@@ -46,6 +46,16 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
   tmux synchronize-panes처럼 탭 단위로 켜면 입력이 그 탭의 모든 패인에 동시
   전달됩니다(여러 SSH 서버에 같은 명령 등). 켜진 동안 패인 테두리가 붉게 표시.
+
+### Fixed / 버그 수정
+- **Panes whose shell exited are cleaned up / 셸이 종료된 패인이 정리되도록 수정.**
+  When a shell exited (`exit`, an SSH drop, a crash) the pane used to linger
+  frozen on screen — the cleanup routine was called but had never been defined,
+  so the error was silently swallowed. Exited panes now close automatically.
+
+  셸이 종료(`exit`·SSH 끊김·크래시)되면 해당 패인이 얼어붙은 채 남던 문제를
+  수정했습니다(정리 함수가 호출되지만 정의돼 있지 않아 조용히 무시되던 버그).
+  이제 종료된 패인은 자동으로 닫힙니다.
 
 ---
 
