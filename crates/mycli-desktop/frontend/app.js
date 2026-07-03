@@ -2057,6 +2057,11 @@ function movePaneToTab(ptyId, targetTabIdx) {
     switchToTab(targetTabIdx);
     setFocusedPane(ptyId);
     refreshSessionList();
+    // Re-assert the pin synchronously now that the leaf is reparented AND
+    // visible (switchToTab) — without this, the pane paints one frame of old
+    // scrollback before the rAF apply snaps it to the bottom. Then re-confirm
+    // after the refit, which spans the next frame.
+    repin();
     requestAnimationFrame(() => { refitAllPanes(); repin(); });
     if (srcEmptied) toast(`Closed the '${srcLabel}' tab — it was the last session`);
   } catch (e) {

@@ -8,6 +8,31 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.16 — 2026-07-03
+
+### Fixed / 버그 수정
+- **No more zombie processes when opening files on macOS/Linux / macOS·Linux에서
+  파일 열기 시 좀비 프로세스가 남던 문제 수정.**
+  `open`/`xdg-open` were spawned and their handles dropped without being reaped,
+  leaving one defunct process per "open" for the app's lifetime. The launcher
+  child is now reaped on a detached thread. (Windows unaffected.)
+
+  파일을 열 때 실행한 `open`/`xdg-open` 프로세스를 회수하지 않아 열 때마다
+  좀비 프로세스가 하나씩 쌓이던 문제를, 별도 스레드에서 자식을 회수하도록
+  수정했습니다. (Windows는 영향 없음.)
+- **No scroll flicker when dragging a session into another tab / 세션을 다른 탭으로
+  드래그할 때 스크롤이 잠깐 튀던 현상 제거.**
+  Moving a pane to another tab re-asserted its bottom-scroll pin only on the
+  next animation frame, so the pane briefly painted old scrollback before
+  snapping to the bottom. The pin is now applied synchronously, matching the
+  split/close/retile paths.
+
+  패인을 다른 탭으로 옮길 때 하단 스크롤 고정을 다음 프레임에서야 적용해
+  옛 출력이 한 프레임 보였다 맨 아래로 튀던 현상을, 분할·닫기·재배치 경로와
+  동일하게 즉시 적용하도록 수정했습니다.
+
+---
+
 ## v0.1.15 — 2026-07-03
 
 ### Fixed / 버그 수정

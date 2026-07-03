@@ -155,19 +155,29 @@ pub fn open_external(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
     }
+    // On Unix, dropping a Child does NOT reap it — `open`/`xdg-open` fork the
+    // real handler and exit within milliseconds, so spawn-and-drop would leave a
+    // defunct (zombie) PID per call for the app's whole lifetime. Reap on a
+    // detached thread: non-blocking for the caller, no zombie left behind.
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        let mut child = std::process::Command::new("open")
             .arg(&path)
             .spawn()
             .map_err(|e| e.to_string())?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        std::process::Command::new("xdg-open")
+        let mut child = std::process::Command::new("xdg-open")
             .arg(&path)
             .spawn()
             .map_err(|e| e.to_string())?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
     }
     Ok(())
 }
