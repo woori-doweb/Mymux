@@ -438,6 +438,8 @@ async function setupListeners() {
   if (btnBroadcast) btnBroadcast.addEventListener("click", toggleBroadcast);
   // Command palette (Ctrl+Shift+P).
   initCommandPalette();
+  // Keyboard shortcuts help modal (toolbar ⌨ button).
+  initShortcutsHelp();
 
   // Terminal text zoom (top bar A−/A+) — same effect as Ctrl -/+.
   const btnFontDec = document.getElementById("btn-font-dec");
@@ -1565,15 +1567,19 @@ async function createPane(parentEl, shell, args, cwd) {
       if (e.shiftKey && (e.key === "P" || e.code === "KeyP")) { e.preventDefault(); openCommandPalette(); return false; }
       // Ctrl+Shift+↑/↓ — jump between shell prompts (OSC 133 marks).
       if (e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); jumpPrompt(e.key === "ArrowUp" ? -1 : 1); return false; }
-      // Ctrl+A — select the CURRENT command-input line (shell integration). Only
-      // when something is typed; on an empty line it falls through so readline's
-      // beginning-of-line still works. Use Home to jump to line start regardless.
+      // Ctrl+A — select the whole current command-input line (Windows-style).
+      // At an integrated prompt we always intercept (so it never falls through
+      // to readline's beginning-of-line); use Home to jump to the line start.
+      // In a full-screen TUI (alt screen) it passes through to the app.
       if (!e.shiftKey && (e.key === "a" || e.key === "A" || e.code === "KeyA")) {
-        if (selectCurrentInput(id)) { e.preventDefault(); return false; }
+        if (atIntegratedPrompt(terminals.get(id))) { e.preventDefault(); selectCurrentInput(id); return false; }
       }
-      // Ctrl+X — cut the selection (or the current input line) and clear it.
+      // Ctrl+X — cut the selection, or the current input line, and clear it.
       if (!e.shiftKey && (e.key === "x" || e.key === "X" || e.code === "KeyX")) {
-        if (cutCurrentInput(id)) { e.preventDefault(); return false; }
+        const ti = terminals.get(id);
+        if ((ti && ti.term.getSelection()) || atIntegratedPrompt(ti)) {
+          if (cutCurrentInput(id)) { e.preventDefault(); return false; }
+        }
       }
     }
     // Shift+Insert → paste
@@ -2037,10 +2043,19 @@ function hintLinkOnce() {
 
 // The current command-input line as { startLine, startCol, cellLen, text }, or
 // null when nothing is typed or the shell hasn't emitted a 133;B mark yet.
+// True when the pane is sitting at a Mymux-integrated shell prompt (normal
+// buffer, a live 133;B input mark) — as opposed to a full-screen TUI on the
+// alternate screen (vim / claude / htop / less), where Ctrl+A must reach the app.
+function atIntegratedPrompt(t) {
+  return !!(t && t.inputMark && t.inputMark.marker && !t.inputMark.marker.isDisposed
+    && t.term.buffer.active.type === "normal");
+}
+
 function getInputRegion(t) {
   const im = t && t.inputMark;
   if (!im || !im.marker || im.marker.isDisposed) return null;
   const buf = t.term.buffer.active;
+  if (buf.type !== "normal") return null; // alt-screen TUI — not a shell prompt
   const cols = t.term.cols;
   const startLine = im.marker.line;
   const startCol = im.col;
@@ -2246,6 +2261,57 @@ function runPaletteSelection() {
   const a = paletteFiltered[paletteIndex];
   closeCommandPalette();
   if (a) { try { a.run(); } catch (e) { toast(String(e), true); } }
+}
+
+// ── Keyboard shortcuts help (toolbar ⌨ button) ───────────────────────────
+const SHORTCUTS = [
+  ["Panes & tabs / 패인·탭", [
+    ["Ctrl+Shift+D", "Split horizontally / 가로 분할"],
+    ["Ctrl+Shift+E", "Split vertically / 세로 분할"],
+    ["Ctrl+Shift+W", "Close pane / 패인 닫기"],
+    ["Ctrl+Shift+N", "New terminal / 새 터미널·탭"],
+    ["Ctrl+Tab", "Next pane / 다음 패인"],
+    ["Ctrl+Shift+Tab", "Previous pane / 이전 패인"],
+    ["Alt + ← ↑ ↓ →", "Move focus between panes / 패인 간 이동"],
+    ["Ctrl+Shift+Z", "Zoom / restore pane / 패인 최대화"],
+    ["Ctrl + `", "Focus terminal / 터미널 포커스"],
+  ]],
+  ["Terminal tools / 터미널 도구", [
+    ["Ctrl+Shift+P", "Command palette / 커맨드 팔레트"],
+    ["Ctrl+Shift+F", "Search scrollback / 스크롤백 검색"],
+    ["Ctrl+Shift+B", "Broadcast input to tab / 입력 브로드캐스트"],
+    ["Ctrl+Shift+↑ / ↓", "Jump between prompts / 프롬프트 점프"],
+    ["Ctrl + / Ctrl − / Ctrl 0", "Font size / 글자 크기"],
+    ["Ctrl+Click", "Open link in browser / 링크 열기"],
+  ]],
+  ["Command line / 명령줄", [
+    ["Ctrl+A", "Select the current input line / 입력줄 전체 선택"],
+    ["Ctrl+C", "Copy selection (else interrupt) / 선택 복사 (없으면 중단)"],
+    ["Ctrl+X", "Cut the current input line / 입력줄 잘라내기"],
+    ["Ctrl+V  ·  Shift+Insert", "Paste / 붙여넣기"],
+    ["Home", "Beginning of line / 줄 맨 앞으로"],
+  ]],
+];
+function initShortcutsHelp() {
+  const btn = document.getElementById("btn-shortcuts");
+  const ov = document.getElementById("shortcuts-overlay");
+  const body = document.getElementById("shortcuts-body");
+  if (!btn || !ov || !body) return;
+  body.innerHTML = SHORTCUTS.map(([group, rows]) => `
+    <div class="sc-group">
+      <div class="sc-group-title">${esc(group)}</div>
+      ${rows.map(([k, d]) => `<div class="sc-row"><kbd>${esc(k)}</kbd><span>${esc(d)}</span></div>`).join("")}
+    </div>`).join("");
+  btn.addEventListener("click", openShortcutsHelp);
+  document.getElementById("shortcuts-close")?.addEventListener("click", closeShortcutsHelp);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) closeShortcutsHelp(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ov.classList.contains("hidden")) closeShortcutsHelp(); });
+}
+function openShortcutsHelp() { document.getElementById("shortcuts-overlay")?.classList.remove("hidden"); }
+function closeShortcutsHelp() {
+  document.getElementById("shortcuts-overlay")?.classList.add("hidden");
+  const t = terminals.get(focusedPaneId);
+  if (t) try { t.term.focus(); } catch {}
 }
 
 // Resolve the user's default-shell preference into an identifier for the

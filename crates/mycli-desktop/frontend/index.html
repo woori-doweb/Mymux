@@ -22,6 +22,7 @@
       <button id="btn-split-h" title="Split focused pane horizontally (Ctrl+Shift+D)">&#8596;</button>
       <button id="btn-split-v" title="Split focused pane vertically (Ctrl+Shift+E)">&#8597;</button>
       <button id="btn-broadcast" title="Broadcast typing to every pane in this tab (Ctrl+Shift+B)">&#8649;</button>
+      <button id="btn-shortcuts" title="Keyboard shortcuts / 단축키 안내">&#9000; Keys</button>
       <span id="accent-swatches" title="Accent color">
         <button class="accent-swatch" data-accent="blue" title="Blue" style="background:#0f9ef0"></button>
         <button class="accent-swatch" data-accent="violet" title="Violet" style="background:#8b5cf6"></button>
@@ -243,6 +244,17 @@
     <div id="palette">
       <input type="text" id="palette-input" placeholder="Type a command…  (명령 검색)" spellcheck="false" autocomplete="off" />
       <ul id="palette-list"></ul>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts help -->
+  <div id="shortcuts-overlay" class="hidden">
+    <div id="shortcuts-modal">
+      <div id="shortcuts-head">
+        <span>&#9000; Keyboard shortcuts &middot; 단축키</span>
+        <button id="shortcuts-close" title="Close (Esc)">&times;</button>
+      </div>
+      <div id="shortcuts-body"></div>
     </div>
   </div>
 

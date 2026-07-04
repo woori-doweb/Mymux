@@ -1455,6 +1455,76 @@ html[data-theme="light"] #toolbar-actions #btn-update:hover {
 .palette-item.sel .palette-hint { opacity: 0.9; }
 .palette-empty { padding: 14px; text-align: center; opacity: 0.6; }
 
+/* ── Keyboard shortcuts help ── */
+#btn-shortcuts { white-space: nowrap; }
+#shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 8vh;
+}
+#shortcuts-overlay.hidden { display: none; }
+#shortcuts-modal {
+  width: min(780px, 94vw);
+  max-height: 82vh;
+  overflow-y: auto;
+  background: var(--bg-2, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+#shortcuts-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2, var(--bg));
+  font-weight: 600;
+}
+#shortcuts-close {
+  background: none; border: none; color: inherit;
+  font-size: 22px; line-height: 1; cursor: pointer; opacity: 0.7;
+}
+#shortcuts-close:hover { opacity: 1; }
+#shortcuts-body {
+  padding: 16px 18px 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px 28px;
+}
+.sc-group-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  margin-bottom: 8px;
+}
+.sc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+}
+.sc-row kbd {
+  flex: 0 0 auto;
+  min-width: 140px;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  background: var(--bg-3, rgba(255,255,255,0.06));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.sc-row span { font-size: 13px; opacity: 0.9; }
+
 .pane-divider {
   flex-shrink: 0;
   background: var(--border);
