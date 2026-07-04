@@ -8,7 +8,7 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
-## Unreleased
+## v0.1.18 — 2026-07-04
 
 ### Added / 새 기능
 - **Shell prompt jump & command blocks (OSC 133) / 프롬프트 점프·명령 블록.**
@@ -20,20 +20,34 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
   **Ctrl+Shift+↑ / ↓** 로 프롬프트 사이를 이동하고, 커맨드 팔레트로 명령과 그
   출력을 블록째 복사할 수 있습니다(드래그 선택 불필요).
 - **Copy / cut the current command line / 현재 명령줄 복사·잘라내기.**
-  While typing, **Ctrl+A** selects the whole command you're editing,
+  At a shell prompt, **Ctrl+A** selects the whole command you're editing,
   **Ctrl+C** copies it, and **Ctrl+X** cuts it (clearing the line in the shell).
-  On an empty line Ctrl+A still passes through to the shell (readline
-  beginning-of-line); use Home to jump to the start regardless.
+  Use **Home** to jump to the line start. In a full-screen app (vim, etc.)
+  Ctrl+A passes through to the app.
 
-  명령을 입력하는 중 **Ctrl+A** 로 편집 중인 명령 전체를 선택하고, **Ctrl+C**
-  복사, **Ctrl+X** 잘라내기(셸 입력줄도 비움). 빈 줄에서는 Ctrl+A가 셸로
-  전달되어 줄 시작 이동으로 동작합니다(줄 시작 이동은 Home 사용).
+  셸 프롬프트에서 **Ctrl+A** 로 편집 중인 명령 전체를 선택하고, **Ctrl+C** 복사,
+  **Ctrl+X** 잘라내기(셸 입력줄도 비움). 줄 맨 앞으로는 **Home**. 전체화면 앱
+  (vim 등)에서는 Ctrl+A가 그 앱으로 전달됩니다.
 - **Command palette / 커맨드 팔레트 (Ctrl+Shift+P).**
   A fuzzy launcher for every action — split, zoom, broadcast, search, prompt
   jump, input copy/cut, SSH, theme, font — findable by typing.
 
   모든 동작(분할·줌·브로드캐스트·검색·프롬프트 점프·입력 복사/잘라내기·SSH·
   테마·글꼴)을 타이핑으로 찾아 실행하는 퍼지 런처.
+- **Keyboard shortcuts help / 단축키 안내.**
+  A **⌨ Keys** button in the toolbar opens a modal listing every shortcut,
+  grouped and bilingual.
+
+  툴바의 **⌨ Keys** 버튼으로 모든 단축키를 그룹별·한영 병기로 보는 창을 엽니다.
+
+### Fixed / 버그 수정
+- **Text selection is now clearly visible / 텍스트 선택이 또렷하게 보이도록 수정.**
+  The selection colour was almost identical to the terminal background, so a
+  selection (drag, or Ctrl+A) was barely visible. It's now an accent-tinted
+  highlight.
+
+  선택 색이 터미널 배경과 거의 같아 드래그·Ctrl+A 선택이 잘 안 보이던 문제를,
+  강조색 하이라이트로 수정했습니다.
 
 ---
 
