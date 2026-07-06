@@ -8,6 +8,25 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.22 — 2026-07-06
+
+### Added / 새 기능
+- **Click the explorer path to copy it / 탐색기 경로 클릭 복사.**
+  Clicking the current-directory label in the explorer header copies the full
+  path to the clipboard, with a confirmation toast. Hovering shows a pointer
+  cursor and underline so it reads as clickable.
+
+  탐색기 상단의 현재 디렉토리 경로를 클릭하면 전체 경로가 클립보드에
+  복사되고 확인 토스트가 뜹니다. 마우스를 올리면 포인터 커서와 밑줄로
+  클릭 가능함을 표시합니다.
+
+### Changed / 변경
+- **Toasts auto-hide after 2 seconds / 토스트 2초로 단축.**
+  Notification toasts (Copied, Updated, …) now disappear after 2 seconds
+  instead of 2.5.
+
+  안내 토스트(복사됨, 갱신됨 등)가 2.5초 대신 2초 후에 사라집니다.
+
 ## v0.1.21 — 2026-07-06
 
 ### Added / 새 기능
