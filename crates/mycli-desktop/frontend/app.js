@@ -1954,7 +1954,8 @@ function flashPaneNotify(id) {
     void el.offsetWidth; // restart the animation
     el.style.setProperty("--notify-color", color);
     el.classList.add("notify-flash");
-    setTimeout(() => el.classList.remove("notify-flash"), 10200);
+    if (el._notifyTimeout) clearTimeout(el._notifyTimeout);
+    el._notifyTimeout = setTimeout(() => el.classList.remove("notify-flash"), 10200);
   };
   const t = terminals.get(id);
   if (t) pulse(t.paneEl);
@@ -1968,6 +1969,28 @@ function flashPaneNotify(id) {
   }
   if (!document.hasFocus()) invoke("window_attention").catch(() => {});
 }
+
+// Hovering a flashing pane (or its session-list row) acknowledges the
+// notification: stop the pulse on BOTH elements for that session at once.
+// Delegated on document so it covers rows recreated by refreshSessionList.
+function clearPaneFlash(id) {
+  const els = [
+    terminals.get(id)?.paneEl,
+    document.querySelector(`.session-item[data-pty-id="${id}"]`),
+  ];
+  for (const el of els) {
+    if (!el) continue;
+    el.classList.remove("notify-flash");
+    if (el._notifyTimeout) { clearTimeout(el._notifyTimeout); el._notifyTimeout = null; }
+  }
+}
+document.addEventListener("mouseover", (e) => {
+  const el = e.target.closest?.(".notify-flash");
+  if (!el) return;
+  const pid = Number(el.dataset.ptyId);
+  if (Number.isFinite(pid)) clearPaneFlash(pid);
+  else el.classList.remove("notify-flash");
+});
 
 // ── Activity badges (tmux monitor-activity) ──────────────────────────────
 // Output landing in a pane the user can't see marks its session row and its
