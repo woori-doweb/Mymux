@@ -399,6 +399,7 @@ async function setupListeners() {
           if (chunks.length) {
             t.term.write(chunks.join("")); // one write, not per-chunk
             markPaneActivity(id, t); // unseen badge when this pane is hidden
+            trackOutputSilence(id, t); // flash when sustained output goes quiet
           } else if (exited) closeTerminal(id);
         } catch {}
       }));
@@ -1593,6 +1594,11 @@ async function createPane(parentEl, shell, args, cwd) {
   });
 
   term.onData((data) => {
+    // Typing means the user is interacting, not waiting on a task: remember the
+    // time (gates the OSC 133;D "long command finished" flash) and cancel the
+    // output-silence watch so keystroke echo never counts as "work output".
+    const ti = terminals.get(id);
+    if (ti) { ti.lastInputAt = performance.now(); ti.outStart = null; }
     const result = handleTerminalInput(data, id);
     if (result === "consumed") return;
     // Per-tab broadcast (Ctrl+Shift+B): typing in any pane of a broadcasting
@@ -1653,6 +1659,11 @@ async function createPane(parentEl, shell, args, cwd) {
         const ec = parseInt((data.split(";")[1] || ""), 10);
         const last = t.marks[t.marks.length - 1];
         if (last && Number.isFinite(ec)) last.exit = ec;
+        // Command finished: if it ran ≥5s since the last keystroke, treat it as
+        // a task completing and flash the pane. Short interactive commands
+        // (ls, cd…) finish well inside the window and stay quiet.
+        if (performance.now() - (t.lastInputAt || 0) >= NOTIFY_MIN_WORK_MS) flashPaneNotify(id);
+        t.outStart = null; // the shell prompt is back — don't double-fire the silence watcher
       }
       return true;
     });
@@ -1881,15 +1892,42 @@ function setupSessionResizer() {
   });
 }
 
+// ── Task-done detection (tmux monitor-silence 계열) ─────────────────────────
+// A pane that streamed output for ≥ NOTIFY_MIN_WORK_MS and then went quiet for
+// NOTIFY_SILENCE_MS is treated as "task finished" and flashed. Covers programs
+// without OSC 133 shell integration (TUIs, streaming CLIs); user keystrokes
+// reset the window (see term.onData) so echo never masquerades as work.
+const NOTIFY_MIN_WORK_MS = 5000;
+const NOTIFY_SILENCE_MS = 1500;
+function trackOutputSilence(id, t) {
+  const now = performance.now();
+  if (t.outStart == null) t.outStart = now;
+  t.lastOutAt = now;
+  if (t.silenceTimer) clearTimeout(t.silenceTimer);
+  t.silenceTimer = setTimeout(() => {
+    t.silenceTimer = null;
+    if (!terminals.has(id)) return;
+    if (t.outStart == null) return; // window already reset by a keystroke or OSC 133;D
+    const workedMs = (t.lastOutAt || 0) - t.outStart;
+    t.outStart = null; // window consumed either way
+    if (workedMs >= NOTIFY_MIN_WORK_MS) flashPaneNotify(id);
+  }, NOTIFY_SILENCE_MS);
+}
+
 // Briefly pulse a pane + its session-list row to notify task completion
 // (driven by the terminal bell — see the pty read loop).
 function flashPaneNotify(id) {
+  // Base 다홍(scarlet); shift the hue a little per session so simultaneous
+  // completions in different panes are tellable apart at a glance.
+  const hue = (8 + (Number(id) || 0) * 24) % 360;
+  const color = `hsl(${hue}, 88%, 58%)`;
   const pulse = (el) => {
     if (!el) return;
     el.classList.remove("notify-flash");
     void el.offsetWidth; // restart the animation
+    el.style.setProperty("--notify-color", color);
     el.classList.add("notify-flash");
-    setTimeout(() => el.classList.remove("notify-flash"), 2600);
+    setTimeout(() => el.classList.remove("notify-flash"), 10200);
   };
   const t = terminals.get(id);
   if (t) pulse(t.paneEl);

@@ -1320,11 +1320,13 @@ html[data-theme="light"] #toolbar-actions #btn-update:hover {
 
 /* Task-completion notification: pulse the pane/session border (terminal bell). */
 @keyframes notifyPulse {
-  0%   { box-shadow: inset 0 0 0 2px var(--accent); }
+  0%   { box-shadow: inset 0 0 0 2px var(--notify-color, #e34234); }
   100% { box-shadow: inset 0 0 0 2px transparent; }
 }
-.pane-leaf.notify-flash { animation: notifyPulse 0.7s ease-in-out 3; }
-.session-item.notify-flash { animation: notifyPulse 0.7s ease-in-out 3; }
+/* 10s total: 1s pulses ×10. Color is per-session via --notify-color
+   (set in flashPaneNotify; base 다홍 #e34234, hue-shifted per pane id). */
+.pane-leaf.notify-flash { animation: notifyPulse 1s ease-in-out 10; }
+.session-item.notify-flash { animation: notifyPulse 1s ease-in-out 10; }
 
 /* Unseen activity (tmux monitor-activity): output/bell landed while the pane
    was hidden — dot on the session row and its tab until the tab is viewed. */
