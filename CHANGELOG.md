@@ -8,6 +8,21 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.19 — 2026-07-06
+
+### Added / 새 기능
+- **Per-session task-done notification / 세션별 작업 완료 알림.**
+  When a command that ran 5+ seconds finishes (OSC 133 shell integration), or a
+  program streams output for 5+ seconds and then goes quiet, the pane border and
+  its session-list row pulse for 10 seconds. The base color is scarlet, shifted
+  per session so several finishing panes are tellable apart at a glance. Short
+  commands and plain typing never trigger it.
+
+  5초 이상 걸린 명령이 끝나거나(OSC 133 셸 통합), 프로그램이 5초 이상 출력을
+  이어가다 멈추면 패인 외곽선과 세션 목록 행이 10초간 펄스합니다. 기본색은
+  다홍색이며 세션마다 색조가 조금씩 달라 여러 패인이 동시에 끝나도 한눈에
+  구분됩니다. 짧은 명령이나 단순 타이핑에는 반응하지 않습니다.
+
 ## v0.1.18 — 2026-07-04
 
 ### Added / 새 기능
