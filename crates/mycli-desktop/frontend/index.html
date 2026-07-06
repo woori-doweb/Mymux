@@ -320,6 +320,18 @@
     </div>
   </div>
 
+  <!-- Update confirmation: warn that all open sessions will close -->
+  <div id="update-modal" class="hidden">
+    <div class="modal-box">
+      <h2>Update</h2>
+      <p>업데이트를 진행하면 열려 있는 모든 세션(창)이 닫히고 앱이 재시작됩니다.<br />계속하시겠습니까?</p>
+      <div class="modal-actions">
+        <button id="update-modal-cancel" class="secondary">취소</button>
+        <button id="update-modal-ok">업데이트</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="hidden"></div>
 
   <script src="vendor/xterm.min.js"></script>

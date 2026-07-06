@@ -1625,7 +1625,7 @@ async function createPane(parentEl, shell, args, cwd) {
     // time (gates the OSC 133;D "long command finished" flash) and cancel the
     // output-silence watch so keystroke echo never counts as "work output".
     const ti = terminals.get(id);
-    if (ti) { ti.lastInputAt = performance.now(); ti.outStart = null; }
+    if (ti) { ti.lastInputAt = performance.now(); ti.outStart = null; ti.notifiedQuiet = false; }
     const result = handleTerminalInput(data, id);
     if (result === "consumed") return;
     // Per-tab broadcast (Ctrl+Shift+B): typing in any pane of a broadcasting
@@ -1920,10 +1920,14 @@ function setupSessionResizer() {
 }
 
 // ── Task-done detection (tmux monitor-silence 계열) ─────────────────────────
-// A pane that streamed output for ≥ NOTIFY_MIN_WORK_MS and then went quiet for
-// NOTIFY_SILENCE_MS is treated as "task finished" and flashed. Covers programs
-// without OSC 133 shell integration (TUIs, streaming CLIs); user keystrokes
-// reset the window (see term.onData) so echo never masquerades as work.
+// A pane whose output spans ≥ NOTIFY_MIN_WORK_MS since the last keystroke and
+// then goes quiet for NOTIFY_SILENCE_MS is treated as "task finished" and
+// flashed. Covers programs without OSC 133 shell integration (TUIs, streaming
+// CLIs). The work window ACCUMULATES across quiet gaps — sporadic-output tasks
+// (downloads, plugin updates: burst → silence → burst) must still notify — and
+// only a keystroke resets it (see term.onData), so echo never masquerades as
+// work. To keep periodic-output programs (watch, pollers) from re-flashing
+// every few seconds, each keystroke-to-keystroke cycle notifies at most once.
 const NOTIFY_MIN_WORK_MS = 5000;
 const NOTIFY_SILENCE_MS = 1500;
 function trackOutputSilence(id, t) {
@@ -1934,10 +1938,14 @@ function trackOutputSilence(id, t) {
   t.silenceTimer = setTimeout(() => {
     t.silenceTimer = null;
     if (!terminals.has(id)) return;
-    if (t.outStart == null) return; // window already reset by a keystroke or OSC 133;D
+    if (t.outStart == null) return; // window reset by a keystroke or OSC 133;D
     const workedMs = (t.lastOutAt || 0) - t.outStart;
-    t.outStart = null; // window consumed either way
-    if (workedMs >= NOTIFY_MIN_WORK_MS) flashPaneNotify(id);
+    if (workedMs >= NOTIFY_MIN_WORK_MS && !t.notifiedQuiet) {
+      t.notifiedQuiet = true; // once per input cycle
+      t.outStart = null;
+      flashPaneNotify(id);
+    }
+    // Below the threshold: keep the window open so later bursts accumulate.
   }, NOTIFY_SILENCE_MS);
 }
 
@@ -4782,7 +4790,7 @@ window.addEventListener("DOMContentLoaded", () => {
     btn.title = `New version ${newVersion} — click to update`;
     btn.classList.remove("hidden");
 
-    btn.addEventListener("click", async () => {
+    const runInstall = async () => {
       if (btn.disabled) return;
       btn.disabled = true;
       const original = btn.textContent;
@@ -4796,6 +4804,34 @@ window.addEventListener("DOMContentLoaded", () => {
         if (typeof toast === "function") toast("Update failed: " + err, true);
         else console.error("update_install failed:", err);
       }
+    };
+
+    const modal = document.getElementById("update-modal");
+    const modalOk = document.getElementById("update-modal-ok");
+    const modalCancel = document.getElementById("update-modal-cancel");
+    const closeUpdateModal = () => {
+      if (modal) modal.classList.add("hidden");
+      // Restore the native browser overlay only if we're still on the browser view.
+      if (browserTabActive && browserMode === "native") openNativePane();
+    };
+    if (modalOk) modalOk.addEventListener("click", () => { closeUpdateModal(); runInstall(); });
+    if (modalCancel) modalCancel.addEventListener("click", closeUpdateModal);
+    if (modal) {
+      modal.addEventListener("click", (e) => { if (e.target === modal) closeUpdateModal(); });
+      modal.addEventListener("keydown", (e) => { if (e.key === "Escape") closeUpdateModal(); });
+    }
+
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      // With open sessions, confirm first — updating closes every session.
+      if (terminals.size > 0 && modal) {
+        // The native browser overlay floats above all HTML; hide it so the modal shows.
+        if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
+        modal.classList.remove("hidden");
+        if (modalOk) modalOk.focus();
+        return;
+      }
+      runInstall();
     });
   };
   start();
