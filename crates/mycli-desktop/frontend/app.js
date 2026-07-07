@@ -2049,9 +2049,9 @@ function clearPaneFlash(id) {
     el.classList.remove("notify-flash");
     if (el._notifyTimeout) { clearTimeout(el._notifyTimeout); el._notifyTimeout = null; }
   }
-  // Acknowledging the pane also sends the fox away (if it's sitting there).
-  const fox = document.getElementById("fox-buddy");
-  if (fox && fox._paneId === id) hideFox();
+  // NOTE: deliberately does NOT hide the fox — the mouse usually sits on (or
+  // crosses) the finished pane, so tying the fox to hover-ack made it vanish
+  // the instant it appeared. The fox leaves on click or its own timer.
 }
 
 // ── Fox buddy 🦊 — a little mascot that glides to the pane whose task just
