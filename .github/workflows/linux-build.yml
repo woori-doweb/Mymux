@@ -1,0 +1,71 @@
+name: Linux Build
+
+# Manually build the Ubuntu/Linux app (.deb + AppImage) and attach it to an
+# existing GitHub Release. Like the macOS workflow it deliberately does NOT
+# touch latest.json — the auto-updater manifest is Windows-only; Linux users
+# install the .deb or run the AppImage manually.
+#
+#   gh workflow run linux-build.yml -f tag=v0.1.23
+#
+# Built on ubuntu-22.04 for broad glibc/WebKitGTK compatibility (the artifacts
+# run on 22.04 and newer).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach the Linux artifacts to"
+        required: true
+        default: "v0.1.23"
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: build (x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # Tauri (mycli-desktop) needs WebKitGTK + supporting libs on Linux;
+      # AppImage packaging needs patchelf; russh's crypto (aws-lc) needs cmake.
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            cmake \
+            patchelf
+
+      - name: Build .deb + AppImage
+        working-directory: crates/mycli-desktop
+        env:
+          # createUpdaterArtifacts is on, so the build wants the signing key
+          # even though we only ship the installers here.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npx --yes @tauri-apps/cli@^2 build --bundles deb,appimage
+
+      - name: Attach Linux artifacts to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: crates/mycli-desktop
+        run: |
+          gh release upload "${{ inputs.tag }}" \
+            ../../target/release/bundle/deb/*.deb \
+            ../../target/release/bundle/appimage/*.AppImage \
+            --clobber
