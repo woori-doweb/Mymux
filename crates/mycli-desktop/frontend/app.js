@@ -2063,23 +2063,30 @@ function showFoxAt(paneEl, paneId) {
   if (!fox || !paneEl) return;
   const r = paneEl.getBoundingClientRect();
   if (r.width === 0 || r.height === 0) return; // pane on a hidden tab — unseen badge covers it
+  const FW = 68, FH = 59;
   // Bottom-right INSIDE the pane, lifted off the edge so it never covers
-  // scrollbars or anything below the pane.
-  const left = Math.max(4, r.right - 68 - 14);
-  const top = Math.max(4, r.bottom - 59 - 18);
+  // scrollbars or the bar below. Narrow panes: center horizontally and clamp
+  // into the pane so the fox is never squeezed off the edge.
+  let left = r.right - FW - 14;
+  if (left < r.left + 2) left = Math.max(2, r.left + (r.width - FW) / 2);
+  let top = r.bottom - FH - 18;
+  if (top < r.top + 2) top = Math.max(2, r.top + (r.height - FH) / 2);
   fox._paneId = paneId;
   if (fox.classList.contains("hidden")) {
-    // First appearance: place instantly (no glide from a stale position).
+    // First appearance: place instantly (no glide from a stale position) and
+    // play a little pop so it's unmistakable.
     fox.style.transition = "none";
     fox.style.left = left + "px";
     fox.style.top = top + "px";
     fox.classList.remove("hidden");
     void fox.offsetWidth;
     fox.style.transition = "";
+    fox.classList.remove("fox-pop"); void fox.offsetWidth; fox.classList.add("fox-pop");
   } else {
     // Already out: glide over to the newly finished pane.
     fox.style.left = left + "px";
     fox.style.top = top + "px";
+    fox.classList.remove("fox-pop"); void fox.offsetWidth; fox.classList.add("fox-pop");
   }
   if (foxHideTimer) clearTimeout(foxHideTimer);
   foxHideTimer = setTimeout(hideFox, 10200); // matches the border-pulse lifetime
