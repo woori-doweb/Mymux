@@ -8,6 +8,48 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.24 — 2026-07-07
+
+### Added / 새 기능
+- **Fox buddy on task completion / 작업 완료 여우 캐릭터.**
+  An optional cute fox pops up at the bottom-right inside the pane whose
+  task just finished, swaying its head and blinking for 10 seconds. If it's
+  already out it glides over to the newly finished pane. Drag it anywhere,
+  click to dismiss. Toggle in the bell (🔔) settings modal.
+
+  작업이 끝난 패인 우측 하단에 귀여운 여우가 나타나 머리를 흔들며 눈을
+  껌뻑입니다(10초). 이미 떠 있으면 새로 끝난 패인으로 미끄러져 이동합니다.
+  드래그로 옮기고 클릭하면 사라지며, 종(🔔) 설정에서 켜고 끕니다.
+
+- **Directory-bound command combos + aliases / 디렉토리·약어 명령 콤보.**
+  Saved commands can carry a directory and a short alias. Type the alias at a
+  prompt and press Enter to run "cd &lt;dir&gt; then command" as one line
+  (PowerShell-safe). Autocomplete previews the full line it will run.
+
+  저장 명령에 디렉토리와 약어를 지정할 수 있습니다. 프롬프트에서 약어를 치고
+  Enter를 누르면 "cd &lt;디렉토리&gt; → 명령"이 한 줄로 실행되고,
+  자동완성이 실행될 전체 라인을 미리 보여줍니다.
+
+- **SSH favorites / SSH 즐겨찾기.**
+  Star a live SSH session (or the SSH modal) to save it; one click in the
+  session panel reconnects — key auth goes straight in, password auth asks
+  only for the password. tmux settings are remembered too.
+
+  실행 중인 SSH 세션(또는 SSH 모달)에 별표를 눌러 저장하면, 세션 패널에서
+  한 번 클릭으로 재접속합니다 — 키 인증은 바로 접속, 비밀번호 인증은
+  비밀번호만 물어봅니다. tmux 설정도 함께 기억합니다.
+
+- **Right-click a folder's cd button / 폴더 cd 버튼 우클릭.**
+  Opens a session at that folder AND runs a chosen saved command there.
+
+  해당 폴더에서 세션을 열고 선택한 저장 명령을 바로 실행합니다.
+
+- **Ubuntu/Linux installers / 우분투·리눅스 설치본.**
+  Releases now include a `.deb` and an AppImage for Linux, alongside the
+  Windows and macOS builds.
+
+  이제 릴리즈에 Windows·macOS와 함께 리눅스용 `.deb`와 AppImage가 포함됩니다.
+
 ## v0.1.23 — 2026-07-06
 
 ### Added / 새 기능
