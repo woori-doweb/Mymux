@@ -220,6 +220,8 @@ async function setupListeners() {
   const notifyChkPane = document.getElementById("notify-chk-pane");
   const notifyChkList = document.getElementById("notify-chk-list");
   const notifyCharRadios = document.querySelectorAll('input[name="notify-char"]');
+  const notifyChkBubble = document.getElementById("notify-chk-bubble");
+  const notifyDialect = document.getElementById("notify-dialect");
   initFoxDrag();
   if (btnNotifySettings && notifyModal) {
     const closeNotifyModal = () => {
@@ -231,6 +233,8 @@ async function setupListeners() {
       notifyChkPane.checked = notifyFlashPrefs.pane;
       notifyChkList.checked = notifyFlashPrefs.list;
       notifyCharRadios.forEach((r) => { r.checked = r.value === notifyFlashPrefs.character; });
+      if (notifyChkBubble) notifyChkBubble.checked = notifyFlashPrefs.bubble;
+      if (notifyDialect) notifyDialect.value = notifyFlashPrefs.dialect;
       // The native browser overlay floats above all HTML; hide it so the modal shows.
       if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
       notifyModal.classList.remove("hidden");
@@ -249,6 +253,16 @@ async function setupListeners() {
       if (r.value === "none") hideFox();
       else if (fox) fox.dataset.char = r.value; // live-switch the visible character
     }));
+    if (notifyChkBubble) notifyChkBubble.addEventListener("change", () => {
+      notifyFlashPrefs.bubble = notifyChkBubble.checked;
+      saveNotifyFlashPrefs();
+      const fox = document.getElementById("fox-buddy");
+      if (!notifyChkBubble.checked && fox) fox.classList.remove("bubble-on", "bubble-below");
+    });
+    if (notifyDialect) notifyDialect.addEventListener("change", () => {
+      notifyFlashPrefs.dialect = notifyDialect.value;
+      saveNotifyFlashPrefs();
+    });
   }
 
   // GitHub shortcut (session panel footer) → open the repo in the OS default browser.
@@ -2113,12 +2127,16 @@ function trackOutputSilence(id, t) {
 // session-list row. Both off = no visual flash (unseen badge / taskbar
 // attention still apply).
 const notifyFlashPrefs = (() => {
-  const base = { pane: true, list: true, fox: true, character: null };
+  const base = { pane: true, list: true, fox: true, character: null, bubble: true, dialect: "chungcheong" };
   let p;
   try { p = { ...base, ...JSON.parse(localStorage.getItem("notifyFlashPrefs") || "{}") }; }
   catch { p = { ...base }; }
   // Migrate the old boolean `fox` flag → `character` ("classic" | "none").
-  if (p.character == null) p.character = p.fox ? "classic" : "none";
+  // New installs (no saved prefs at all) default straight to "mascot".
+  if (p.character == null) {
+    const hadSavedPrefs = localStorage.getItem("notifyFlashPrefs") != null;
+    p.character = !hadSavedPrefs ? "mascot" : (p.fox ? "classic" : "none");
+  }
   return p;
 })();
 function saveNotifyFlashPrefs() {
@@ -2179,6 +2197,55 @@ function clearPaneFlash(id) {
 let foxHideTimer = null;
 let foxFadeTimer = null;
 let foxMascotRevert = null;
+// Shown once ever, the very first time the buddy appears for a brand-new
+// user, explaining what it is and how to turn it off. Never repeats after.
+const FOX_INTRO_KEY = "mymuxFoxIntroSeen";
+let foxIntroPending = (() => { try { return localStorage.getItem(FOX_INTRO_KEY) == null; } catch { return false; } })();
+const FOX_INTRO_MESSAGE = "작업이 끝나면 제가 알려드려요! 🔔 아이콘으로 끌 수도 있어요.";
+// Encouragement lines the buddy speaks, per Korean dialect (표준어 + 4 사투리).
+const BUDDY_PHRASES = {
+  standard:    ["잘했어요! 👏", "수고했어요!", "오늘도 멋져요!", "이대로 쭉 가요!", "완벽해요! ✨", "최고예요!", "고생 많았어요!"],
+  gyeongsang:  ["억수로 잘했다 아이가!", "욕봤다 마!", "단디 했네 그마!", "잘한다 잘한다!", "억수로 대단하데이!", "고생했데이!", "머스마 잘하네!"],
+  jeolla:      ["겁나 잘했어야!", "욕봤네 잉~", "허벌나게 잘했구마잉!", "아따 잘하네 잉!", "수고혔어라~", "겁나게 멋지구마잉!", "잘혔어야~"],
+  gangwon:     ["잘했드래요!", "욕봤드래요~", "참 잘했잖소!", "대단하드래!", "고생 많았드래요!", "멋지드래요!", "잘하잖소~"],
+  chungcheong: ["잘혔슈~", "욕봤슈~", "잘했구먼유~", "대단허유~", "수고혔슈~", "멋지구먼유~", "그려유, 잘혔슈~"],
+};
+// Show the encouragement bubble above (or below) the buddy, clamped to the
+// viewport so it's never clipped off an edge. `left/top/FW/FH` are the buddy's
+// target fixed-position rect.
+function showFoxBubble(fox, left, top, FW, FH) {
+  const bubble = fox.querySelector(".fox-bubble");
+  if (!bubble) return;
+  if (!notifyFlashPrefs.bubble) { fox.classList.remove("bubble-on", "bubble-below"); return; }
+  if (foxIntroPending) {
+    bubble.textContent = FOX_INTRO_MESSAGE;
+    foxIntroPending = false;
+    try { localStorage.setItem(FOX_INTRO_KEY, "1"); } catch {}
+  } else {
+    const dialect = BUDDY_PHRASES[notifyFlashPrefs.dialect] ? notifyFlashPrefs.dialect : "standard";
+    const list = BUDDY_PHRASES[dialect];
+    // Vary by pane id + timer handle so repeats differ without Math.random.
+    const idx = (Math.abs(Number(fox._paneId) || 0) + (bubble._spin = (bubble._spin || 0) + 1)) % list.length;
+    bubble.textContent = list[idx];
+  }
+  fox.classList.remove("bubble-below");
+  bubble.style.transform = "translateX(-50%)";
+  bubble.style.removeProperty("--tail-x");
+  fox.classList.add("bubble-on");
+  // Measure now (size is position-independent even while the buddy glides).
+  const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+  const winW = window.innerWidth, winH = window.innerHeight, M = 6;
+  const centerX = left + FW / 2;
+  const bLeft = centerX - bw / 2;
+  let dx = 0;
+  if (bLeft < M) dx = M - bLeft;
+  else if (bLeft + bw > winW - M) dx = (winW - M) - (bLeft + bw);
+  bubble.style.transform = `translateX(calc(-50% + ${Math.round(dx)}px))`;
+  const tailX = Math.max(12, Math.min(bw - 12, bw / 2 - dx));
+  bubble.style.setProperty("--tail-x", `${Math.round(tailX)}px`);
+  if (top - 9 - bh < M) fox.classList.add("bubble-below"); // no room above → drop below
+}
+
 function showFoxAt(paneEl, paneId) {
   const fox = document.getElementById("fox-buddy");
   if (!fox || !paneEl) return;
@@ -2224,6 +2291,7 @@ function showFoxAt(paneEl, paneId) {
     fox.style.top = top + "px";
     fox.classList.remove("fox-pop"); void fox.offsetWidth; fox.classList.add("fox-pop");
   }
+  showFoxBubble(fox, left, top, FW, FH); // encouragement bubble (clamped to viewport)
   if (foxHideTimer) clearTimeout(foxHideTimer);
   foxHideTimer = setTimeout(hideFox, 10200); // matches the border-pulse lifetime
 }
@@ -2231,6 +2299,7 @@ function hideFox() {
   if (foxHideTimer) { clearTimeout(foxHideTimer); foxHideTimer = null; }
   const fox = document.getElementById("fox-buddy");
   if (!fox || fox.classList.contains("hidden")) return;
+  fox.classList.remove("bubble-on", "bubble-below");
   // Fade + shrink out (CSS transition), then fully hide once it's invisible.
   fox.classList.add("fox-leaving");
   if (foxFadeTimer) clearTimeout(foxFadeTimer);

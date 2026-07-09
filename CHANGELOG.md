@@ -8,6 +8,27 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.29 — 2026-07-10
+
+### Added / 새 기능
+- **Buddy mascot defaults to on, with dialect-flavored encouragement / 마스코트 기본 활성화 + 사투리 격려 말풍선.**
+  A finished task now shows the 🦊 buddy as the "마스코트" character by default
+  (previously the classic fox), with its speech bubble on by default too. The
+  bubble's encouragement line can be spoken in one of five styles picked in the
+  🔔 notify settings: 표준어 (standard), 경상도, 전라도, 강원도, or 충청도 — now the
+  default. A brand-new install also gets a one-time explainer bubble on its very
+  first completed task ("작업이 끝나면 제가 알려드려요! 🔔 아이콘으로 끌 수도 있어요."),
+  which never repeats afterward.
+
+  작업이 끝나면 나타나는 🦊 버디가 이제 기본값으로 "마스코트" 캐릭터로 표시됩니다
+  (기존엔 클래식 여우였음), 말풍선 격려 메시지도 기본으로 켜져 있습니다. 말풍선
+  문구는 🔔 알림 설정에서 표준어·경상도·전라도·강원도·충청도 중 하나로 고를 수 있고,
+  이제 기본값은 충청도입니다. 처음 설치한 사용자는 첫 작업이 끝났을 때 한 번만
+  "작업이 끝나면 제가 알려드려요! 🔔 아이콘으로 끌 수도 있어요."라는 안내 말풍선을
+  보게 되고, 이후로는 다시 뜨지 않습니다.
+
+---
+
 ## v0.1.28 — 2026-07-09
 
 ### Fixed / 버그 수정

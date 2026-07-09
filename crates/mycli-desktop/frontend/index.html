@@ -385,6 +385,16 @@
           <span class="char-name">마스코트<br>Mascot</span>
         </label>
       </div>
+      <label class="chk-row" style="margin-top:2px;"><input type="checkbox" id="notify-chk-bubble" /> 💬 말풍선 독려 메시지 / Encouragement speech bubble</label>
+      <label class="chk-row" style="gap:8px;">사투리 / Dialect
+        <select id="notify-dialect" class="notify-select">
+          <option value="standard">표준어</option>
+          <option value="gyeongsang">경상도</option>
+          <option value="jeolla">전라도</option>
+          <option value="gangwon">강원도</option>
+          <option value="chungcheong">충청도</option>
+        </select>
+      </label>
       <div class="modal-actions">
         <button id="notify-modal-close">확인</button>
       </div>
@@ -466,6 +476,8 @@
         <path d="M 44 62 Q 50 67 56 62" class="m-mouth" fill="none" stroke="#1f1f1f" stroke-width="2" stroke-linecap="round"/>
       </svg>
     </div>
+    <!-- Encouragement speech bubble (optional, dialect-flavored) -->
+    <div class="fox-bubble" aria-hidden="true"></div>
   </div>
 
   <div id="toast" class="hidden"></div>

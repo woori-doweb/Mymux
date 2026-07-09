@@ -2150,6 +2150,54 @@ html[data-theme="light"] #toolbar-actions #btn-update:hover {
 
 .hidden { display: none !important; }
 
+/* ── Buddy speech bubble (encouragement, dialect-flavored) ── */
+.fox-bubble {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 9px);
+  transform: translateX(-50%);
+  max-width: 230px;
+  width: max-content;
+  padding: 7px 11px;
+  background: #fff;
+  color: #2b1c12;
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  font-weight: 600;
+  text-align: center;
+  white-space: normal;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  display: none;
+  z-index: 2; /* above the character art; #fox-buddy overflow is visible so it's never clipped */
+}
+#fox-buddy.bubble-on .fox-bubble { display: block; }
+.fox-bubble::after { /* tail pointing at the character */
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: var(--tail-x, 50%);
+  transform: translateX(-50%);
+  border: 7px solid transparent;
+  border-top-color: #fff;
+}
+#fox-buddy.bubble-below .fox-bubble { bottom: auto; top: calc(100% + 9px); }
+#fox-buddy.bubble-below .fox-bubble::after {
+  top: auto; bottom: 100%;
+  border-top-color: transparent; border-bottom-color: #fff;
+}
+
+/* Dialect dropdown in the 🔔 modal */
+.notify-select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 /* ── Buddy character picker (🔔 modal): selectable preview cards ── */
 .char-picker { display: flex; gap: 8px; margin-bottom: 16px; }
 .char-card {
