@@ -8,6 +8,31 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.26 — 2026-07-09
+
+### Fixed / 버그 수정
+- **Completion buddy no longer repeats on stopped sessions / 멈춘 세션 알림 반복 완전 제거.**
+  A stopped/idle program that keeps ringing the bell or re-emitting an OSC
+  desktop-notification (some TUIs, pollers, shells) could re-flash the pane/fox
+  over and over. All notify paths (bell, OSC 9/777, OSC 133;D, output-silence)
+  now share one "notify once until you type again" guard.
+
+  멈춘 프로그램이 계속 bell을 울리거나 OSC 알림을 반복 발생시키면 패인/여우가
+  계속 번쩍이던 문제를 완전히 고쳤습니다. 모든 알림 경로(bell·OSC 9/777·OSC
+  133;D·출력 침묵)가 "다시 입력 전까지 1회만" 규칙을 공유합니다.
+
+- **No more scroll bounce while reading scrollback / 스크롤백 보는 중 화면 튕김 제거.**
+  When you had scrolled up to read history, an automatic focus restore (Alt-Tab
+  return, or a background app stealing focus) snapped the view to the bottom,
+  then you scrolled up again, over and over — an intermittent up/down bounce. The
+  scroll position is now preserved across focus restores.
+
+  스크롤을 올려 기록을 보는 동안 자동 포커스 복원(Alt-Tab 복귀나 다른 앱의 포커스
+  가로채기)이 화면을 맨 아래로 끌어내려, 다시 올리면 또 내려가던 간헐적 위아래
+  튕김을 고쳤습니다. 포커스 복원 시 스크롤 위치를 유지합니다.
+
+---
+
 ## v0.1.25 — 2026-07-09
 
 ### Added / 새 기능

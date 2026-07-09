@@ -1699,16 +1699,29 @@ async function createPane(parentEl, shell, args, cwd) {
     }
   });
 
+  // Notify at most ONCE per input cycle. A stopped/idle program that keeps
+  // ringing the bell or re-emitting an OSC desktop-notification (some TUIs,
+  // pollers, and shells do this while sitting idle) would otherwise re-flash the
+  // pane/fox forever. Shared with the silence watcher + OSC 133;D via the same
+  // notifiedQuiet flag, which term.onData clears the moment the user types — so
+  // the next real interaction re-arms a single fresh notification.
+  const notifyOnce = () => {
+    const t = terminals.get(id);
+    if (!t || t.notifiedQuiet) return;
+    t.notifiedQuiet = true;
+    flashPaneNotify(id);
+  };
+
   // Terminal bell → flash this pane/session (task done / needs input).
-  if (term.onBell) term.onBell(() => flashPaneNotify(id));
+  if (term.onBell) term.onBell(notifyOnce);
   // Many CLIs (incl. claude/codex notification modes) signal completion with an
   // OSC desktop-notification instead of a plain bell — xterm consumes the
   // trailing BEL of an OSC so onBell alone misses those. Catch the common ones.
   if (term.parser && term.parser.registerOscHandler) {
     // OSC 9 ; <message>  (iTerm-style). Skip ConEmu progress form "9;<digit>;…".
-    term.parser.registerOscHandler(9, (data) => { if (!/^[0-9];/.test(data)) flashPaneNotify(id); return false; });
+    term.parser.registerOscHandler(9, (data) => { if (!/^[0-9];/.test(data)) notifyOnce(); return false; });
     // OSC 777 ; notify ; <title> ; <body>  (notify-send style).
-    term.parser.registerOscHandler(777, (data) => { if (/^notify/.test(data)) flashPaneNotify(id); return false; });
+    term.parser.registerOscHandler(777, (data) => { if (/^notify/.test(data)) notifyOnce(); return false; });
     // OSC 52 ; <target> ; <base64>  — clipboard write from the running app
     // (tmux/vim/Claude Code "copied" actions). xterm drops it by default, so the
     // TUI reports "copied" while the Windows clipboard never changes.
@@ -1910,9 +1923,19 @@ function startFocusKeeper() {
     if (ae && ae !== document.body && !el.contains(ae) &&
         (ae.tagName === "INPUT" || ae.isContentEditable ||
          (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+    // Preserve the scrollback position across the focus dance. Calling .focus()
+    // on the helper textarea (which sits at the cursor row, i.e. the bottom)
+    // makes the browser scroll the viewport to reveal it — so if the user has
+    // scrolled UP to read scrollback and focus is then restored (Alt-Tab return,
+    // or a background app like Veraport stealing focus every few seconds), the
+    // view snaps to the bottom. They scroll up again, it snaps again → the
+    // intermittent "위아래로 튕김" bounce. Save scrollTop and put it back.
+    const vp = el.querySelector(".xterm-viewport");
+    const savedTop = vp ? vp.scrollTop : null;
     try { if (ta) ta.blur(); } catch {}
     try { t.term.focus(); } catch {}
-    try { if (ta && document.activeElement !== ta) ta.focus(); } catch {}
+    try { if (ta && document.activeElement !== ta) ta.focus({ preventScroll: true }); } catch {}
+    if (vp && savedTop != null && vp.scrollTop !== savedTop) vp.scrollTop = savedTop;
     if (focusedPaneId !== pid) { try { setFocusedPane(pid); } catch {} }
   };
   // On return, retry across a few frames — WebView2 can move focus to <body> a
