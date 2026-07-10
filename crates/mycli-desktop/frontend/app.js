@@ -348,6 +348,25 @@ async function setupListeners() {
   const btnExpFwd = document.getElementById("btn-explorer-forward");
   if (btnExpBack) btnExpBack.addEventListener("click", explorerBack);
   if (btnExpFwd) btnExpFwd.addEventListener("click", explorerForward);
+  const btnExpNewFolder = document.getElementById("btn-explorer-newfolder");
+  if (btnExpNewFolder) btnExpNewFolder.addEventListener("click", openNewFolderModal);
+  const newFolderOpenSession = document.getElementById("newfolder-open-session");
+  if (newFolderOpenSession) {
+    newFolderOpenSession.addEventListener("change", () => {
+      const opts = document.getElementById("newfolder-session-opts");
+      if (opts) opts.classList.toggle("hidden", !newFolderOpenSession.checked);
+    });
+  }
+  const newFolderName = document.getElementById("newfolder-name");
+  if (newFolderName) {
+    newFolderName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); confirmNewFolder(); }
+    });
+  }
+  const newFolderCancel = document.getElementById("newfolder-cancel");
+  if (newFolderCancel) newFolderCancel.addEventListener("click", closeNewFolderModal);
+  const newFolderConfirm = document.getElementById("newfolder-confirm");
+  if (newFolderConfirm) newFolderConfirm.addEventListener("click", confirmNewFolder);
 
   // Mouse "back"(3) / "forward"(4) special buttons — navigate directory
   // history just like Chrome's back/forward. When the native browser panel is
@@ -761,6 +780,8 @@ function syncExplorerNav() {
   const fwd = document.getElementById("btn-explorer-forward");
   if (back) back.disabled = explorerHistIdx <= 0;
   if (fwd) fwd.disabled = explorerHistIdx >= explorerHistory.length - 1;
+  const btnNewFolder = document.getElementById("btn-explorer-newfolder");
+  if (btnNewFolder) btnNewFolder.classList.toggle("hidden", currentSftpId != null);
   if (explorerMode) {
     const want = currentSftpId == null ? "local" : String(currentSftpId);
     if (explorerMode.value !== want && [...explorerMode.options].some((o) => o.value === want)) {
@@ -1411,6 +1432,64 @@ function cdToTerminal(path) {
     splitPane("horizontal", path);
   } else {
     spawnTerminal(undefined, path);
+  }
+}
+
+// ── Explorer: new folder modal ──
+function openNewFolderModal() {
+  const modal = document.getElementById("newfolder-modal");
+  const nameInput = document.getElementById("newfolder-name");
+  const errEl = document.getElementById("newfolder-error");
+  const openSession = document.getElementById("newfolder-open-session");
+  const tabCurrent = document.getElementById("newfolder-tab-current");
+  const opts = document.getElementById("newfolder-session-opts");
+  if (!modal || !nameInput) return;
+  nameInput.value = "";
+  if (errEl) { errEl.textContent = ""; errEl.classList.add("hidden"); }
+  if (openSession) openSession.checked = true;
+  if (tabCurrent) tabCurrent.checked = true;
+  if (opts) opts.classList.remove("hidden");
+  modal.classList.remove("hidden");
+  nameInput.focus();
+}
+
+function closeNewFolderModal() {
+  const modal = document.getElementById("newfolder-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function showNewFolderError(msg) {
+  const errEl = document.getElementById("newfolder-error");
+  if (!errEl) return;
+  errEl.textContent = msg;
+  errEl.classList.remove("hidden");
+}
+
+async function confirmNewFolder() {
+  const nameInput = document.getElementById("newfolder-name");
+  if (!nameInput) return;
+  const name = nameInput.value.trim();
+  if (!name || name.includes("/") || name.includes("\\")) {
+    showNewFolderError("폴더 이름이 비어있거나 올바르지 않습니다.");
+    return;
+  }
+  let newPath;
+  try {
+    newPath = await invoke("fs_create_dir", { dir: currentExplorerPath, name });
+  } catch (e) {
+    showNewFolderError(String(e));
+    return;
+  }
+  closeNewFolderModal();
+  await loadExplorer();
+  const openSession = document.getElementById("newfolder-open-session");
+  if (openSession && openSession.checked) {
+    const tabNew = document.getElementById("newfolder-tab-new");
+    if (tabNew && tabNew.checked) {
+      spawnTerminal(undefined, newPath);
+    } else {
+      cdToTerminal(newPath);
+    }
   }
 }
 

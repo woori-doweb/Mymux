@@ -319,6 +319,25 @@ pub fn fs_move_path(src: String, dest_dir: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Create a new folder named `name` inside `dir`. Refuses empty names, names
+/// containing path separators, and names that already exist.
+#[tauri::command]
+pub fn fs_create_dir(dir: String, name: String) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Folder name cannot be empty.".into());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("Folder name cannot contain / or \\.".into());
+    }
+    let target = std::path::Path::new(&dir).join(trimmed);
+    if target.exists() {
+        return Err("An item with the same name already exists.".into());
+    }
+    std::fs::create_dir(&target).map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 pub fn execute_command(command_text: String) -> Result<String, String> {
     let output = mycli_core::executor::run(&command_text).map_err(|e| e.to_string())?;

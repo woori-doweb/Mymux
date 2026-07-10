@@ -36,6 +36,7 @@ fn main() {
             commands::pick_key_file,
             commands::fs_copy_path,
             commands::fs_move_path,
+            commands::fs_create_dir,
             commands::paste_clipboard_image,
             session::session_save,
             session::session_load,

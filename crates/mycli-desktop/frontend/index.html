@@ -64,6 +64,7 @@
           <button id="btn-explorer-back" class="explorer-nav-btn" title="Back (mouse back button)" disabled>&#9664;</button>
           <button id="btn-explorer-forward" class="explorer-nav-btn" title="Forward (mouse forward button)" disabled>&#9654;</button>
           <button id="btn-explorer-up" class="explorer-nav-btn" title="Go to parent folder">&#11014;</button>
+          <button id="btn-explorer-newfolder" class="explorer-nav-btn" title="새 폴더 만들기">+</button>
           <span id="explorer-path" title="Current path">/</span>
         </div>
         <div class="search-wrap">
@@ -285,6 +286,24 @@
         <button id="close-cancel" class="secondary">Cancel</button>
         <button id="close-forget" class="secondary">Quit without saving</button>
         <button id="close-save">Save &amp; quit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New folder (Explorer, local only) -->
+  <div id="newfolder-modal" class="hidden">
+    <div class="modal-box">
+      <h2>새 폴더 만들기</h2>
+      <input type="text" id="newfolder-name" placeholder="폴더 이름" spellcheck="false" autocomplete="off" />
+      <p id="newfolder-error" class="hidden" style="color: var(--danger, #e5534b); margin-bottom: 12px;"></p>
+      <label class="chk-row"><input type="checkbox" id="newfolder-open-session" checked /> 세션을 열까요?</label>
+      <div id="newfolder-session-opts" class="chk-row" style="gap: 14px;">
+        <label class="chk-row" style="margin-bottom: 0;"><input type="radio" name="newfolder-tab" id="newfolder-tab-current" checked /> 지금 탭</label>
+        <label class="chk-row" style="margin-bottom: 0;"><input type="radio" name="newfolder-tab" id="newfolder-tab-new" /> 새 탭</label>
+      </div>
+      <div class="modal-actions">
+        <button id="newfolder-cancel" class="secondary">Cancel</button>
+        <button id="newfolder-confirm">Confirm</button>
       </div>
     </div>
   </div>
