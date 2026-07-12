@@ -26,6 +26,7 @@ async function clipboardWrite(text) {
 async function pasteIntoPane(id) {
   const entry = terminals.get(id);
   const feed = (text) => {
+    armNotifyCycle(id); // paste is real user input — re-arm the task-done notify
     if (entry && entry.term) entry.term.paste(text);
     else invoke("pty_write", { id, data: text });
   };
@@ -1419,6 +1420,7 @@ function cdToTerminal(path) {
       }
       targetId = activeTermId; // fallback: best-effort to the active terminal
     }
+    armNotifyCycle(targetId); // user-launched command — its completion should notify
     invoke("pty_write", { id: targetId, data: `cd '${safe}'\r` });
     // Bring that SSH session into view so the user sees the directory change.
     const tab = findTabForPane(targetId);
@@ -1745,6 +1747,12 @@ async function createPane(parentEl, shell, args, cwd) {
   // Ctrl +/- to change terminal font size, Ctrl+0 to reset (intercept before
   // xterm/PTY so the keys don't reach the shell or zoom the WebView).
   term.attachCustomKeyEventHandler((e) => {
+    // Real keystrokes re-arm the once-per-cycle task-done notification and
+    // reset the silence window so keystroke echo never counts as "work
+    // output" (see the term.onData note — onData can't tell typing from
+    // xterm-generated replies). Bare modifiers are skipped: Alt fires when
+    // alt-tabbing away, Ctrl on Ctrl+wheel zoom — neither is interaction.
+    if (e.type === "keydown" && !NOTIFY_REARM_SKIP_KEYS.has(e.key)) armNotifyCycle(id);
     if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey) {
       // Paste with Ctrl/Cmd+V (also Ctrl+Shift+V). Match e.code too — with the
       // Korean IME active e.key arrives as "ㅍ"/"ㅊ" or "Process", never the
@@ -1792,11 +1800,18 @@ async function createPane(parentEl, shell, args, cwd) {
   });
 
   term.onData((data) => {
-    // Typing means the user is interacting, not waiting on a task: remember the
-    // time (gates the OSC 133;D "long command finished" flash) and cancel the
-    // output-silence watch so keystroke echo never counts as "work output".
+    // NOTE: do NOT re-arm the task-done notification here. onData is not only
+    // user typing — xterm also routes terminal-GENERATED data through it:
+    // focus reports CSI I/O (when the running app enables mode 1004, as Claude
+    // Code does), color/DA/DSR query replies, mouse reports, and alt-screen
+    // wheel→arrow conversion. Window-focus churn and idle redraws kept
+    // re-opening the once-per-cycle gate, so a completely idle pane re-flashed
+    // forever. Real interaction re-arms via armNotifyCycle instead: keydown
+    // (custom key handler), paste, UI-launched commands — plus mouse CLICKS
+    // inside a mouse-tracking TUI (picking a Claude Code menu option is input
+    // too). SGR press reports only; hover/move/wheel reports must not re-arm.
     const ti = terminals.get(id);
-    if (ti) { ti.lastInputAt = performance.now(); ti.outStart = null; ti.notifiedQuiet = false; }
+    if (/\x1b\[<[0-2];\d+;\d+M/.test(data)) armNotifyCycle(id);
     // Remember the command being submitted so a restored session can offer to
     // re-run it (e.g. relaunch `claude`/`codex`). Two capture paths:
     //   • Local shells with Mymux OSC 133 integration → getInputRegion (exact).
@@ -2188,6 +2203,19 @@ function setupSessionResizer() {
 // every few seconds, each keystroke-to-keystroke cycle notifies at most once.
 const NOTIFY_MIN_WORK_MS = 5000;
 const NOTIFY_SILENCE_MS = 1500;
+// Re-arm the once-per-input-cycle task-done notification for a pane. Called on
+// REAL user interaction only — keydown, paste, TUI mouse clicks, UI-launched
+// commands — never from term.onData wholesale (it also carries xterm-generated
+// focus reports / query replies; see the onData note). Also stamps lastInputAt
+// (gates the OSC 133;D ≥5s check) and resets the output-silence work window.
+const NOTIFY_REARM_SKIP_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "NumLock", "ScrollLock"]);
+function armNotifyCycle(id) {
+  const t = terminals.get(id);
+  if (!t) return;
+  t.lastInputAt = performance.now();
+  t.outStart = null;
+  t.notifiedQuiet = false;
+}
 function trackOutputSilence(id, t) {
   const now = performance.now();
   if (t.outStart == null) t.outStart = now;
@@ -4612,6 +4640,7 @@ function sendToTerminal(command) {
     toast("No active terminal.", true);
     return;
   }
+  armNotifyCycle(activeTermId); // user-launched command — its completion should notify
   invoke("pty_write", { id: activeTermId, data: command + "\r" });
   terminals.get(activeTermId)?.term.focus();
 }
@@ -4644,6 +4673,7 @@ function runCommandCombo(cmd, ptyId = activeTermId) {
     return;
   }
   const line = commandComboLine(cmd, paneShellKind(terminals.get(ptyId)));
+  armNotifyCycle(ptyId); // user-launched command — its completion should notify
   invoke("pty_write", { id: ptyId, data: line + "\r" });
   terminals.get(ptyId)?.term.focus();
 }
@@ -4657,6 +4687,7 @@ function sendCommandWhenReady(ptyId, line) {
     const t = terminals.get(ptyId);
     if (!t) return; // pane closed before the shell came up
     if ((t.marks && t.marks.length > 0) || performance.now() - t0 > 2500) {
+      armNotifyCycle(ptyId); // user-launched command — its completion should notify
       invoke("pty_write", { id: ptyId, data: line + "\r" });
       return;
     }
@@ -4676,6 +4707,7 @@ async function openSessionWithCommand(path, cmd) {
     if (targetId == null) targetId = activeTermId;
     if (targetId == null || !terminals.has(targetId)) { toast("이 서버의 SSH 세션을 찾을 수 없습니다.", true); return; }
     const safe = String(path).replace(/'/g, "'\\''");
+    armNotifyCycle(targetId); // user-launched command — its completion should notify
     invoke("pty_write", { id: targetId, data: `cd '${safe}' && ${cmd.command}\r` });
     const tab = findTabForPane(targetId);
     if (tab && tab.tabIdx !== activeTabIdx) switchToTab(tab.tabIdx);
