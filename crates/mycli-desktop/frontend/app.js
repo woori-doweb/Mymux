@@ -94,6 +94,17 @@ let letterSpacingRatio = (function () {
   } catch {}
   return 0.1;
 })();
+// Effective per-cell letter spacing in px. On macOS this is forced to 0: WKWebView
+// (WebKit) applies CSS `letter-spacing` as trailing space that xterm's DOM renderer
+// does NOT fold into its cell-width measurement, so any non-zero value drifts every
+// glyph a fraction of a cell to the right. Past ~a line that desyncs xterm's cursor
+// column from zsh's ZLE model — characters land in the wrong column and zsh's
+// erase-by-`\b \b` paints its space at the visible cursor, so Backspace looks like it
+// types a space. SF Mono/Menlo are already comfortably spaced (unlike D2Coding's
+// narrow CJK cells that the ratio was tuned for), so 0 is also the right look on Mac.
+function effectiveLetterSpacing() {
+  return IS_MAC ? 0 : terminalFontSize * letterSpacingRatio;
+}
 let savedCmds = [];
 let currentInput = "";
 let acSelectedIdx = -1;
@@ -580,10 +591,17 @@ async function setupListeners() {
   if (btnFontInc) btnFontInc.addEventListener("click", () => adjustTerminalFontSize(1));
 
   // Letter spacing (top bar 자−/자+) — adjust the persisted 자간 ratio live.
+  // Hidden on macOS: letter-spacing is force-disabled there (effectiveLetterSpacing),
+  // so the buttons would be dead controls.
   const btnTrackDec = document.getElementById("btn-track-dec");
-  if (btnTrackDec) btnTrackDec.addEventListener("click", () => adjustLetterSpacing(-0.025));
   const btnTrackInc = document.getElementById("btn-track-inc");
-  if (btnTrackInc) btnTrackInc.addEventListener("click", () => adjustLetterSpacing(0.025));
+  if (IS_MAC) {
+    if (btnTrackDec) btnTrackDec.style.display = "none";
+    if (btnTrackInc) btnTrackInc.style.display = "none";
+  } else {
+    if (btnTrackDec) btnTrackDec.addEventListener("click", () => adjustLetterSpacing(-0.025));
+    if (btnTrackInc) btnTrackInc.addEventListener("click", () => adjustLetterSpacing(0.025));
+  }
 
   // File viewer close button.
   const vClose = document.getElementById("viewer-close");
@@ -3632,7 +3650,7 @@ function setTerminalFontSize(size) {
   for (const [, t] of terminals) {
     try {
       t.term.options.fontSize = terminalFontSize;
-      t.term.options.letterSpacing = terminalFontSize * letterSpacingRatio; // keep tracking across zoom
+      t.term.options.letterSpacing = effectiveLetterSpacing(); // keep tracking across zoom
     } catch {}
   }
   refitAllPanes(true); // font change keeps pixel size but must re-grid every pane
@@ -3646,7 +3664,7 @@ function setLetterSpacingRatio(ratio) {
   letterSpacingRatio = Math.max(0, Math.min(0.4, Math.round(ratio * 1000) / 1000));
   try { localStorage.setItem("mymux.termLetterSpacing", String(letterSpacingRatio)); } catch {}
   for (const [, t] of terminals) {
-    try { t.term.options.letterSpacing = terminalFontSize * letterSpacingRatio; } catch {}
+    try { t.term.options.letterSpacing = effectiveLetterSpacing(); } catch {}
   }
   refitAllPanes(true);
 }
@@ -4922,7 +4940,7 @@ function createXterm() {
     // Letter spacing (자간) — a persisted ratio of the font size so it scales with
     // Ctrl +/- zoom. Default ≈0.1 (~20% of a monospace cell) because Korean/CJK
     // glyphs look cramped at 0; adjustable from the toolbar (자−/자+).
-    letterSpacing: terminalFontSize * letterSpacingRatio,
+    letterSpacing: effectiveLetterSpacing(),
     // macOS: prefer the native terminal monospace (SF Mono/Menlo) so spacing
     // matches the system Terminal. D2Coding's wider glyphs made the letters
     // look too spaced out on Mac. Windows keeps its original chain.
