@@ -2532,11 +2532,20 @@ function initFoxDrag() {
 // 텍스트를 PTY 출력에서 파싱해, 세션 목록과 패인 우상단에 "model | effort | NN%"
 // 배지로 고정 표시한다. effort는 statusline에 없어 ~/.claude/settings.json의
 // effortLevel을 주기적으로 읽는다(전역값 — /model로 바꾸면 그 파일에 저장됨).
+// Codex CLI도 지원: 하단 상태줄의 `NN% context left`(잔량!)를 사용량으로 변환해
+// 같은 배지를 쓰고, 세션 배너의 소문자 `model: gpt-…` 라인에서 모델명을 얻는다.
+// 한 패인에서 두 도구가 번갈아 나오면 나중에 보인 쪽이 현재값이 된다.
 // The bar body never contains "]" and the percent sits right after optional
 // ANSI color codes, so one regex covers both `ctx:67%` and `ctx:[██░░]67%`.
 const CTX_RE = /ctx:(?:\[[^\]]*\])?(?:\x1b\[[0-9;]*m)*(\d{1,3})%/;
 // `Model: Fable 5` is wrapped in cyan — capture stops at the trailing ESC.
 const CTX_MODEL_RE = /Model:\s*(?:\x1b\[[0-9;]*m)*([^\x1b\r\n]{1,24})/;
+// Codex footer: `97% context left`. Anchored at the end of a window that stops
+// right after the key so an older occurrence inside the window can't win.
+const CODEX_CTX_KEY = "% context left";
+const CODEX_CTX_RE = /(\d{1,3})(?:\x1b\[[0-9;]*m)*%(?:\x1b\[[0-9;]*m|[ \t])*context left$/;
+// Codex banner/status line: `model: gpt-5.5-codex` — ids never contain spaces.
+const CODEX_MODEL_RE = /model:\s*(?:\x1b\[[0-9;]*m)*([A-Za-z0-9][A-Za-z0-9._-]{0,31})/;
 const CTX_STALE_MS = 5 * 60 * 1000; // no statusline redraw for 5 min → dim badge
 const CTX_LEVELS = [50, 70, 85];    // buddy announces when first crossing these
 const CTX_REARM_DROP = 10;          // re-arm once usage falls 10%p under a level
@@ -2556,17 +2565,29 @@ function scanCtxUsage(id, t, data) {
   const text = (t._ctxTail || "") + data;
   t._ctxTail = text.slice(-160);
   let changed = false;
-  // Only the LAST occurrence matters — the statusline redraws constantly and
+  // Only the LAST occurrence matters — the statuslines redraw constantly and
   // older matches in the same burst are already outdated.
+  // Claude (OMC HUD): `ctx:NN%` where NN is percent USED.
+  let claudePct = null, claudeAt = -1;
   const ci = text.lastIndexOf("ctx:");
   if (ci >= 0) {
     const m = CTX_RE.exec(text.slice(ci, ci + 90));
-    if (m) {
-      const pct = Math.min(100, parseInt(m[1], 10));
-      t.ctxAt = performance.now(); // fresh sighting even when the value is equal
-      if (pct !== t.ctxPct) { t.ctxPct = pct; changed = true; }
-      maybeAnnounceCtx(id, t);
-    }
+    if (m) { claudePct = Math.min(100, parseInt(m[1], 10)); claudeAt = ci; }
+  }
+  // Codex: `NN% context left` where NN is percent REMAINING → invert.
+  let codexPct = null, codexAt = -1;
+  const xi = text.lastIndexOf(CODEX_CTX_KEY);
+  if (xi >= 0) {
+    const m = CODEX_CTX_RE.exec(text.slice(Math.max(0, xi - 24), xi + CODEX_CTX_KEY.length));
+    if (m) { codexPct = 100 - Math.min(100, parseInt(m[1], 10)); codexAt = xi; }
+  }
+  // Both tools can show up in one pane over time — the later sighting wins.
+  const pct = codexAt > claudeAt ? codexPct : claudePct;
+  if (pct != null) {
+    const source = codexAt > claudeAt ? "codex" : "claude";
+    t.ctxAt = performance.now(); // fresh sighting even when the value is equal
+    if (pct !== t.ctxPct || source !== t.ctxSource) { t.ctxPct = pct; t.ctxSource = source; changed = true; }
+    maybeAnnounceCtx(id, t);
   }
   const mi = text.lastIndexOf("Model:");
   if (mi >= 0) {
@@ -2575,6 +2596,12 @@ function scanCtxUsage(id, t, data) {
       const name = m[1].trim();
       if (name && name !== t.ctxModel) { t.ctxModel = name; changed = true; }
     }
+  }
+  // lastIndexOf is case-sensitive, so this never re-reads the `Model:` line.
+  const xmi = text.lastIndexOf("model:");
+  if (xmi >= 0) {
+    const m = CODEX_MODEL_RE.exec(text.slice(xmi, xmi + 60));
+    if (m && m[1] !== t.codexModel) { t.codexModel = m[1]; changed = true; }
   }
   if (changed) updateCtxUi(id, t);
 }
@@ -2586,8 +2613,14 @@ function ctxColor(pct) {
 }
 function ctxBadgeText(t) {
   const parts = [];
-  if (t.ctxModel) parts.push(t.ctxModel);
-  if (claudeEffort) parts.push(claudeEffort);
+  if (t.ctxSource === "codex") {
+    // Codex has no effort in its status output (and none set in config.toml);
+    // its badge is "model | used%". ctxPct is already converted from "left".
+    parts.push(t.codexModel || "Codex");
+  } else {
+    if (t.ctxModel) parts.push(t.ctxModel);
+    if (claudeEffort) parts.push(claudeEffort);
+  }
   parts.push(t.ctxPct + "%");
   return parts.join(" | ");
 }
