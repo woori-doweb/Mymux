@@ -8,6 +8,22 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## v0.1.33 — 2026-07-18
+
+### Added / 새 기능
+- **Session badge reasoning setting / 세션 배지 리즈닝 설정 표시.**
+  Codex session badges now show `model | reasoning effort | usage` in both the
+  pane's top-right corner and the session list. The reasoning value is read
+  from the active session rollout when available, with
+  `~/.codex/config.toml`'s `model_reasoning_effort` as the fallback.
+
+  Codex 세션 배지가 패인 우상단과 세션 목록 모두에서
+  `모델 | 리즈닝 설정 | 사용량`을 표시합니다. 활성 세션의 롤아웃 값을 우선
+  사용하고, 없으면 `~/.codex/config.toml`의 `model_reasoning_effort`를
+  사용합니다.
+
+---
+
 ## v0.1.32 — 2026-07-18
 
 ### Fixed / 버그 수정
