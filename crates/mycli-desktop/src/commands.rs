@@ -243,14 +243,41 @@ pub struct ClaudeUsage {
     wk_resets_at: Option<String>,
 }
 
+/// Read Claude Code's stored OAuth credentials blob (JSON string).
+///
+/// Windows/Linux keep it at `<config>/.credentials.json`. macOS keeps it in the
+/// login **Keychain** (generic password, service `Claude Code-credentials`) and
+/// writes NO file — so on a Mac the file read always misses and the CL usage
+/// readout silently hid. Fall back to reading the Keychain via the `security`
+/// CLI (read-only: `find-generic-password -w` only reads, never writes), which
+/// returns the very same JSON shape the file would have.
+fn read_claude_credentials(config_dir: &std::path::Path) -> Result<String, String> {
+    if let Ok(raw) = std::fs::read_to_string(config_dir.join(".credentials.json")) {
+        return Ok(raw);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                return Ok(s);
+            }
+        }
+    }
+    Err("no credentials".to_string())
+}
+
 #[tauri::command]
 pub async fn claude_account_usage() -> Result<ClaudeUsage, String> {
     // Honor CLAUDE_CONFIG_DIR (custom profiles) the same way Claude Code / OMC do.
     let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude"));
-    let raw = std::fs::read_to_string(config_dir.join(".credentials.json"))
-        .map_err(|_| "no credentials".to_string())?;
+    let raw = read_claude_credentials(&config_dir)?;
     let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     // The token lives under `claudeAiOauth` (nested), with a flat-root fallback.
     let oauth = v.get("claudeAiOauth").unwrap_or(&v);
