@@ -2777,8 +2777,8 @@ function updateCtxUi(id, t) {
       const nameEl = li.querySelector(".session-name");
       if (nameEl) nameEl.after(se); else li.appendChild(se);
     }
-    se.textContent = ctxBadgeText(t);
-    se.title = ctxBadgeText(t);
+    se.textContent = t.ctxPct == null ? "—" : t.ctxPct + "%";
+    se.title = ctxBadgeText(t); // full "model | effort | ctx" on hover
     se.style.color = color;
     se.style.borderColor = color;
     se.classList.toggle("stale", stale);
