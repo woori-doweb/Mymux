@@ -83,16 +83,25 @@ body {
   overflow-y: auto;
 }
 #sidebar h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 8px 0; }
-#term-list, #audit-list { list-style: none; margin: 0; padding: 0; }
-#term-list li {
+#term-list, #proj-list, #audit-list { list-style: none; margin: 0; padding: 0; }
+#term-list li, #proj-list li {
   padding: 8px 10px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
   word-break: break-all;
 }
-#term-list li:hover { background: #1a2030; }
+#term-list li:hover, #proj-list li:hover { background: #1a2030; }
 #term-list li.active { background: #16314a; color: #fff; }
+#proj-list li { display: flex; align-items: center; gap: 6px; }
+#proj-list .proj-name { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#proj-list li .del {
+  background: none; border: 1px solid var(--border); border-radius: 5px;
+  color: var(--muted); font-size: 11px; padding: 1px 6px; cursor: pointer;
+  visibility: hidden;
+}
+#proj-list li:hover .del { visibility: visible; }
+#proj-list li .del:hover { border-color: var(--danger); color: var(--danger); }
 #audit-list li { font-size: 11px; color: var(--muted); padding: 3px 0; font-family: monospace; }
 .hidden { display: none !important; }   /* must beat .overlay{display:flex} / #tab-welcome{display:flex} */
 

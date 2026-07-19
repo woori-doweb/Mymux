@@ -11,6 +11,8 @@ mod commands;
 mod config;
 mod db;
 mod error;
+mod layout;
+mod projects;
 mod routes;
 mod state;
 mod terminal;

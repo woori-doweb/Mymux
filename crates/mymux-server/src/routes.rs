@@ -16,6 +16,8 @@ use crate::agent_status;
 use crate::audit;
 use crate::auth::{self, AuthUser};
 use crate::commands;
+use crate::layout;
+use crate::projects;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::util;
@@ -37,6 +39,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/commands/:id",
             put(commands::update_command).delete(commands::delete_command),
+        )
+        .route(
+            "/api/projects",
+            get(projects::list_projects).post(projects::create_project),
+        )
+        .route("/api/projects/:id", delete(projects::delete_project))
+        .route(
+            "/api/layout",
+            get(layout::get_layout).put(layout::put_layout),
         )
         .route("/api/agent-status", post(agent_status::post_status))
         .route("/api/agent-status/ack", post(agent_status::ack_status))

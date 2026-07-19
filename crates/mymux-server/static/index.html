@@ -16,6 +16,7 @@
     <button id="btn-new" title="새 탭">+ Tab</button>
     <button id="btn-split-h" title="좌우 분할 (Ctrl+Shift+D)">⬌</button>
     <button id="btn-split-v" title="상하 분할 (Ctrl+Shift+E)">⬍</button>
+    <button id="btn-even" title="분할 비율 균등 정렬 (레이아웃 복구)">⊞</button>
     <button id="btn-close" title="포커스된 페인 닫기 (Ctrl+Shift+W)">Close</button>
     <button id="btn-paste" title="포커스된 페인에 붙여넣기 (Ctrl+V · 중클릭)">Paste</button>
     <button id="btn-notify" title="에이전트 완료·입력 필요 시 브라우저 알림">🔔</button>
@@ -23,6 +24,13 @@
   </header>
   <main id="layout">
     <aside id="sidebar">
+      <div class="side-head">
+        <h2>Projects</h2>
+        <button id="btn-proj-add" class="mini" title="프로젝트 추가">+</button>
+      </div>
+      <ul id="proj-list"></ul>
+      <p id="proj-empty" class="muted hidden">프로젝트를 등록하면 한 번의 클릭으로 해당 폴더 터미널이 열립니다.</p>
+
       <h2>Terminals</h2>
       <ul id="term-list"></ul>
 
@@ -78,6 +86,19 @@
       <div class="modal-actions">
         <button type="button" id="paste-cancel" class="ghost">취소</button>
         <button type="submit">삽입</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="proj-modal" class="overlay hidden">
+    <form id="proj-form" class="modal-card">
+      <h2>프로젝트 추가</h2>
+      <label>이름<input type="text" id="proj-name" required maxlength="100" placeholder="예: crm-backend" autocomplete="off" spellcheck="false" /></label>
+      <label>폴더 경로<input type="text" id="proj-cwd" required maxlength="500" placeholder="예: /srv/mymux-workspaces/crm-backend" autocomplete="off" spellcheck="false" /></label>
+      <p id="proj-modal-error" class="error"></p>
+      <div class="modal-actions">
+        <button type="button" id="proj-cancel" class="ghost">취소</button>
+        <button type="submit">저장</button>
       </div>
     </form>
   </div>

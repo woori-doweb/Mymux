@@ -226,12 +226,24 @@
     if (p && t) { p.term.paste(t); p.term.focus(); }
   }
 
-  async function createServerTerminal() {
+  // quiet=true toasts instead of alert()ing — layout restore spawns several
+  // terminals in a row and must not stack modal alerts on partial failure.
+  async function createServerTerminal(cwd, quiet) {
     const cols = focused ? focused.term.cols : 120;
     const rows = focused ? focused.term.rows : 36;
-    const r = await api('/api/terminals', { method: 'POST', body: JSON.stringify({ cols, rows }) });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'terminal create failed'); return null; }
+    const body = { cols, rows };
+    if (cwd) body.cwd = cwd;
+    const r = await api('/api/terminals', { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      const msg = j.error || 'terminal create failed';
+      if (quiet) toast(msg); else alert(msg);
+      return null;
+    }
     const t = await r.json();
+    // Register immediately — a layout save can fire before the next 5s poll,
+    // and serialization needs this pane's cwd to survive a reload correctly.
+    termMeta[t.id] = t;
     return t.id;
   }
 
@@ -260,6 +272,7 @@
         document.removeEventListener('mouseup', onUp);
         document.body.classList.remove('dragging');
         forEachPane(split, fitPane);
+        saveLayoutSoon();
       };
       document.body.classList.add('dragging');
       document.addEventListener('mousemove', onMove);
@@ -312,6 +325,7 @@
     }
     fitTree(split);
     focusPane(q);
+    saveLayoutSoon();
   }
 
   function closePane(pane) {
@@ -343,26 +357,38 @@
     const nf = firstPane(t.root);
     if (nf) focusPane(nf);
     fitTree(t.root);
+    saveLayoutSoon();
   }
 
   // ── Tabs ──────────────────────────────────────────────────────────
   function tabById(id) { return tabs.find((t) => t.id === id); }
   function activeTab() { return tabById(activeTabId); }
 
-  async function newTab(existingTermId) {
-    const termId = existingTermId || await createServerTerminal();
+  async function newTab(existingTermId, opts) {
+    opts = opts || {};
+    const termId = existingTermId || await createServerTerminal(opts.cwd, opts.quiet);
     if (!termId) return;
     const pane = makePane(termId);
     const node = { type: 'pane', pane, parent: null };
     pane.node = node;
+    mountTab(node, opts.name);
+    saveLayoutSoon();
+  }
+
+  // Attach an already-built split-tree as a new tab (shared by newTab and
+  // layout restore, which rebuilds whole trees before mounting).
+  function mountTab(root, name) {
     const contentEl = document.createElement('div');
     contentEl.className = 'tab-root';
-    contentEl.appendChild(pane.el);
+    contentEl.appendChild(nodeEl(root));
     $('#tab-content').appendChild(contentEl);
-    const tab = { id: uid('t'), name: 'Tab ' + (tabs.length + 1), root: node, contentEl, focusedPaneId: pane.id };
-    pane.tabId = tab.id;
+    const tab = { id: uid('t'), name: name || ('Tab ' + (tabs.length + 1)), root, contentEl, focusedPaneId: null };
+    forEachPane(root, (p) => { p.tabId = tab.id; });
+    const fp = firstPane(root);
+    if (fp) tab.focusedPaneId = fp.id;
     tabs.push(tab);
     activateTab(tab.id);
+    return tab;
   }
 
   function activateTab(id) {
@@ -391,6 +417,7 @@
       if (tabs.length) activateTab(tabs[tabs.length - 1].id);
       else { activeTabId = null; focused = null; updateWelcome(); renderTabs(); }
     } else { renderTabs(); }
+    saveLayoutSoon();
   }
 
   function renderTabs() {
@@ -425,6 +452,195 @@
 
   function updateWelcome() {
     $('#tab-welcome').classList.toggle('hidden', tabs.length > 0);
+  }
+
+  // ── Layout persistence ──────────────────────────────────────────────
+  // The tab/split structure (with each pane's termId + cwd) is saved to the
+  // server, debounced after every structural change. On boot we rebuild it:
+  // sessions that still exist are reattached (scrollback intact), dead ones
+  // are respawned at their saved cwd — nmux-linux semantics: the structure
+  // survives a reload or server restart, the scrollback doesn't promise to.
+  let layoutSaveTimer = null;
+  let layoutReady = false;    // block saves until the initial restore finished
+  let layoutResume = false;   // lossy restore: resume saving on first user change
+  let restoreHadLoss = false; // a pane failed to respawn during restore
+
+  function serLayoutNode(node) {
+    if (node.type === 'pane') {
+      const m = termMeta[node.pane.termId];
+      return { t: 'p', termId: node.pane.termId, cwd: (m && m.cwd) || null };
+    }
+    return { t: 's', dir: node.dir, ratio: node.ratio, a: serLayoutNode(node.a), b: serLayoutNode(node.b) };
+  }
+  function layoutData() {
+    return { tabs: tabs.map((t) => ({ name: t.name, root: serLayoutNode(t.root) })) };
+  }
+  function saveLayoutSoon() {
+    if (!layoutReady) {
+      // After a LOSSY restore (quota/transient spawn failure dropped panes)
+      // the saved copy is better than what we're showing — don't overwrite it
+      // until the user makes a deliberate structural change (which is exactly
+      // when this function gets called), then their new reality wins.
+      if (!layoutResume) return;
+      layoutReady = true;
+      layoutResume = false;
+    }
+    clearTimeout(layoutSaveTimer);
+    layoutSaveTimer = setTimeout(saveLayoutNow, 1500);
+  }
+  function saveLayoutNow() {
+    if (!layoutReady) return;
+    clearTimeout(layoutSaveTimer);
+    api('/api/layout', { method: 'PUT', body: JSON.stringify({ data: layoutData() }) }).catch(() => {});
+  }
+
+  async function restoreLayout() {
+    let data = null;
+    try { const r = await api('/api/layout'); data = (await r.json()).data; } catch (e) { return; }
+    if (!data || !Array.isArray(data.tabs) || !data.tabs.length || tabs.length) return;
+    const attached = new Set();
+    for (const spec of data.tabs) {
+      if (!spec || !spec.root) continue;
+      const root = await buildLayoutNode(spec.root, attached, 0);
+      if (root) mountTab(root, spec.name);
+      else restoreHadLoss = true;             // whole tab dropped
+    }
+    if (tabs.length) {
+      toast(restoreHadLoss
+        ? '레이아웃을 일부만 복원했습니다 — 저장본은 다음 변경 전까지 보존됩니다'
+        : '이전 레이아웃을 복원했습니다');
+    }
+  }
+
+  async function buildLayoutNode(spec, attached, depth) {
+    if (!spec || depth > 16) return null;     // depth cap: corrupt/crafted blob
+    if (spec.t === 'p') {
+      let termId = null;
+      const live = spec.termId && termMeta[spec.termId];
+      if (live && !live.exited && !attached.has(spec.termId) && !panes.some((p) => p.termId === spec.termId)) {
+        termId = spec.termId;                                       // reattach
+      } else {
+        termId = await createServerTerminal(spec.cwd || null, true); // respawn
+      }
+      if (!termId) { restoreHadLoss = true; return null; }
+      attached.add(termId);
+      const pane = makePane(termId);
+      const node = { type: 'pane', pane, parent: null };
+      pane.node = node;
+      return node;
+    }
+    if (spec.t !== 's') return null;
+    const a = await buildLayoutNode(spec.a, attached, depth + 1);
+    const b = await buildLayoutNode(spec.b, attached, depth + 1);
+    if (!a || !b) return a || b;              // degrade to the surviving side
+    const ratio = (typeof spec.ratio === 'number' && spec.ratio > 0.05 && spec.ratio < 0.95) ? spec.ratio : 0.5;
+    const split = { type: 'split', dir: spec.dir === 'col' ? 'col' : 'row', ratio, a, b, el: null, divider: null, parent: null };
+    a.parent = split; b.parent = split;
+    buildSplitEl(split);
+    return split;
+  }
+
+  // "레이아웃 복구": mobile mistaps and drag accidents skew ratios — reset the
+  // active tab's splits to an even tiling (nmux-linux fix-layout, web edition).
+  function evenLayout() {
+    const t = activeTab();
+    if (!t) return;
+    forEachSplit(t.root, (s) => { s.ratio = 0.5; applyFlex(s); });
+    fitTree(t.root);
+    saveLayoutSoon();
+  }
+  function forEachSplit(node, fn) {
+    if (!node || node.type !== 'split') return;
+    fn(node);
+    forEachSplit(node.a, fn);
+    forEachSplit(node.b, fn);
+  }
+
+  // ── Projects (프로젝트 = 폴더 하나 = 작업 단위 하나) ─────────────────
+  let projects = [];
+
+  async function loadProjects() {
+    try { const r = await api('/api/projects'); projects = await r.json(); } catch (e) { return; }
+    renderProjects();
+  }
+
+  // Exact-cwd rollup: a project shows the agent badge of any live terminal
+  // spawned at its directory (same visibility rule as the terminal list).
+  function projectBadge(p) {
+    for (const id in termMeta) {
+      const m = termMeta[id];
+      if (m.cwd === p.cwd && m.agentStatus && AGENT_BADGE[m.agentStatus.state]) {
+        return AGENT_BADGE[m.agentStatus.state];
+      }
+    }
+    return null;
+  }
+
+  function renderProjects() {
+    const ul = $('#proj-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    $('#proj-empty').classList.toggle('hidden', projects.length !== 0);
+    projects.forEach((p) => {
+      const li = document.createElement('li');
+      const st = projectBadge(p);
+      if (st) {
+        const b = document.createElement('span');
+        b.className = 'agent-badge ' + st.cls;
+        b.textContent = st.icon;
+        b.title = 'Claude: ' + st.label;
+        li.appendChild(b);
+      }
+      const name = document.createElement('span');
+      name.className = 'proj-name';
+      name.textContent = p.name;
+      li.appendChild(name);
+      const x = mkCmdBtn('×', 'del', () => deleteProject(p));
+      x.title = '프로젝트 삭제';
+      li.appendChild(x);
+      li.title = p.cwd;
+      li.onclick = () => openProject(p);
+      ul.appendChild(li);
+    });
+  }
+
+  function openProject(p) {
+    closeDrawer();
+    const pane = panes.find((x) => {
+      const m = termMeta[x.termId];
+      return m && m.cwd === p.cwd;
+    });
+    if (pane) { activateTab(pane.tabId); focusPane(pane); return; }
+    newTab(null, { cwd: p.cwd, name: p.name });
+  }
+
+  async function deleteProject(p) {
+    if (!confirm('프로젝트를 삭제할까요? — ' + p.name + ' (열린 터미널은 닫히지 않습니다)')) return;
+    const r = await api('/api/projects/' + p.id, { method: 'DELETE' });
+    if (r.ok) await loadProjects();
+  }
+
+  function openProjModal() {
+    $('#proj-name').value = '';
+    $('#proj-cwd').value = '';
+    $('#proj-modal-error').textContent = '';
+    $('#proj-modal').classList.remove('hidden');
+    $('#proj-name').focus();
+  }
+  function closeProjModal() { $('#proj-modal').classList.add('hidden'); }
+
+  async function saveProject(e) {
+    e.preventDefault();
+    const body = { name: $('#proj-name').value.trim(), cwd: $('#proj-cwd').value.trim() };
+    if (!body.name || !body.cwd) { $('#proj-modal-error').textContent = '이름과 경로는 필수입니다.'; return; }
+    const r = await api('/api/projects', { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      $('#proj-modal-error').textContent = j.error || '저장 실패';
+      return;
+    }
+    closeProjModal();
+    await loadProjects();
   }
 
   // Sidebar click: focus the pane already showing this terminal, else open it
@@ -464,6 +680,7 @@
     });
     notifyAgentTransitions(list);
     renderTabs();          // tab chips carry the badge too
+    renderProjects();      // project rows roll the badge up by cwd
   }
 
   // ── Agent status: sticky-ack + notifications ────────────────────────
@@ -802,14 +1019,35 @@
     me = await r.json();
     $('#whoami').textContent = me.username + ' (' + me.role + ')';
     await refreshList();
+    await loadProjects();
     await loadAudit();
     await loadCommands();
     renderTabs();
     updateWelcome();
+    await restoreLayout();            // needs termMeta from refreshList above
+    layoutReady = !restoreHadLoss;    // lossy → hold the saved copy (see saveLayoutSoon)
+    layoutResume = restoreHadLoss;
     $('#btn-new').onclick = () => newTab();
     $('#btn-split-h').onclick = () => splitFocused('row');
     $('#btn-split-v').onclick = () => splitFocused('col');
+    $('#btn-even').onclick = evenLayout;
     $('#btn-close').onclick = () => { if (focused) closePane(focused); };
+    $('#btn-proj-add').onclick = openProjModal;
+    $('#proj-cancel').onclick = closeProjModal;
+    $('#proj-form').onsubmit = saveProject;
+    $('#proj-modal').onclick = (e) => { if (e.target.id === 'proj-modal') closeProjModal(); };
+    // Last-chance layout save when the page goes away (debounce may be pending).
+    window.addEventListener('pagehide', () => {
+      if (!layoutReady) return;
+      try {
+        fetch('/api/layout', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: layoutData() }),
+          keepalive: true,
+        });
+      } catch (e) { /* best effort */ }
+    });
     $('#btn-paste').onclick = () => pasteInto(focused);
     $('#btn-notify').onclick = toggleNotify;
     updateNotifyBtn();
