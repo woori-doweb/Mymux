@@ -16,6 +16,21 @@
   let seq = 0;
   const uid = (p) => p + (++seq);
 
+  // Agent status (Claude Code hook bridge — nmux-linux-style badges).
+  // termMeta mirrors the latest /api/terminals rows; prevAgentState detects
+  // transitions so we only notify once per state change.
+  let termMeta = {};
+  let prevAgentState = {};
+  let agentSeeded = false;   // first poll only records a baseline — no notify storm on reload
+  const AGENT_BADGE = {
+    running:       { icon: '⠋', label: '실행 중',            cls: 'st-running' },
+    tool:          { icon: '⚙', label: '도구 실행 중',       cls: 'st-running' },
+    needs_input:   { icon: '!', label: '입력 필요',          cls: 'st-needs-input' },
+    done:          { icon: '✓', label: '작업 완료',          cls: 'st-done' },
+    subagent_done: { icon: '✓', label: '하위 에이전트 완료', cls: 'st-done' },
+  };
+  const AGENT_RANK = { needs_input: 3, running: 2, tool: 2, done: 1, subagent_done: 1 };
+
   // Saved commands + autocomplete state
   let commands = [], cmdEditingId = null, cmdFilter = '';
   let acItems = [], acIndex = -1, acNavigated = false, lineBuf = '', acDismissed = false;
@@ -360,6 +375,7 @@
     const p = panes.find((x) => x.id === t.focusedPaneId) || firstPane(t.root);
     if (p) focusPane(p);
     fitTree(t.root);
+    ackTabAgentStatus(t);       // visiting the tab clears sticky agent badges
   }
 
   function closeTab(t) {
@@ -383,6 +399,14 @@
     tabs.forEach((t) => {
       const chip = document.createElement('div');
       chip.className = 'tab-chip' + (t.id === activeTabId ? ' active' : '');
+      const st = tabAgentBadge(t);
+      if (st) {
+        const b = document.createElement('span');
+        b.className = 'agent-badge ' + st.cls;
+        b.textContent = st.icon;
+        b.title = 'Claude: ' + st.label;
+        chip.appendChild(b);
+      }
       const label = document.createElement('span');
       label.className = 'tab-label';
       label.textContent = t.name;
@@ -418,15 +442,106 @@
     const shown = new Set(panes.map((p) => p.termId));
     const ul = $('#term-list');
     ul.innerHTML = '';
+    termMeta = {};
     list.forEach((t) => {
+      termMeta[t.id] = t;
       const li = document.createElement('li');
-      li.textContent = (t.ownerUsername || '') + ' · ' + t.id.slice(0, 14) + (t.exited ? ' (exited)' : '');
+      const st = t.agentStatus && AGENT_BADGE[t.agentStatus.state];
+      if (st) {
+        const b = document.createElement('span');
+        b.className = 'agent-badge ' + st.cls;
+        b.textContent = st.icon;
+        b.title = 'Claude: ' + st.label;
+        li.appendChild(b);
+      }
+      li.appendChild(document.createTextNode(
+        (t.ownerUsername || '') + ' · ' + t.id.slice(0, 14) + (t.exited ? ' (exited)' : '')));
       li.dataset.id = t.id;
       if (shown.has(t.id)) li.className = 'active';
       li.title = shown.has(t.id) ? '열려 있음 — 클릭해 포커스' : '클릭해 새 탭으로 열기';
       li.onclick = () => openTerm(t.id);
       ul.appendChild(li);
     });
+    notifyAgentTransitions(list);
+    renderTabs();          // tab chips carry the badge too
+  }
+
+  // ── Agent status: sticky-ack + notifications ────────────────────────
+  // nmux-linux rule: done / needs-input stay until the user visits the
+  // terminal. "Visit" = the tab is active AND the page is visible; then we
+  // ack so the badge clears server-side for everyone.
+  function agentStateOf(termId) {
+    const m = termMeta[termId];
+    return (m && m.agentStatus && m.agentStatus.state) || null;
+  }
+
+  function notifyAgentTransitions(list) {
+    const seeded = agentSeeded;
+    agentSeeded = true;
+    list.forEach((t) => {
+      const st = t.agentStatus ? t.agentStatus.state : null;
+      const prev = prevAgentState[t.id] || null;
+      prevAgentState[t.id] = st;
+      if (!seeded || !st || st === prev || (st !== 'needs_input' && st !== 'done')) return;
+      const pane = panes.find((p) => p.termId === t.id);
+      if (pane && pane.tabId === activeTabId && !document.hidden) {
+        ackAgentStatus(t.cwd);           // already looking at it — seen
+        return;
+      }
+      const label = AGENT_BADGE[st].label;
+      toast('Claude: ' + label + ' — ' + t.id.slice(0, 12));
+      maybeNotify('Mymux Console', 'Claude ' + label + ' (' + t.id.slice(0, 12) + ')');
+    });
+  }
+
+  function ackAgentStatus(cwd) {
+    api('/api/agent-status/ack', { method: 'POST', body: JSON.stringify({ cwd }) })
+      .then(() => refreshList()).catch(() => {});
+  }
+
+  function ackTabAgentStatus(tab) {
+    if (document.hidden) return;
+    const cwds = new Set();
+    forEachPane(tab.root, (p) => {
+      const s = agentStateOf(p.termId);
+      if ((s === 'needs_input' || s === 'done') && termMeta[p.termId]) cwds.add(termMeta[p.termId].cwd);
+    });
+    cwds.forEach((c) => ackAgentStatus(c));
+  }
+
+  function tabAgentBadge(tab) {
+    let best = null;
+    forEachPane(tab.root, (p) => {
+      const s = agentStateOf(p.termId);
+      if (s && AGENT_BADGE[s] && (!best || AGENT_RANK[s] > AGENT_RANK[best])) best = s;
+    });
+    return best && AGENT_BADGE[best];
+  }
+
+  function maybeNotify(title, body) {
+    if (localStorage.getItem('mymux_notify') !== 'on') return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    try { new Notification(title, { body }); } catch (e) { /* e.g. Android WebView */ }
+  }
+
+  function updateNotifyBtn() {
+    const b = $('#btn-notify');
+    if (b) b.classList.toggle('active', localStorage.getItem('mymux_notify') === 'on');
+  }
+
+  async function toggleNotify() {
+    if (localStorage.getItem('mymux_notify') === 'on') {
+      localStorage.setItem('mymux_notify', 'off');
+      toast('브라우저 알림 끔');
+    } else {
+      if ('Notification' in window && Notification.permission !== 'granted') {
+        const p = await Notification.requestPermission();
+        if (p !== 'granted') { toast('브라우저 알림 권한이 거부되었습니다'); updateNotifyBtn(); return; }
+      }
+      localStorage.setItem('mymux_notify', 'on');
+      toast('에이전트 완료·입력 필요 시 알림');
+    }
+    updateNotifyBtn();
   }
 
   async function logout() {
@@ -696,6 +811,12 @@
     $('#btn-split-v').onclick = () => splitFocused('col');
     $('#btn-close').onclick = () => { if (focused) closePane(focused); };
     $('#btn-paste').onclick = () => pasteInto(focused);
+    $('#btn-notify').onclick = toggleNotify;
+    updateNotifyBtn();
+    // Coming back to the page counts as "visiting" the active tab.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) { const t = activeTab(); if (t) ackTabAgentStatus(t); }
+    });
     $('#btn-logout').onclick = logout;
     $('#btn-cmd-add').onclick = () => openCmdModal(null);
     $('#cmd-search').oninput = (e) => { cmdFilter = e.target.value; renderCommands(); };

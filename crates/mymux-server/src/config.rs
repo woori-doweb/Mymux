@@ -16,6 +16,17 @@ pub struct Config {
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
+}
+
+/// Claude Code hook → agent-status bridge (POST /api/agent-status).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AgentConfig {
+    /// Shared token the hook script presents. Empty (default) disables the
+    /// endpoint entirely. Generate with e.g. `openssl rand -hex 32`.
+    #[serde(default)]
+    pub status_token: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

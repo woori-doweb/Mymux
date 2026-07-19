@@ -4,6 +4,7 @@
 //!   mymux-server serve       --config <path>
 //!   mymux-server user create --username <u> --role <admin|operator|viewer> --config <path>
 
+mod agent_status;
 mod audit;
 mod auth;
 mod commands;
@@ -44,6 +45,25 @@ enum Commands {
     User {
         #[command(subcommand)]
         command: UserCommands,
+    },
+    /// Claude Code integration helpers.
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum HooksCommands {
+    /// Print the Claude Code settings.json hook snippet + setup steps.
+    /// Nothing is modified — apply it yourself (deliberate: we never touch
+    /// ~/.claude/settings.json automatically).
+    Print {
+        #[arg(long)]
+        config: PathBuf,
+        /// Installed path of the hook script clients will run.
+        #[arg(long, default_value = "/opt/mymux-console/mymux-claude-hook.sh")]
+        script: String,
     },
 }
 
@@ -118,6 +138,9 @@ async fn run() -> Result<(), String> {
             }
             UserCommands::List { config } => list_users(&config).await,
         },
+        Commands::Hooks { command } => match command {
+            HooksCommands::Print { config, script } => hooks_print(&config, &script),
+        },
     }
 }
 
@@ -139,6 +162,7 @@ async fn serve(config_path: &Path) -> Result<(), String> {
         config: Arc::new(config),
         db,
         terminals: Arc::clone(&terminals),
+        agent_status: Arc::new(agent_status::AgentStatusRegistry::default()),
     };
 
     // Periodic reaper for exited / idle / over-lifetime terminals.
@@ -170,6 +194,51 @@ async fn serve(config_path: &Path) -> Result<(), String> {
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     tracing::info!("shutdown signal received");
+}
+
+/// Print (never apply) the Claude Code hook registration for the agent-status
+/// bridge. Keeping this print-only is a design decision carried over from the
+/// nmux-linux review: installers that silently edit ~/.claude/settings.json
+/// are exactly what we chose not to absorb.
+fn hooks_print(config_path: &Path, script: &str) -> Result<(), String> {
+    let config = Config::load(config_path)?;
+    let token = &config.agent.status_token;
+    if token.is_empty() {
+        return Err(format!(
+            "[agent] status_token is empty in {} — generate one first:\n\
+             \n    openssl rand -hex 32\n\n\
+             then set it in the config and restart the service.",
+            config_path.display()
+        ));
+    }
+
+    let hook = serde_json::json!([{ "hooks": [{ "type": "command", "command": script }] }]);
+    let snippet = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": hook,
+            "PreToolUse": hook,
+            "Notification": hook,
+            "Stop": hook,
+            "SubagentStop": hook,
+        }
+    });
+
+    println!("# Mymux agent-status — Claude Code hook setup (manual, 3 steps)");
+    println!("#");
+    println!("# 1) Store the token for the hook script (as the user running Claude):");
+    println!("#");
+    println!("#      mkdir -p ~/.config/mymux");
+    println!("#      (umask 077; printf '%s' '{token}' > ~/.config/mymux/agent-token)");
+    println!("#");
+    println!("# 2) Make sure the hook script is installed and executable:");
+    println!("#      {script}");
+    println!("#");
+    println!("# 3) Merge this into ~/.claude/settings.json (top-level \"hooks\" key):");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&snippet).map_err(|e| e.to_string())?
+    );
+    Ok(())
 }
 
 async fn create_user(config_path: &Path, username: &str, role: &str) -> Result<(), String> {

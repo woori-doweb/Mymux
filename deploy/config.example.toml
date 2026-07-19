@@ -36,6 +36,12 @@ idle_timeout_seconds = 1800
 max_lifetime_seconds = 28800
 replay_buffer_bytes = 262144
 
+[agent]
+# Claude Code hook → sidebar agent-status bridge (deploy/mymux-claude-hook.sh).
+# Empty (default) disables the /api/agent-status endpoint entirely.
+# Generate: openssl rand -hex 32 · setup: mymux-server hooks print --config <this file>
+status_token = ""
+
 [audit]
 enabled = true
 # Reserved for a follow-up PR; keep false so secrets never land in the audit log.

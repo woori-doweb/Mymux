@@ -219,6 +219,18 @@ button.mini:hover { border-color: var(--accent); }
 #cmd-list .cmd-actions .run { color: var(--accent); }
 #cmd-list .cmd-actions .del:hover { border-color: var(--danger); color: var(--danger); }
 
+/* ── Agent status badges (Claude Code hook bridge) ── */
+.agent-badge {
+  display: inline-block; min-width: 14px; text-align: center;
+  margin-right: 6px; font-weight: 700;
+}
+.tab-chip .agent-badge { margin-right: 4px; }
+.st-running { color: var(--accent); animation: agent-pulse 1.2s ease-in-out infinite; }
+.st-needs-input { color: var(--danger); }
+.st-done { color: #3fb950; }
+@keyframes agent-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+#btn-notify.active { border-color: var(--accent); color: var(--accent); }
+
 /* ── Toast ── */
 #toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(8px);

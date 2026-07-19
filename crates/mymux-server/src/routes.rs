@@ -12,6 +12,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::agent_status;
 use crate::audit;
 use crate::auth::{self, AuthUser};
 use crate::commands;
@@ -37,6 +38,8 @@ pub fn router(state: AppState) -> Router {
             "/api/commands/:id",
             put(commands::update_command).delete(commands::delete_command),
         )
+        .route("/api/agent-status", post(agent_status::post_status))
+        .route("/api/agent-status/ack", post(agent_status::ack_status))
         .route("/api/audit", get(audit::list_audit))
         .route("/ws/terminals/:id", get(ws_terminal::ws_terminal))
         .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
@@ -134,6 +137,10 @@ async fn list_terminals(
         .into_iter()
         .filter(|s| user.role.is_admin() || s.owner_user_id == user.id)
         .map(|s| {
+            let agent = state
+                .agent_status
+                .lookup(&s.cwd, user.role.is_admin())
+                .map(|a| json!({ "state": a.state, "updatedAt": a.updated_at }));
             json!({
                 "id": s.id,
                 "ownerUsername": s.owner_username,
@@ -142,6 +149,7 @@ async fn list_terminals(
                 "createdAt": s.created_at,
                 "lastActiveAt": s.last_active_rfc3339(),
                 "exited": s.is_exited(),
+                "agentStatus": agent,
             })
         })
         .collect();
