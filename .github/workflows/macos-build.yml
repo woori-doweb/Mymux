@@ -1,0 +1,50 @@
+name: macOS Build
+
+# Manually build the macOS app (universal dmg) and attach it to an existing
+# GitHub Release. Deliberately does NOT touch latest.json — the auto-updater
+# manifest is Windows-only and is hand-published from the Windows release flow.
+#
+#   gh workflow run macos-build.yml -f tag=v0.1.21
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and attach the dmg to"
+        required: true
+        default: "v0.1.21"
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: build (universal-apple-darwin)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install Rust toolchain (both mac targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build universal dmg
+        working-directory: crates/mycli-desktop
+        env:
+          # createUpdaterArtifacts is on, so the build wants the signing key
+          # even though we only ship the dmg here.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npx --yes @tauri-apps/cli@^2 build --target universal-apple-darwin
+
+      - name: Attach dmg to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.tag }}" ../../target/universal-apple-darwin/release/bundle/dmg/*.dmg --clobber
+        working-directory: crates/mycli-desktop

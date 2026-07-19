@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 fn session_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+    let home = dirs::home_dir().ok_or("Home directory not found")?;
     let dir = home.join(".mycli");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("session.json"))

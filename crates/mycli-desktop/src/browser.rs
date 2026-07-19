@@ -183,10 +183,10 @@ pub fn browser_launch(
     }
 
     let (label, exe) = find_browser()
-        .ok_or("Chrome/Edge를 찾을 수 없습니다. Chrome 또는 Edge를 설치하세요.")?;
+        .ok_or("Chrome/Edge not found. Please install Chrome or Edge.")?;
 
     let profile = user_data_dir(port);
-    std::fs::create_dir_all(&profile).map_err(|e| format!("프로필 디렉토리 생성 실패: {e}"))?;
+    std::fs::create_dir_all(&profile).map_err(|e| format!("Failed to create profile directory: {e}"))?;
 
     let start_url = url
         .filter(|u| !u.trim().is_empty())
@@ -217,7 +217,7 @@ pub fn browser_launch(
 
     let child = cmd
         .spawn()
-        .map_err(|e| format!("{label} 실행 실패: {e}"))?;
+        .map_err(|e| format!("{label} failed to launch: {e}"))?;
 
     *guard = Some(BrowserProc {
         child,
@@ -269,18 +269,18 @@ pub fn browser_page_target(port: Option<u16>) -> Result<PageTarget, String> {
     let port = port.unwrap_or(9222);
     let body = cdp_http_get(port, "/json/list")?;
     let targets: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("CDP 응답 파싱 실패: {e}"))?;
-    let arr = targets.as_array().ok_or("CDP 응답이 배열이 아닙니다")?;
+        serde_json::from_str(&body).map_err(|e| format!("Failed to parse CDP response: {e}"))?;
+    let arr = targets.as_array().ok_or("CDP response is not an array")?;
 
     let page = arr
         .iter()
         .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
-        .ok_or("페이지 타깃이 아직 없습니다 (브라우저 준비 중일 수 있음)")?;
+        .ok_or("No page target yet (the browser may still be starting)")?;
 
     let ws_url = page
         .get("webSocketDebuggerUrl")
         .and_then(|v| v.as_str())
-        .ok_or("webSocketDebuggerUrl 없음")?
+        .ok_or("webSocketDebuggerUrl missing")?
         .to_string();
 
     Ok(PageTarget {
@@ -303,7 +303,7 @@ fn cdp_http_get(port: u16, path: &str) -> Result<String, String> {
     use std::io::{Read, Write};
 
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
-        .map_err(|e| format!("CDP 연결 실패 (:{port}) — 브라우저가 실행 중인가요? {e}"))?;
+        .map_err(|e| format!("CDP connection failed (:{port}) — is the browser running? {e}"))?;
     let req = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     stream
         .write_all(req.as_bytes())
@@ -317,7 +317,7 @@ fn cdp_http_get(port: u16, path: &str) -> Result<String, String> {
     let body_start = resp
         .find("\r\n\r\n")
         .map(|i| i + 4)
-        .ok_or("HTTP 응답 형식 오류")?;
+        .ok_or("Malformed HTTP response")?;
     Ok(resp[body_start..].to_string())
 }
 
@@ -339,11 +339,11 @@ fn parse_url(url: &str) -> Result<tauri::Url, String> {
     } else {
         format!("https://{url}")
     };
-    let parsed: tauri::Url = normalized.parse().map_err(|e| format!("URL 파싱 실패: {e}"))?;
+    let parsed: tauri::Url = normalized.parse().map_err(|e| format!("Failed to parse URL: {e}"))?;
     // Only http/https into the embedded WebView — block file:/data:/about: etc.
     match parsed.scheme() {
         "http" | "https" => Ok(parsed),
-        other => Err(format!("허용되지 않은 URL 스킴입니다: {other} (http/https만 가능)")),
+        other => Err(format!("Disallowed URL scheme: {other} (http/https only)")),
     }
 }
 

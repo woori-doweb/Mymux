@@ -12,11 +12,20 @@
   <!-- ── Top bar ── -->
   <header id="toolbar">
     <h1>Mymux <span class="byline">- by ChoiGyber</span></h1>
+    <!-- Account-wide usage (Claude 5h/wk rate limits + Codex plan window) -->
+    <span id="usage-global"></span>
     <div id="toolbar-actions">
       <button id="btn-update" class="hidden" title="A new version is available — click to update">⬆ Update</button>
+      <button id="btn-notify-settings" title="Task-done flash settings / 작업 완료 알림 설정"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg></button>
       <button id="btn-toggle-browser" title="Show / hide the browser tab">🌐</button>
+      <button id="btn-font-dec" title="Smaller text (Ctrl -)">A<sup>&#8722;</sup></button>
+      <button id="btn-font-inc" title="Larger text (Ctrl +)">A<sup>+</sup></button>
+      <button id="btn-track-dec" title="Tighter letter spacing">AB</button>
+      <button id="btn-track-inc" title="Wider letter spacing">A B</button>
       <button id="btn-split-h" title="Split focused pane horizontally (Ctrl+Shift+D)">&#8596;</button>
       <button id="btn-split-v" title="Split focused pane vertically (Ctrl+Shift+E)">&#8597;</button>
+      <button id="btn-broadcast" title="Broadcast typing to every pane in this tab (Ctrl+Shift+B)">&#8649;</button>
+      <button id="btn-shortcuts" title="Keyboard shortcuts / 단축키 안내">&#9000; Keys</button>
       <span id="accent-swatches" title="Accent color">
         <button class="accent-swatch" data-accent="blue" title="Blue" style="background:#0f9ef0"></button>
         <button class="accent-swatch" data-accent="violet" title="Violet" style="background:#8b5cf6"></button>
@@ -24,8 +33,8 @@
       </span>
       <button id="btn-theme" title="Toggle light/dark mode"></button>
       <select id="default-shell" title="Default shell (new terminals)">
-        <option value="bash">Git Bash</option>
         <option value="powershell">PowerShell</option>
+        <option value="bash">Git Bash</option>
         <option value="cmd">CMD</option>
       </select>
       <button id="btn-new-terminal" title="New terminal">+ Terminal</button>
@@ -45,7 +54,7 @@
 
       <!-- Explorer panel -->
       <div id="panel-explorer" class="sidebar-panel active">
-        <input type="text" id="explorer-goto" placeholder="경로 입력 후 Enter — 예: E:\Project" spellcheck="false" />
+        <input type="text" id="explorer-goto" placeholder="Enter a path, then press Enter — e.g. E:\Project" spellcheck="false" />
         <div id="explorer-source">
           <select id="explorer-mode">
             <option value="local">Local PC</option>
@@ -54,12 +63,16 @@
         <div id="explorer-drives"></div>
         <div id="explorer-favorites"></div>
         <div id="explorer-nav">
-          <button id="btn-explorer-back" class="explorer-nav-btn" title="뒤로 (마우스 뒤로 버튼)" disabled>&#9664;</button>
-          <button id="btn-explorer-forward" class="explorer-nav-btn" title="앞으로 (마우스 앞으로 버튼)" disabled>&#9654;</button>
-          <button id="btn-explorer-up" class="explorer-nav-btn" title="상위 폴더로 이동">&#11014;</button>
+          <button id="btn-explorer-back" class="explorer-nav-btn" title="Back (mouse back button)" disabled>&#9664;</button>
+          <button id="btn-explorer-forward" class="explorer-nav-btn" title="Forward (mouse forward button)" disabled>&#9654;</button>
+          <button id="btn-explorer-up" class="explorer-nav-btn" title="Go to parent folder">&#11014;</button>
+          <button id="btn-explorer-newfolder" class="explorer-nav-btn" title="새 폴더 만들기">+</button>
           <span id="explorer-path" title="Current path">/</span>
         </div>
-        <input type="text" id="explorer-search" placeholder="이 폴더에서 검색…" spellcheck="false" autocomplete="off" />
+        <div class="search-wrap">
+          <input type="text" id="explorer-search" placeholder="Search this folder…" spellcheck="false" autocomplete="off" />
+          <button type="button" id="explorer-search-clear" class="search-clear" title="Clear" tabindex="-1">&times;</button>
+        </div>
         <ul id="file-list"></ul>
       </div>
 
@@ -69,7 +82,10 @@
           <span>Saved Commands</span>
           <button id="btn-add" title="Add command">+</button>
         </div>
-        <input type="text" id="cmd-search" placeholder="명령어 검색…" spellcheck="false" autocomplete="off" />
+        <div class="search-wrap">
+          <input type="text" id="cmd-search" placeholder="Search commands…" spellcheck="false" autocomplete="off" />
+          <button type="button" id="cmd-search-clear" class="search-clear" title="Clear" tabindex="-1">&times;</button>
+        </div>
         <ul id="command-list"></ul>
         <div id="empty-state" class="hidden">
           <p>No commands saved.</p>
@@ -87,18 +103,18 @@
         <div class="browser-head">
           <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.6 2.7 3.9 5.9 3.9 9s-1.3 6.3-3.9 9c-2.6-2.7-3.9-5.9-3.9-9S9.4 5.7 12 3z"/></svg> Browser</h2>
           <div class="browser-mode">
-            <button id="mode-native" class="mode-btn active" title="앱 내장 WebView로 직접 브라우징"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg> Native</button>
-            <button id="mode-ai" class="mode-btn" title="AI(Playwright)가 조종 — CDP 스크린캐스트"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="10" rx="2"/><path d="M12 9V5.5"/><circle cx="12" cy="4" r="1.3"/><path d="M9.5 14h.01M14.5 14h.01"/></svg> AI 제어</button>
+            <button id="mode-native" class="mode-btn active" title="Browse directly in the built-in WebView"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg> Native</button>
+            <button id="mode-ai" class="mode-btn" title="Driven by AI (Playwright) — CDP screencast"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="10" rx="2"/><path d="M12 9V5.5"/><circle cx="12" cy="4" r="1.3"/><path d="M9.5 14h.01M14.5 14h.01"/></svg> AI Control</button>
           </div>
           <div id="browser-status" class="browser-status stopped">○ Stopped</div>
         </div>
 
         <!-- Native mode: address bar (drives the embedded child WebView) -->
         <div class="browser-nav" id="browser-nav">
-          <button id="nav-back" class="secondary" title="뒤로">&#9664;</button>
-          <button id="nav-forward" class="secondary" title="앞으로">&#9654;</button>
-          <button id="nav-reload" class="secondary" title="새로고침">&#8635;</button>
-          <input type="text" id="nav-url" placeholder="주소 입력 — 예: github.com" spellcheck="false" />
+          <button id="nav-back" class="secondary" title="Back">&#9664;</button>
+          <button id="nav-forward" class="secondary" title="Forward">&#9654;</button>
+          <button id="nav-reload" class="secondary" title="Reload">&#8635;</button>
+          <input type="text" id="nav-url" placeholder="Enter an address — e.g. github.com" spellcheck="false" />
           <button id="nav-go">Go</button>
         </div>
 
@@ -115,13 +131,13 @@
         <div id="browser-viewport">
           <img id="browser-screen" alt="" draggable="false" />
           <div id="browser-placeholder">
-            <p><b>Native</b>: 주소를 입력하면 앱 내장 브라우저가 여기 표시됩니다.</p>
-            <p class="muted"><b>AI 제어</b> 모드로 바꾸면 AI(Playwright MCP)가 조종하는 화면이 표시됩니다.</p>
+            <p><b>Native</b>: Enter an address and the built-in browser appears here.</p>
+            <p class="muted">Switch to <b>AI Control</b> mode to see the screen driven by AI (Playwright MCP).</p>
           </div>
         </div>
 
         <details class="browser-conn" id="browser-conn" style="display:none">
-          <summary>AI 연결 설정 (Playwright MCP)</summary>
+          <summary>AI connection settings (Playwright MCP)</summary>
           <div class="browser-info">
             <div class="info-row">
               <label>CDP Endpoint</label>
@@ -134,7 +150,7 @@
               <button class="copy-btn secondary" data-copy="mcp-cli">Copy</button>
             </div>
             <div class="info-row">
-              <label>Claude Code 등록</label>
+              <label>Claude Code registration</label>
               <code id="browser-mcp-add">—</code>
               <button class="copy-btn secondary" data-copy="mcp-add">Copy</button>
             </div>
@@ -147,17 +163,24 @@
         <div class="viewer-head">
           <div id="viewer-tabs" class="viewer-tabs"></div>
           <div id="viewer-tools" class="viewer-tools">
-            <button id="viewer-edit-toggle" class="vtool" title="편집"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
-            <button id="viewer-find-btn" class="vtool" title="찾기 (Ctrl+F)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
-            <label class="vtool-chk" title="자동 저장"><input type="checkbox" id="viewer-autosave" /> 자동</label>
-            <button id="viewer-save-btn" class="vtool" title="저장 (Ctrl+S)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></button>
+            <button id="viewer-edit-toggle" class="vtool" title="Edit"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
+            <button id="viewer-find-btn" class="vtool" title="Find (Ctrl+F)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+            <label class="vtool-chk" title="Auto-save"><input type="checkbox" id="viewer-autosave" /> Auto</label>
+            <button id="viewer-save-btn" class="vtool" title="Save (Ctrl+S)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></button>
           </div>
-          <button id="viewer-close" class="vtool" title="뷰어 닫기"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <button id="viewer-close" class="vtool" title="Close viewer"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <div id="viewer-body" class="viewer-body"></div>
       </div>
 
       <div id="terminal-container">
+        <!-- Scrollback search (Ctrl+Shift+F) — drives the focused pane's search addon -->
+        <div id="term-search" class="hidden">
+          <input type="text" id="term-search-input" placeholder="Search scrollback…" spellcheck="false" autocomplete="off" />
+          <button id="term-search-prev" title="Previous match (Shift+Enter)">&#9650;</button>
+          <button id="term-search-next" title="Next match (Enter)">&#9660;</button>
+          <button id="term-search-close" title="Close (Esc)">&times;</button>
+        </div>
         <div id="terminal-welcome">
           <p>Click <strong>+ Terminal</strong> to open a new terminal session.</p>
           <div id="shell-options">
@@ -182,17 +205,21 @@
 
     <!-- ── Session list (right) ── -->
     <aside id="session-panel">
+      <div id="session-resizer" title="드래그해서 세션 패널 너비 조절"></div>
       <div id="session-header">
         <span>Sessions</span>
-        <button id="btn-toggle-sessions" class="panel-collapse" title="세션 패널 접기/펼치기"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><line x1="8" y1="3.5" x2="8" y2="12.5"/></svg></button>
+        <button id="btn-toggle-sessions" class="panel-collapse" title="Collapse / expand session panel"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><line x1="8" y1="3.5" x2="8" y2="12.5"/></svg></button>
       </div>
+      <!-- SSH favorites: one click reconnects (key → direct, password → prompt) -->
+      <ul id="ssh-fav-list"></ul>
       <ul id="session-list">
         <li class="session-empty">No active sessions.</li>
       </ul>
       <div id="session-footer">
-        <button id="btn-github" title="GitHub 저장소를 기본 브라우저로 열기">
+        <button id="btn-github" title="Open the GitHub repository in your default browser">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
           <span>Github - Mymux</span>
+          <span id="app-version"></span>
         </button>
       </div>
     </aside>
@@ -206,6 +233,8 @@
         <label>Name <input type="text" id="input-name" required placeholder="e.g. Git Status" /></label>
         <label>Command <input type="text" id="input-command" required placeholder="e.g. git status" /></label>
         <label>Description <input type="text" id="input-description" placeholder="Short description (optional)" /></label>
+        <label>Directory <input type="text" id="input-cwd" placeholder="Run in this directory (optional) — e.g. D:\Project\Mymux" spellcheck="false" /></label>
+        <label>Alias <input type="text" id="input-alias" placeholder="Abbreviation — type it at a prompt + Enter to run (optional)" spellcheck="false" autocomplete="off" /></label>
         <div class="modal-actions">
           <button type="button" id="btn-cancel" class="secondary">Cancel</button>
           <button type="submit" id="btn-save">Save</button>
@@ -218,6 +247,25 @@
     <ul id="autocomplete-list"></ul>
   </div>
 
+  <!-- Command palette (Ctrl+Shift+P) -->
+  <div id="palette-overlay" class="hidden">
+    <div id="palette">
+      <input type="text" id="palette-input" placeholder="Type a command…  (명령 검색)" spellcheck="false" autocomplete="off" />
+      <ul id="palette-list"></ul>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts help -->
+  <div id="shortcuts-overlay" class="hidden">
+    <div id="shortcuts-modal">
+      <div id="shortcuts-head">
+        <span>&#9000; Keyboard shortcuts &middot; 단축키</span>
+        <button id="shortcuts-close" title="Close (Esc)">&times;</button>
+      </div>
+      <div id="shortcuts-body"></div>
+    </div>
+  </div>
+
   <!-- Right-click menu for the file viewer (text selection) -->
   <div id="viewer-ctx" class="ctx-menu hidden">
     <button type="button" data-act="copy">Copy</button>
@@ -226,6 +274,9 @@
 
   <!-- Right-click menu for the explorer (file operations); built dynamically -->
   <div id="explorer-ctx" class="ctx-menu hidden"></div>
+
+  <!-- Right-click menu on a folder's cd button: open a session there AND run a saved command -->
+  <div id="cdcmd-menu" class="ctx-menu hidden"></div>
 
   <!-- Close / remember-session popup -->
   <div id="close-modal" class="hidden">
@@ -237,6 +288,24 @@
         <button id="close-cancel" class="secondary">Cancel</button>
         <button id="close-forget" class="secondary">Quit without saving</button>
         <button id="close-save">Save &amp; quit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New folder (Explorer, local only) -->
+  <div id="newfolder-modal" class="hidden">
+    <div class="modal-box">
+      <h2>새 폴더 만들기</h2>
+      <input type="text" id="newfolder-name" placeholder="폴더 이름" spellcheck="false" autocomplete="off" />
+      <p id="newfolder-error" class="hidden" style="color: var(--danger, #e5534b); margin-bottom: 12px;"></p>
+      <label class="chk-row"><input type="checkbox" id="newfolder-open-session" checked /> 세션을 열까요?</label>
+      <div id="newfolder-session-opts" class="chk-row" style="gap: 14px;">
+        <label class="chk-row" style="margin-bottom: 0;"><input type="radio" name="newfolder-tab" id="newfolder-tab-current" checked /> 지금 탭</label>
+        <label class="chk-row" style="margin-bottom: 0;"><input type="radio" name="newfolder-tab" id="newfolder-tab-new" /> 새 탭</label>
+      </div>
+      <div class="modal-actions">
+        <button id="newfolder-cancel" class="secondary">Cancel</button>
+        <button id="newfolder-confirm">Confirm</button>
       </div>
     </div>
   </div>
@@ -273,6 +342,7 @@
       <label class="chk-row"><input type="checkbox" id="ssh-tmux" /> Connect into a tmux session</label>
       <input type="text" id="ssh-tmux-name" placeholder="Session name (create or attach by name · blank = attach existing)" spellcheck="false" autocomplete="off" style="display:none" />
       <div class="modal-actions">
+        <button id="ssh-save-fav" class="secondary" title="Save as an SSH favorite (one-click reconnect from the session panel)">★ Favorite</button>
         <button id="ssh-save-cmd" class="secondary" title="Save this connection as a Commands shortcut">Save as command</button>
         <button id="ssh-modal-cancel" class="secondary">Cancel</button>
         <button id="ssh-modal-connect">Connect</button>
@@ -280,10 +350,165 @@
     </div>
   </div>
 
+  <!-- Task-done flash settings: choose where the completion pulse shows -->
+  <div id="notify-modal" class="hidden">
+    <div class="modal-box">
+      <h2>Task-done flash / 작업 완료 알림</h2>
+      <p>작업이 끝났을 때 번쩍임을 어디에 표시할지 선택하세요. 둘 다 끄면 번쩍이지 않습니다.</p>
+      <label class="chk-row"><input type="checkbox" id="notify-chk-pane" /> 창 틀(패인 테두리) 번쩍임 / Pane border flash</label>
+      <label class="chk-row"><input type="checkbox" id="notify-chk-list" /> 세션 목록 이름 번쩍임 / Session list flash</label>
+      <div class="chk-row" style="margin-top:6px;opacity:.85;">🦊 완료 세션에 나타날 캐릭터 / Buddy character</div>
+      <div class="char-picker">
+        <label class="char-card">
+          <input type="radio" name="notify-char" value="none" />
+          <span class="char-thumb char-thumb-off">🚫</span>
+          <span class="char-name">끄기<br>Off</span>
+        </label>
+        <label class="char-card">
+          <input type="radio" name="notify-char" value="classic" />
+          <span class="char-thumb">
+            <svg viewBox="0 0 120 104" width="46" height="40" aria-hidden="true">
+              <polygon points="30,44 15,9 50,30" fill="#e8833a" stroke="#e8833a" stroke-width="7" stroke-linejoin="round"/>
+              <polygon points="90,44 105,9 70,30" fill="#e8833a" stroke="#e8833a" stroke-width="7" stroke-linejoin="round"/>
+              <polygon points="33,40 21,17 47,32" fill="#7c4a21" stroke="#7c4a21" stroke-width="4" stroke-linejoin="round"/>
+              <polygon points="87,40 99,17 73,32" fill="#7c4a21" stroke="#7c4a21" stroke-width="4" stroke-linejoin="round"/>
+              <ellipse cx="60" cy="64" rx="37" ry="40" fill="#f09144"/>
+              <ellipse cx="45" cy="76" rx="16" ry="16" fill="#fdf4e8"/>
+              <ellipse cx="75" cy="76" rx="16" ry="16" fill="#fdf4e8"/>
+              <ellipse cx="60" cy="84" rx="16" ry="13" fill="#fdf4e8"/>
+              <ellipse cx="34" cy="72" rx="6.5" ry="4.5" fill="#f7938c" opacity="0.55"/>
+              <ellipse cx="86" cy="72" rx="6.5" ry="4.5" fill="#f7938c" opacity="0.55"/>
+              <ellipse cx="43" cy="60" rx="6.5" ry="8.5" fill="#2b1c12"/>
+              <ellipse cx="77" cy="60" rx="6.5" ry="8.5" fill="#2b1c12"/>
+              <circle cx="45.5" cy="56.5" r="2.6" fill="#fff" opacity="0.95"/>
+              <circle cx="79.5" cy="56.5" r="2.6" fill="#fff" opacity="0.95"/>
+              <ellipse cx="60" cy="72" rx="4" ry="3.2" fill="#3a2417"/>
+              <path d="M60 74 Q60 79 55 81 M60 74 Q60 79 65 81" stroke="#3a2417" stroke-width="2" fill="none" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span class="char-name">여우<br>Fox</span>
+        </label>
+        <label class="char-card">
+          <input type="radio" name="notify-char" value="mascot" />
+          <span class="char-thumb">
+            <svg viewBox="0 0 100 100" width="44" height="44" aria-hidden="true">
+              <circle cx="50" cy="52" r="32" fill="#f97316"/>
+              <polygon points="24,33 28,13 42,27" fill="#f97316"/>
+              <polygon points="76,33 72,13 58,27" fill="#f97316"/>
+              <ellipse cx="50" cy="60" rx="20" ry="14" fill="rgba(255,255,255,0.92)"/>
+              <circle cx="40" cy="48" r="3.5" fill="#1f1f1f"/>
+              <circle cx="60" cy="48" r="3.5" fill="#1f1f1f"/>
+              <circle cx="41" cy="47" r="1.2" fill="#fff"/>
+              <circle cx="61" cy="47" r="1.2" fill="#fff"/>
+              <path d="M 44 62 Q 50 67 56 62" fill="none" stroke="#1f1f1f" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span class="char-name">마스코트<br>Mascot</span>
+        </label>
+      </div>
+      <label class="chk-row" style="margin-top:2px;"><input type="checkbox" id="notify-chk-bubble" /> 💬 말풍선 독려 메시지 / Encouragement speech bubble</label>
+      <label class="chk-row" style="gap:8px;">사투리 / Dialect
+        <select id="notify-dialect" class="notify-select">
+          <option value="standard">표준어</option>
+          <option value="gyeongsang">경상도</option>
+          <option value="jeolla">전라도</option>
+          <option value="gangwon">강원도</option>
+          <option value="chungcheong">충청도</option>
+        </select>
+      </label>
+      <label class="chk-row" style="margin-top:6px;"><input type="checkbox" id="notify-chk-ctxbadge" /> 📊 세션 사용량(ctx) 배지 — model | reasoning | % / Context usage badge</label>
+      <label class="chk-row"><input type="checkbox" id="notify-chk-ctxvoice" /> 🗣️ 사용량 50·70·85% 도달 시 캐릭터가 알림 / Buddy announces usage milestones</label>
+      <div class="modal-actions">
+        <button id="notify-modal-close">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update confirmation: warn that all open sessions will close -->
+  <div id="update-modal" class="hidden">
+    <div class="modal-box">
+      <h2>Update</h2>
+      <p>업데이트를 진행하면 열려 있는 모든 세션(창)이 닫히고 앱이 재시작됩니다.<br />계속하시겠습니까?</p>
+      <div class="modal-actions">
+        <button id="update-modal-cancel" class="secondary">취소</button>
+        <button id="update-modal-ok">업데이트</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Restore: re-run the commands that were running before quit (claude/codex…) -->
+  <div id="replay-modal" class="hidden">
+    <div class="modal-box">
+      <h2>이전 명령 다시 실행 / Re-run last commands</h2>
+      <p>종료 전에 각 세션에서 실행하던 명령을 다시 실행할까요? 체크된 항목만 실행됩니다.</p>
+      <div id="replay-list" class="replay-list"></div>
+      <label class="chk-row" style="margin-top:6px;opacity:.8;"><input type="checkbox" id="replay-disable" /> 앞으로 묻지 않기 / Don't ask again</label>
+      <div class="modal-actions">
+        <button id="replay-skip" class="secondary">건너뛰기</button>
+        <button id="replay-run">실행</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fox buddy: glides to the pane whose task just finished (drag to move, click to dismiss) -->
+  <div id="fox-buddy" class="hidden" data-char="classic" title="작업 완료! (드래그: 이동 · 클릭: 닫기)">
+    <svg class="fox-classic" viewBox="0 0 120 104" width="64" height="55" aria-hidden="true">
+      <!-- ears (base corners tucked inside the head outline = no gap;
+           rounded joins so the tips are soft, not sharp) -->
+      <polygon points="30,44 15,9 50,30" fill="#e8833a" stroke="#e8833a" stroke-width="7" stroke-linejoin="round"/>
+      <polygon points="90,44 105,9 70,30" fill="#e8833a" stroke="#e8833a" stroke-width="7" stroke-linejoin="round"/>
+      <polygon points="33,40 21,17 47,32" fill="#7c4a21" stroke="#7c4a21" stroke-width="4" stroke-linejoin="round"/>
+      <polygon points="87,40 99,17 73,32" fill="#7c4a21" stroke="#7c4a21" stroke-width="4" stroke-linejoin="round"/>
+      <!-- head (slimmer, gently tapered = cuter) -->
+      <ellipse cx="60" cy="64" rx="37" ry="40" fill="#f09144"/>
+      <!-- white muzzle/cheeks -->
+      <ellipse cx="45" cy="76" rx="16" ry="16" fill="#fdf4e8"/>
+      <ellipse cx="75" cy="76" rx="16" ry="16" fill="#fdf4e8"/>
+      <ellipse cx="60" cy="84" rx="16" ry="13" fill="#fdf4e8"/>
+      <!-- rosy blush cheeks -->
+      <ellipse cx="34" cy="72" rx="6.5" ry="4.5" fill="#f7938c" opacity="0.55"/>
+      <ellipse cx="86" cy="72" rx="6.5" ry="4.5" fill="#f7938c" opacity="0.55"/>
+      <!-- eyes (bigger, blink) -->
+      <ellipse class="fox-eye" cx="43" cy="60" rx="6.5" ry="8.5" fill="#2b1c12"/>
+      <ellipse class="fox-eye" cx="77" cy="60" rx="6.5" ry="8.5" fill="#2b1c12"/>
+      <circle cx="45.5" cy="56.5" r="2.6" fill="#fff" opacity="0.95"/>
+      <circle cx="79.5" cy="56.5" r="2.6" fill="#fff" opacity="0.95"/>
+      <circle cx="41" cy="62" r="1.1" fill="#fff" opacity="0.7"/>
+      <circle cx="75" cy="62" r="1.1" fill="#fff" opacity="0.7"/>
+      <!-- soft round nose + mouth -->
+      <ellipse cx="60" cy="72" rx="4" ry="3.2" fill="#3a2417"/>
+      <path d="M60 74 Q60 79 55 81 M60 74 Q60 79 65 81" stroke="#3a2417" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <!-- whiskers -->
+      <path d="M22 71 L35 73 M22 79 L35 78" stroke="#d97b2e" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M98 71 L85 73 M98 79 L85 78" stroke="#d97b2e" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+    <!-- Mascot fox variant (from ChurchLivePro demo) — celebrates with data-state -->
+    <div class="fox-mascot" data-state="idle">
+      <svg viewBox="0 0 100 100" class="mascot-svg" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <ellipse cx="50" cy="88" rx="22" ry="3" fill="rgba(0,0,0,0.25)"/>
+        <circle cx="50" cy="52" r="32" class="m-body" fill="#f97316"/>
+        <polygon points="24,33 28,13 42,27" class="m-ear m-ear-l" fill="#f97316"/>
+        <polygon points="76,33 72,13 58,27" class="m-ear m-ear-r" fill="#f97316"/>
+        <ellipse cx="50" cy="60" rx="20" ry="14" class="m-belly" fill="rgba(255,255,255,0.92)"/>
+        <g class="m-eyes">
+          <circle cx="40" cy="48" r="3.5" class="m-eye m-eye-l" fill="#1f1f1f"/>
+          <circle cx="60" cy="48" r="3.5" class="m-eye m-eye-r" fill="#1f1f1f"/>
+          <circle cx="41" cy="47" r="1.2" class="m-eye-shine m-eye-shine-l" fill="#fff"/>
+          <circle cx="61" cy="47" r="1.2" class="m-eye-shine m-eye-shine-r" fill="#fff"/>
+        </g>
+        <path d="M 44 62 Q 50 67 56 62" class="m-mouth" fill="none" stroke="#1f1f1f" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <!-- Encouragement speech bubble (optional, dialect-flavored) -->
+    <div class="fox-bubble" aria-hidden="true"></div>
+  </div>
+
   <div id="toast" class="hidden"></div>
 
   <script src="vendor/xterm.min.js"></script>
   <script src="vendor/addon-fit.min.js"></script>
+  <script src="vendor/addon-search.min.js"></script>
+  <script src="vendor/addon-web-links.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

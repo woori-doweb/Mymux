@@ -8,6 +8,8 @@ pub struct CommandDto {
     pub command: String,
     pub description: String,
     pub favorite: bool,
+    pub cwd: String,
+    pub alias: String,
 }
 
 impl From<SavedCommand> for CommandDto {
@@ -18,6 +20,8 @@ impl From<SavedCommand> for CommandDto {
             command: c.command,
             description: c.description,
             favorite: c.favorite,
+            cwd: c.cwd,
+            alias: c.alias,
         }
     }
 }
@@ -30,15 +34,15 @@ fn store() -> Result<CommandStore, String> {
 /// name in any shell (PowerShell / Git Bash / CMD), so typing e.g. `cl` offers
 /// `claude --dangerously-skip-permissions`.
 const DEFAULT_COMMANDS: &[(&str, &str, &str)] = &[
-    ("cl", "claude --dangerously-skip-permissions", "Claude Code (권한 확인 스킵)"),
-    ("cc", "claude --continue", "Claude Code 이어서 진행"),
-    ("cr", "claude --resume", "Claude Code 세션 재개"),
-    ("cp", "claude update", "Claude Code 업데이트"),
-    ("cy", "codex --yolo", "Codex (yolo 모드)"),
-    ("co", "codex", "Codex 실행"),
-    ("cor", "codex resume", "Codex 세션 재개"),
-    ("cle", "clear", "화면 지우기"),
-    ("c&p", "git add -A && git commit -m \"update\" && git push", "커밋 후 푸시"),
+    ("cl", "claude --dangerously-skip-permissions", "Claude Code (skip permission prompts)"),
+    ("cc", "claude --continue", "Claude Code: continue"),
+    ("cr", "claude --resume", "Claude Code: resume session"),
+    ("cp", "claude update", "Update Claude Code"),
+    ("cy", "codex --yolo", "Codex (yolo mode)"),
+    ("co", "codex", "Run Codex"),
+    ("cor", "codex resume", "Codex: resume session"),
+    ("cle", "clear", "Clear the screen"),
+    ("c&p", "git add -A && git commit -m \"update\" && git push", "Commit and push"),
 ];
 
 /// Seed built-in shortcuts once (tracked by a marker file so deletions stick).
@@ -72,16 +76,31 @@ pub fn list_commands() -> Result<Vec<CommandDto>, String> {
 }
 
 #[tauri::command]
-pub fn add_command(name: String, command: String, description: String) -> Result<CommandDto, String> {
+pub fn add_command(
+    name: String,
+    command: String,
+    description: String,
+    cwd: Option<String>,
+    alias: Option<String>,
+) -> Result<CommandDto, String> {
     let s = store()?;
-    let cmd = SavedCommand::new(name, command, description);
+    let mut cmd = SavedCommand::new(name, command, description);
+    cmd.cwd = cwd.unwrap_or_default();
+    cmd.alias = alias.unwrap_or_default();
     let dto = CommandDto::from(cmd.clone());
     s.add(cmd).map_err(|e| e.to_string())?;
     Ok(dto)
 }
 
 #[tauri::command]
-pub fn update_command(id: String, name: String, command: String, description: String) -> Result<(), String> {
+pub fn update_command(
+    id: String,
+    name: String,
+    command: String,
+    description: String,
+    cwd: Option<String>,
+    alias: Option<String>,
+) -> Result<(), String> {
     let s = store()?;
     // Preserve the existing favorite flag (the edit form doesn't carry it).
     let favorite = s
@@ -91,7 +110,15 @@ pub fn update_command(id: String, name: String, command: String, description: St
         .find(|c| c.id == id)
         .map(|c| c.favorite)
         .unwrap_or(false);
-    let cmd = SavedCommand { id, name, command, description, favorite };
+    let cmd = SavedCommand {
+        id,
+        name,
+        command,
+        description,
+        favorite,
+        cwd: cwd.unwrap_or_default(),
+        alias: alias.unwrap_or_default(),
+    };
     s.update(cmd).map_err(|e| e.to_string())
 }
 
@@ -120,7 +147,7 @@ pub fn read_text_file(path: String) -> Result<String, String> {
     use std::io::Read;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     if meta.len() > 2_000_000 {
-        return Err("파일이 너무 큽니다 (2MB 초과)".into());
+        return Err("File is too large (over 2 MB)".into());
     }
     let mut buf = Vec::new();
     std::fs::File::open(&path)
@@ -140,13 +167,180 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// Tail of the newest Codex CLI session rollout (~/.codex/sessions/Y/M/D/*.jsonl).
+/// The frontend mines it for the last `rate_limits` snapshot so the toolbar can
+/// show account-wide Codex usage. Rollouts easily exceed the read_text_file cap,
+/// hence a dedicated tail reader. Directory names are zero-padded dates, so the
+/// lexicographically largest entry is the newest — only the newest day dir that
+/// actually contains a rollout is scanned (by mtime) instead of walking them all.
+#[tauri::command]
+pub fn codex_rollout_tail(max_bytes: Option<u64>) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let max_bytes = max_bytes.unwrap_or(65536).min(1_000_000);
+    let sessions = dirs::home_dir()
+        .ok_or("Home directory not found")?
+        .join(".codex")
+        .join("sessions");
+
+    fn sorted_dirs_desc(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut v: Vec<_> = std::fs::read_dir(dir)
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        v.sort();
+        v.reverse();
+        v
+    }
+
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    'search: for year in sorted_dirs_desc(&sessions) {
+        for month in sorted_dirs_desc(&year) {
+            for day in sorted_dirs_desc(&month) {
+                if let Ok(rd) = std::fs::read_dir(&day) {
+                    for e in rd.flatten() {
+                        let p = e.path();
+                        if p.extension().is_some_and(|x| x == "jsonl") {
+                            if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                                if newest.as_ref().map_or(true, |(t, _)| m > *t) {
+                                    newest = Some((m, p));
+                                }
+                            }
+                        }
+                    }
+                }
+                if newest.is_some() {
+                    break 'search; // newest day with any rollout is enough
+                }
+            }
+        }
+    }
+
+    let (_, path) = newest.ok_or("No codex rollout found")?;
+    let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    let start = len.saturating_sub(max_bytes);
+    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&buf).to_string())
+}
+
+/// Account-wide Claude usage (5-hour + weekly rate-limit utilization) fetched
+/// straight from Anthropic's OAuth usage endpoint, using the token Claude Code
+/// already stored in `~/.claude/.credentials.json`. This lets the toolbar's CL
+/// readout work WITHOUT oh-my-claudecode's HUD statusline and WITHOUT a Claude
+/// session running inside a Mymux pane — a valid stored login is all it needs.
+///
+/// SAFE MODE — strictly read-only: if the stored token is missing or expired we
+/// return an error and the CL segment simply hides. We NEVER refresh the token
+/// or rewrite the credentials file, so there is zero chance of racing Claude
+/// Code's own token rotation and logging the user out.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeUsage {
+    five_h: Option<u8>,
+    five_h_resets_at: Option<String>,
+    wk: Option<u8>,
+    wk_resets_at: Option<String>,
+}
+
+/// Read Claude Code's stored OAuth credentials blob (JSON string).
+///
+/// Windows/Linux keep it at `<config>/.credentials.json`. macOS keeps it in the
+/// login **Keychain** (generic password, service `Claude Code-credentials`) and
+/// writes NO file — so on a Mac the file read always misses and the CL usage
+/// readout silently hid. Fall back to reading the Keychain via the `security`
+/// CLI (read-only: `find-generic-password -w` only reads, never writes), which
+/// returns the very same JSON shape the file would have.
+fn read_claude_credentials(config_dir: &std::path::Path) -> Result<String, String> {
+    if let Ok(raw) = std::fs::read_to_string(config_dir.join(".credentials.json")) {
+        return Ok(raw);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                return Ok(s);
+            }
+        }
+    }
+    Err("no credentials".to_string())
+}
+
+#[tauri::command]
+pub async fn claude_account_usage() -> Result<ClaudeUsage, String> {
+    // Honor CLAUDE_CONFIG_DIR (custom profiles) the same way Claude Code / OMC do.
+    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude"));
+    let raw = read_claude_credentials(&config_dir)?;
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    // The token lives under `claudeAiOauth` (nested), with a flat-root fallback.
+    let oauth = v.get("claudeAiOauth").unwrap_or(&v);
+    let token = oauth
+        .get("accessToken")
+        .and_then(|x| x.as_str())
+        .ok_or("no accessToken")?;
+    // Expiry gate — no refresh in safe mode. `expiresAt` is epoch milliseconds.
+    if let Some(exp) = oauth.get("expiresAt").and_then(|x| x.as_i64()) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        if exp <= now_ms {
+            return Err("token expired".into());
+        }
+    }
+    // builder().build() surfaces a TLS/backend init failure as an Err instead of
+    // panicking the way Client::new() would inside this async command.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://api.anthropic.com/api/oauth/usage")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("usage api http {}", resp.status().as_u16()));
+    }
+    let j: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    // `five_hour.utilization` / `seven_day.utilization` are 0-100 percentages.
+    let pct = |bucket: &str| {
+        j.get(bucket)
+            .and_then(|b| b.get("utilization"))
+            .and_then(|u| u.as_f64())
+            .map(|f| f.clamp(0.0, 100.0).round() as u8)
+    };
+    let reset = |bucket: &str| {
+        j.get(bucket)
+            .and_then(|b| b.get("resets_at"))
+            .and_then(|r| r.as_str())
+            .map(|s| s.to_string())
+    };
+    Ok(ClaudeUsage {
+        five_h: pct("five_hour"),
+        five_h_resets_at: reset("five_hour"),
+        wk: pct("seven_day"),
+        wk_resets_at: reset("seven_day"),
+    })
+}
+
 /// Open a path with the OS default application (used for binary/exe files).
+/// The path is always passed as a single structured argument — never through a
+/// shell — so metacharacters in file names can't inject commands.
 #[tauri::command]
 pub fn open_external(path: String) -> Result<(), String> {
     #[cfg(windows)]
     {
-        // explorer.exe with the path as a single structured argument is not
-        // subject to `cmd` metacharacter parsing (avoids command injection).
         // CREATE_NO_WINDOW (0x0800_0000) → no flashing console window.
         use std::os::windows::process::CommandExt;
         std::process::Command::new("explorer")
@@ -155,7 +349,41 @@ pub fn open_external(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
     }
+    // On Unix, dropping a Child does NOT reap it — `open`/`xdg-open` fork the
+    // real handler and exit within milliseconds, so spawn-and-drop would leave a
+    // defunct (zombie) PID per call for the app's whole lifetime. Reap on a
+    // detached thread: non-blocking for the caller, no zombie left behind.
+    #[cfg(target_os = "macos")]
+    {
+        let mut child = std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut child = std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
     Ok(())
+}
+
+/// Flash the taskbar icon without stealing focus — called when a terminal
+/// bell / completion notification arrives while the window is in the
+/// background, so a finished long task is noticeable from another app.
+#[tauri::command]
+pub fn window_attention(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .request_user_attention(Some(tauri::UserAttentionType::Informational))
+        .map_err(|e| e.to_string())
 }
 
 /// Open a native file picker and return the chosen path (e.g. an SSH key file).
@@ -168,6 +396,35 @@ pub fn pick_key_file(app: tauri::AppHandle) -> Option<String> {
         .file()
         .blocking_pick_file()
         .map(|f| f.to_string())
+}
+
+/// If the clipboard holds an image, save it as a temp PNG and return its path;
+/// otherwise return None. The terminal paste path calls this first so Ctrl+V of
+/// a screenshot drops a file path the running tool (Claude Code / Codex) can
+/// attach, instead of pasting nothing. Falls back to text paste when None.
+#[tauri::command]
+pub fn paste_clipboard_image(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use image::ImageEncoder;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let img = match app.clipboard().read_image() {
+        Ok(img) => img,
+        Err(_) => return Ok(None), // no image on the clipboard
+    };
+    let (width, height) = (img.width(), img.height());
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("mymux-clip-{nanos}.png"));
+
+    let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+    image::codecs::png::PngEncoder::new(std::io::BufWriter::new(file))
+        .write_image(img.rgba(), width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|e| e.to_string())?;
+
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
 /// Recursively copy a file or directory tree.
@@ -192,13 +449,13 @@ fn copy_recursive(src: &std::path::Path, dest: &std::path::Path) -> std::io::Res
 #[tauri::command]
 pub fn fs_copy_path(src: String, dest_dir: String) -> Result<(), String> {
     let s = std::path::PathBuf::from(&src);
-    let name = s.file_name().ok_or("잘못된 경로")?;
+    let name = s.file_name().ok_or("Invalid path")?;
     let d = std::path::Path::new(&dest_dir).join(name);
     if d == s {
-        return Err("같은 위치입니다.".into());
+        return Err("Same location.".into());
     }
     if d.exists() {
-        return Err("같은 이름의 항목이 이미 있습니다.".into());
+        return Err("An item with the same name already exists.".into());
     }
     copy_recursive(&s, &d).map_err(|e| e.to_string())
 }
@@ -208,13 +465,13 @@ pub fn fs_copy_path(src: String, dest_dir: String) -> Result<(), String> {
 #[tauri::command]
 pub fn fs_move_path(src: String, dest_dir: String) -> Result<(), String> {
     let s = std::path::PathBuf::from(&src);
-    let name = s.file_name().ok_or("잘못된 경로")?;
+    let name = s.file_name().ok_or("Invalid path")?;
     let d = std::path::Path::new(&dest_dir).join(name);
     if d == s {
-        return Err("같은 위치입니다.".into());
+        return Err("Same location.".into());
     }
     if d.exists() {
-        return Err("같은 이름의 항목이 이미 있습니다.".into());
+        return Err("An item with the same name already exists.".into());
     }
     if std::fs::rename(&s, &d).is_ok() {
         return Ok(());
@@ -227,6 +484,25 @@ pub fn fs_move_path(src: String, dest_dir: String) -> Result<(), String> {
         std::fs::remove_file(&s).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Create a new folder named `name` inside `dir`. Refuses empty names, names
+/// containing path separators, and names that already exist.
+#[tauri::command]
+pub fn fs_create_dir(dir: String, name: String) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Folder name cannot be empty.".into());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("Folder name cannot contain / or \\.".into());
+    }
+    let target = std::path::Path::new(&dir).join(trimmed);
+    if target.exists() {
+        return Err("An item with the same name already exists.".into());
+    }
+    std::fs::create_dir(&target).map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().to_string())
 }
 
 #[tauri::command]

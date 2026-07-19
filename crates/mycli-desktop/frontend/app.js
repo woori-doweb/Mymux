@@ -1,6 +1,12 @@
 // Globals - set after init
 let invoke;
 
+// Platform: on macOS we lock to the system shell (zsh) and use Mac-native
+// monospace fonts; the Windows shell choices (Git Bash/PowerShell/CMD) are hidden.
+const IS_MAC =
+  /Mac/i.test(navigator.platform || "") ||
+  /Mac OS X|Macintosh/i.test(navigator.userAgent || "");
+
 // Monochrome inline-SVG icons (use currentColor → theme-aware: white in dark, black in light)
 const ICON = {
   globe: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.6 2.7 3.9 5.9 3.9 9s-1.3 6.3-3.9 9c-2.6-2.7-3.9-5.9-3.9-9S9.4 5.7 12 3z"/></svg>`,
@@ -16,13 +22,29 @@ async function clipboardWrite(text) {
   } catch {}
 }
 
-// Paste clipboard text into a terminal pane (Ctrl+V / Shift+Insert / right-click).
+// Paste into a terminal pane (Ctrl+V / Shift+Insert / right-click). An image on
+// the clipboard (e.g. a screenshot) is saved to a temp PNG and its path is typed
+// in, so Ctrl+V drops an attachable file path for the running tool (Claude Code
+// / Codex). Falls back to clipboard text when there's no image.
+// Text must go through term.paste(), not straight to the PTY: xterm wraps it in
+// bracketed-paste markers when the app enabled that mode (bash/vim/Claude Code —
+// without them each pasted line executes immediately) and normalizes \r\n to \r.
 async function pasteIntoPane(id) {
+  const entry = terminals.get(id);
+  const feed = (text) => {
+    armNotifyCycle(id); // paste is real user input — re-arm the task-done notify
+    if (entry && entry.term) entry.term.paste(text);
+    else invoke("pty_write", { id, data: text });
+  };
+  try {
+    const imgPath = await invoke("paste_clipboard_image");
+    if (imgPath) { feed(imgPath); return; }
+  } catch {}
   try {
     const clip = window.__TAURI_PLUGIN_CLIPBOARD_MANAGER__;
     if (clip && clip.readText) {
       const text = await clip.readText();
-      if (text) invoke("pty_write", { id, data: text });
+      if (text) feed(text);
     }
   } catch {}
 }
@@ -62,6 +84,27 @@ let terminalFontSize = (function () {
   } catch {}
   return 14;
 })();
+// Letter spacing (자간) as a ratio of the font size — adjustable from the toolbar
+// (자−/자+) and persisted. 0 = none; default ≈0.1 (~20% of a cell) because Korean/
+// CJK glyphs look cramped at 0.
+let letterSpacingRatio = (function () {
+  try {
+    const v = parseFloat(localStorage.getItem("mymux.termLetterSpacing"));
+    if (Number.isFinite(v) && v >= 0 && v <= 0.4) return v;
+  } catch {}
+  return 0.1;
+})();
+// Effective per-cell letter spacing in px. On macOS this is forced to 0: WKWebView
+// (WebKit) applies CSS `letter-spacing` as trailing space that xterm's DOM renderer
+// does NOT fold into its cell-width measurement, so any non-zero value drifts every
+// glyph a fraction of a cell to the right. Past ~a line that desyncs xterm's cursor
+// column from zsh's ZLE model — characters land in the wrong column and zsh's
+// erase-by-`\b \b` paints its space at the visible cursor, so Backspace looks like it
+// types a space. SF Mono/Menlo are already comfortably spaced (unlike D2Coding's
+// narrow CJK cells that the ratio was tuned for), so 0 is also the right look on Mac.
+function effectiveLetterSpacing() {
+  return IS_MAC ? 0 : terminalFontSize * letterSpacingRatio;
+}
 let savedCmds = [];
 let currentInput = "";
 let acSelectedIdx = -1;
@@ -90,6 +133,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   btnToggleSidebar = document.getElementById("btn-toggle-sidebar");
   btnNewTerminal = document.getElementById("btn-new-terminal");
   explorerPath = document.getElementById("explorer-path");
+  // Clicking the path label copies the current directory to the clipboard.
+  explorerPath.addEventListener("click", () => {
+    if (!currentExplorerPath) return;
+    clipboardWrite(currentExplorerPath);
+    toast("Copied: " + currentExplorerPath);
+  });
   btnExplorerUp = document.getElementById("btn-explorer-up");
   explorerMode = document.getElementById("explorer-mode");
   fileListEl = document.getElementById("file-list");
@@ -147,6 +196,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   try { await document.fonts.load('1em "D2Coding"'); } catch {}
   document.fonts.ready.then(() => remeasureFontCells());
 
+  // Before the (possibly modal-gated) session restore below so the effort
+  // poller starts even while the re-run dialog waits for the user.
+  initCtxUsage();
+
   // Restore the previous session if one was saved; otherwise open a default terminal.
   try {
     const restored = await restoreSession();
@@ -164,6 +217,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   requestAnimationFrame(() => requestAnimationFrame(() => remeasureFontCells()));
   setTimeout(() => remeasureFontCells(), 150);
 
+  startFocusKeeper();
+  setupSessionResizer();
   setupCloseHandler();
 });
 
@@ -181,11 +236,82 @@ async function setupListeners() {
   btnToggleSidebar.addEventListener("click", () => { sidebar.classList.toggle("collapsed"); persistPanelState(); updatePanelToggleIcons(); });
   btnToggleSessions.addEventListener("click", () => { sessionPanel.classList.toggle("collapsed"); persistPanelState(); updatePanelToggleIcons(); });
 
+  // 🔔 Task-done flash settings modal (where the completion pulse shows).
+  const btnNotifySettings = document.getElementById("btn-notify-settings");
+  const notifyModal = document.getElementById("notify-modal");
+  const notifyChkPane = document.getElementById("notify-chk-pane");
+  const notifyChkList = document.getElementById("notify-chk-list");
+  const notifyCharRadios = document.querySelectorAll('input[name="notify-char"]');
+  const notifyChkBubble = document.getElementById("notify-chk-bubble");
+  const notifyDialect = document.getElementById("notify-dialect");
+  const notifyChkCtxBadge = document.getElementById("notify-chk-ctxbadge");
+  const notifyChkCtxVoice = document.getElementById("notify-chk-ctxvoice");
+  initFoxDrag();
+  if (btnNotifySettings && notifyModal) {
+    const closeNotifyModal = () => {
+      notifyModal.classList.add("hidden");
+      // Restore the native browser overlay only if we're still on the browser view.
+      if (browserTabActive && browserMode === "native") openNativePane();
+    };
+    btnNotifySettings.addEventListener("click", () => {
+      notifyChkPane.checked = notifyFlashPrefs.pane;
+      notifyChkList.checked = notifyFlashPrefs.list;
+      notifyCharRadios.forEach((r) => { r.checked = r.value === notifyFlashPrefs.character; });
+      if (notifyChkBubble) notifyChkBubble.checked = notifyFlashPrefs.bubble;
+      if (notifyDialect) notifyDialect.value = notifyFlashPrefs.dialect;
+      if (notifyChkCtxBadge) notifyChkCtxBadge.checked = notifyFlashPrefs.ctxBadge;
+      if (notifyChkCtxVoice) notifyChkCtxVoice.checked = notifyFlashPrefs.ctxVoice;
+      // The native browser overlay floats above all HTML; hide it so the modal shows.
+      if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
+      notifyModal.classList.remove("hidden");
+    });
+    document.getElementById("notify-modal-close").addEventListener("click", closeNotifyModal);
+    notifyModal.addEventListener("click", (e) => { if (e.target === notifyModal) closeNotifyModal(); });
+    notifyModal.addEventListener("keydown", (e) => { if (e.key === "Escape") closeNotifyModal(); });
+    notifyChkPane.addEventListener("change", () => { notifyFlashPrefs.pane = notifyChkPane.checked; saveNotifyFlashPrefs(); });
+    notifyChkList.addEventListener("change", () => { notifyFlashPrefs.list = notifyChkList.checked; saveNotifyFlashPrefs(); });
+    notifyCharRadios.forEach((r) => r.addEventListener("change", () => {
+      if (!r.checked) return;
+      notifyFlashPrefs.character = r.value;
+      notifyFlashPrefs.fox = r.value !== "none"; // keep legacy flag roughly in sync
+      saveNotifyFlashPrefs();
+      const fox = document.getElementById("fox-buddy");
+      if (r.value === "none") hideFox();
+      else if (fox) fox.dataset.char = r.value; // live-switch the visible character
+    }));
+    if (notifyChkBubble) notifyChkBubble.addEventListener("change", () => {
+      notifyFlashPrefs.bubble = notifyChkBubble.checked;
+      saveNotifyFlashPrefs();
+      const fox = document.getElementById("fox-buddy");
+      if (!notifyChkBubble.checked && fox) fox.classList.remove("bubble-on", "bubble-below");
+    });
+    if (notifyDialect) notifyDialect.addEventListener("change", () => {
+      notifyFlashPrefs.dialect = notifyDialect.value;
+      saveNotifyFlashPrefs();
+    });
+    if (notifyChkCtxBadge) notifyChkCtxBadge.addEventListener("change", () => {
+      notifyFlashPrefs.ctxBadge = notifyChkCtxBadge.checked;
+      saveNotifyFlashPrefs();
+      // Apply immediately: hide (or re-show) every existing badge.
+      for (const [pid, tt] of terminals) if (tt.ctxPct != null || tt.codexDetected) updateCtxUi(pid, tt);
+      updateGlobalUsageUi();
+    });
+    if (notifyChkCtxVoice) notifyChkCtxVoice.addEventListener("change", () => {
+      notifyFlashPrefs.ctxVoice = notifyChkCtxVoice.checked;
+      saveNotifyFlashPrefs();
+    });
+  }
+
   // GitHub shortcut (session panel footer) → open the repo in the OS default browser.
   const btnGithub = document.getElementById("btn-github");
   if (btnGithub) {
     btnGithub.addEventListener("click", () =>
       invoke("open_external", { path: "https://github.com/ChoiGyber/Mymux" }).catch((e) => toast(String(e), true)));
+  }
+  // Current app version tag inside the GitHub button.
+  const versionEl = document.getElementById("app-version");
+  if (versionEl && window.__TAURI__.app && window.__TAURI__.app.getVersion) {
+    window.__TAURI__.app.getVersion().then((v) => { versionEl.textContent = "v" + v; }).catch(() => {});
   }
   btnSplitH.addEventListener("click", () => splitPane("horizontal"));
   btnSplitV.addEventListener("click", () => splitPane("vertical"));
@@ -204,6 +330,9 @@ async function setupListeners() {
   const sshModalConnect = document.getElementById("ssh-modal-connect");
   const sshModalCancel = document.getElementById("ssh-modal-cancel");
   if (sshModalCancel) sshModalCancel.addEventListener("click", closeSshModal);
+  const sshSaveFav = document.getElementById("ssh-save-fav");
+  if (sshSaveFav) sshSaveFav.addEventListener("click", saveSshFavFromModal);
+  renderSshFavs(); // SSH favorites in the session panel (one-click reconnect)
   if (sshModalConnect) sshModalConnect.addEventListener("click", submitSshModal);
   const sshSaveCmd = document.getElementById("ssh-save-cmd");
   if (sshSaveCmd) sshSaveCmd.addEventListener("click", saveSshAsCommand);
@@ -232,15 +361,34 @@ async function setupListeners() {
 
   const shellSel = document.getElementById("default-shell");
   if (shellSel) {
-    try { shellSel.value = localStorage.getItem("mymux.defaultShell") || "bash"; } catch {}
-    shellSel.addEventListener("change", () => {
-      try { localStorage.setItem("mymux.defaultShell", shellSel.value); } catch {}
-      toast("기본 셸: " + shellSel.options[shellSel.selectedIndex].text + " (새 터미널부터 적용)");
+    if (IS_MAC) {
+      // macOS uses the fixed system shell — hide the Windows shell picker.
+      shellSel.style.display = "none";
+    } else {
+      try { shellSel.value = localStorage.getItem("mymux.defaultShell") || "powershell"; } catch {}
+      shellSel.addEventListener("change", () => {
+        try { localStorage.setItem("mymux.defaultShell", shellSel.value); } catch {}
+        toast("Default shell: " + shellSel.options[shellSel.selectedIndex].text + " (applies to new terminals)");
+      });
+    }
+  }
+
+  // macOS: hide the Windows-only shell quick-buttons (PowerShell/CMD/Git Bash).
+  // Keep only "Default Shell", which routes to the system shell.
+  if (IS_MAC) {
+    document.querySelectorAll(".shell-btn").forEach((btn) => {
+      const ds = (btn.dataset.shell || "").toLowerCase();
+      if (ds === "powershell.exe" || ds === "cmd.exe" || ds === "bash") {
+        btn.style.display = "none";
+      } else if (ds === "") {
+        btn.textContent = "Terminal (zsh)";
+      }
     });
   }
   btnAdd.addEventListener("click", () => openModal());
   const cmdSearch = document.getElementById("cmd-search");
   if (cmdSearch) cmdSearch.addEventListener("input", () => renderCmdList(savedCmds));
+  wireSearchClear(cmdSearch);
   btnCancel.addEventListener("click", closeModal);
   modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
   form.addEventListener("submit", handleSave);
@@ -250,10 +398,30 @@ async function setupListeners() {
   explorerMode.addEventListener("change", onExplorerModeChange);
   const expSearch = document.getElementById("explorer-search");
   if (expSearch) expSearch.addEventListener("input", () => renderFileList(explorerEntries));
+  wireSearchClear(expSearch);
   const btnExpBack = document.getElementById("btn-explorer-back");
   const btnExpFwd = document.getElementById("btn-explorer-forward");
   if (btnExpBack) btnExpBack.addEventListener("click", explorerBack);
   if (btnExpFwd) btnExpFwd.addEventListener("click", explorerForward);
+  const btnExpNewFolder = document.getElementById("btn-explorer-newfolder");
+  if (btnExpNewFolder) btnExpNewFolder.addEventListener("click", openNewFolderModal);
+  const newFolderOpenSession = document.getElementById("newfolder-open-session");
+  if (newFolderOpenSession) {
+    newFolderOpenSession.addEventListener("change", () => {
+      const opts = document.getElementById("newfolder-session-opts");
+      if (opts) opts.classList.toggle("hidden", !newFolderOpenSession.checked);
+    });
+  }
+  const newFolderName = document.getElementById("newfolder-name");
+  if (newFolderName) {
+    newFolderName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); confirmNewFolder(); }
+    });
+  }
+  const newFolderCancel = document.getElementById("newfolder-cancel");
+  if (newFolderCancel) newFolderCancel.addEventListener("click", closeNewFolderModal);
+  const newFolderConfirm = document.getElementById("newfolder-confirm");
+  if (newFolderConfirm) newFolderConfirm.addEventListener("click", confirmNewFolder);
 
   // Mouse "back"(3) / "forward"(4) special buttons — navigate directory
   // history just like Chrome's back/forward. When the native browser panel is
@@ -284,6 +452,7 @@ async function setupListeners() {
 
   // Keyboard
   document.addEventListener("keydown", (e) => {
+    cancelFocusReturnRetries(); // a keystroke proves focus is alive → stop post-return re-focus thrash
     if (e.key === "Escape" && !modalOverlay.classList.contains("hidden")) closeModal();
     // Ctrl+` — focus terminal
     if (e.ctrlKey && e.key === "`") {
@@ -311,6 +480,27 @@ async function setupListeners() {
       e.preventDefault();
       spawnTerminal();
     }
+    // Ctrl+Shift+F — search the focused pane's scrollback. Also match e.code:
+    // with the Korean IME active e.key never arrives as the Latin letter.
+    if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.code === "KeyF")) {
+      e.preventDefault();
+      openTermSearch();
+    }
+    // Ctrl+Shift+Z — maximize / restore the focused pane (tmux zoom)
+    if (e.ctrlKey && e.shiftKey && (e.key === "Z" || e.code === "KeyZ")) {
+      e.preventDefault();
+      togglePaneZoom();
+    }
+    // Ctrl+Shift+B — broadcast typing to every pane in this tab
+    if (e.ctrlKey && e.shiftKey && (e.key === "B" || e.code === "KeyB")) {
+      e.preventDefault();
+      toggleBroadcast();
+    }
+    // Ctrl+PageUp / Ctrl+PageDown — switch between sessions/tabs
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "PageUp" || e.key === "PageDown")) {
+      e.preventDefault();
+      switchToAdjacentTab(e.key === "PageDown" ? 1 : -1);
+    }
     // Alt+Arrow — navigate between panes
     if (e.altKey && !e.ctrlKey && !e.shiftKey) {
       const paneIds = getCurrentTabPanes();
@@ -333,20 +523,33 @@ async function setupListeners() {
     return tab ? tab.panes : [];
   }
 
-  // PTY polling loop — reads output from all terminals
-  setInterval(async () => {
-    for (const [id, t] of terminals) {
-      try {
-        const [chunks, exited] = await invoke("pty_read", { id });
-        for (const chunk of chunks) {
-          t.term.write(chunk);
-        }
-        if (exited && chunks.length === 0) {
-          closeTerminal(id);
-        }
-      } catch {}
+  // PTY polling loop — reads output from all terminals. Self-scheduling (NOT
+  // setInterval): setInterval never awaits its async callback, so when a tick
+  // runs long — many sessions × IPC, or a heavy output burst like a large paste
+  // — the next tick starts before the previous finishes and overlapping loops
+  // pile up, multiplying IPC/render work and tanking throughput (paste crawls,
+  // input lags). Here each tick reads every terminal in PARALLEL and only
+  // re-arms once done, so there's never more than one pass in flight.
+  const pumpTerminals = async () => {
+    try {
+      await Promise.all([...terminals].map(async ([id, t]) => {
+        try {
+          const [chunks, exited] = await invoke("pty_read", { id });
+          if (chunks.length) {
+            const data = chunks.join("");
+            t.term.write(data); // one write, not per-chunk
+            markPaneActivity(id, t); // unseen badge when this pane is hidden
+            trackOutputSilence(id, t); // flash when sustained output goes quiet
+            scanCtxUsage(id, t, data); // Claude Code statusline → ctx/model badge
+            if (t.pendingReplay) armReplaySettle(id, t); // SSH: replay once the prompt settles
+          } else if (exited) closeTerminal(id);
+        } catch {}
+      }));
+    } finally {
+      setTimeout(pumpTerminals, 16); // ~60fps cadence, but never overlapping
     }
-  }, 16); // ~60fps
+  };
+  pumpTerminals();
 
   // Resize — refit all visible panes. Debounced (coalesced to one animation
   // frame) so a ResizeObserver burst doesn't reflow every pane repeatedly.
@@ -371,6 +574,34 @@ async function setupListeners() {
   // Browser feature on/off toggle (top bar 🌐).
   const btnBrowser = document.getElementById("btn-toggle-browser");
   if (btnBrowser) btnBrowser.addEventListener("click", toggleBrowserEnabled);
+
+  // Scrollback search bar (Ctrl+Shift+F) + per-tab input broadcast (Ctrl+Shift+B).
+  initTermSearch();
+  const btnBroadcast = document.getElementById("btn-broadcast");
+  if (btnBroadcast) btnBroadcast.addEventListener("click", toggleBroadcast);
+  // Command palette (Ctrl+Shift+P).
+  initCommandPalette();
+  // Keyboard shortcuts help modal (toolbar ⌨ button).
+  initShortcutsHelp();
+
+  // Terminal text zoom (top bar A−/A+) — same effect as Ctrl -/+.
+  const btnFontDec = document.getElementById("btn-font-dec");
+  if (btnFontDec) btnFontDec.addEventListener("click", () => adjustTerminalFontSize(-1));
+  const btnFontInc = document.getElementById("btn-font-inc");
+  if (btnFontInc) btnFontInc.addEventListener("click", () => adjustTerminalFontSize(1));
+
+  // Letter spacing (top bar 자−/자+) — adjust the persisted 자간 ratio live.
+  // Hidden on macOS: letter-spacing is force-disabled there (effectiveLetterSpacing),
+  // so the buttons would be dead controls.
+  const btnTrackDec = document.getElementById("btn-track-dec");
+  const btnTrackInc = document.getElementById("btn-track-inc");
+  if (IS_MAC) {
+    if (btnTrackDec) btnTrackDec.style.display = "none";
+    if (btnTrackInc) btnTrackInc.style.display = "none";
+  } else {
+    if (btnTrackDec) btnTrackDec.addEventListener("click", () => adjustLetterSpacing(-0.025));
+    if (btnTrackInc) btnTrackInc.addEventListener("click", () => adjustLetterSpacing(0.025));
+  }
 
   // File viewer close button.
   const vClose = document.getElementById("viewer-close");
@@ -425,8 +656,8 @@ async function setupListeners() {
 async function loadExplorer() {
   fileListEl.innerHTML = "";
   explorerPath.textContent = currentExplorerPath || "/";
-  explorerPath.title = currentExplorerPath;
-  highlightActiveDrive();
+  explorerPath.title = (currentExplorerPath || "") + " — click to copy";
+  renderDriveRow();
 
   try {
     let entries;
@@ -467,7 +698,7 @@ function renderFileList(entries) {
       <span class="file-name ${nameClass}">${esc(entry.name)}</span>
       <span class="file-size">${size}</span>
       <span class="file-item-actions">
-        ${entry.is_dir ? `<button class="fav-btn${favOn ? " on" : ""}" title="즐겨찾기">${favOn ? "★" : "☆"}</button>` : ""}
+        ${entry.is_dir ? `<button class="fav-btn${favOn ? " on" : ""}" title="Favorite">${favOn ? "★" : "☆"}</button>` : ""}
         <button class="cd-btn" title="Open a new terminal here">cd</button>
       </span>
     `;
@@ -489,10 +720,14 @@ function renderFileList(entries) {
       });
     }
 
-    li.querySelector(".cd-btn").addEventListener("click", (e) => {
+    const cdBtn = li.querySelector(".cd-btn");
+    cdBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       cdToTerminal(entry.is_dir ? entry.path : currentExplorerPath);
     });
+    // Right-click the cd button: open a session there AND run a saved command.
+    cdBtn.addEventListener("contextmenu", (e) => showCdCommandMenu(e, entry.is_dir ? entry.path : currentExplorerPath));
+    cdBtn.title = "Open a new terminal here (right-click: run a saved command here)";
 
     fileListEl.appendChild(li);
   }
@@ -514,12 +749,12 @@ function onExplorerContextMenu(e) {
   const items = [];
   if (entry) {
     if (local) {
-      items.push({ act: "copy", label: "복사" });
-      items.push({ act: "cut", label: "자르기" });
+      items.push({ act: "copy", label: "Copy" });
+      items.push({ act: "cut", label: "Cut" });
     }
-    items.push({ act: "copypath", label: "경로 복사" });
+    items.push({ act: "copypath", label: "Copy path" });
   }
-  if (local) items.push({ act: "paste", label: "붙여넣기", disabled: !(fileClipboard && fileClipboard.path) });
+  if (local) items.push({ act: "paste", label: "Paste", disabled: !(fileClipboard && fileClipboard.path) });
   if (!items.length) return;
   menu.innerHTML = "";
   for (const it of items) {
@@ -545,13 +780,13 @@ async function handleExplorerCtxAction(act) {
   const entry = explorerCtxEntry;
   if (act === "copy" && entry) {
     fileClipboard = { path: entry.path, name: entry.name, mode: "copy" };
-    toast("복사: " + entry.name);
+    toast("Copied: " + entry.name);
   } else if (act === "cut" && entry) {
     fileClipboard = { path: entry.path, name: entry.name, mode: "cut" };
-    toast("잘라내기: " + entry.name);
+    toast("Cut: " + entry.name);
   } else if (act === "copypath" && entry) {
     clipboardWrite(entry.path);
-    toast("경로를 복사했습니다");
+    toast("Path copied");
   } else if (act === "paste") {
     await filePaste();
   }
@@ -566,7 +801,7 @@ async function filePaste() {
       await invoke("fs_move_path", { src: fileClipboard.path, destDir: currentExplorerPath });
       fileClipboard = null; // moved — clear so it isn't pasted again
     }
-    toast("붙여넣기 완료");
+    toast("Pasted");
     loadExplorer();
   } catch (e) {
     toast(String(e), true);
@@ -609,6 +844,8 @@ function syncExplorerNav() {
   const fwd = document.getElementById("btn-explorer-forward");
   if (back) back.disabled = explorerHistIdx <= 0;
   if (fwd) fwd.disabled = explorerHistIdx >= explorerHistory.length - 1;
+  const btnNewFolder = document.getElementById("btn-explorer-newfolder");
+  if (btnNewFolder) btnNewFolder.classList.toggle("hidden", currentSftpId != null);
   if (explorerMode) {
     const want = currentSftpId == null ? "local" : String(currentSftpId);
     if (explorerMode.value !== want && [...explorerMode.options].some((o) => o.value === want)) {
@@ -684,8 +921,8 @@ function ensureViewerTab() {
     tab = document.createElement("div");
     tab.className = "browser-tab"; // reuse the pinned-tab styling
     tab.id = "viewer-tab";
-    tab.innerHTML = `<span>📄</span><span>Viewer</span><span class="tab-close" title="닫기">&times;</span>`;
-    tab.title = "파일 뷰어";
+    tab.innerHTML = `<span>📄</span><span>Viewer</span><span class="tab-close" title="Close">&times;</span>`;
+    tab.title = "File viewer";
     tab.addEventListener("click", (e) => {
       if (e.target.classList.contains("tab-close")) { closeViewer(); return; }
       setViewerView(true);
@@ -748,12 +985,12 @@ function handleViewerCtxAction(act) {
   if (!text) return;
   if (act === "copy") {
     clipboardWrite(text);
-    toast("복사했습니다");
+    toast("Copied");
   } else if (act === "send") {
-    if (!activeTermId) { toast("열린 세션이 없습니다.", true); return; }
+    if (!activeTermId) { toast("No open sessions.", true); return; }
     invoke("pty_write", { id: activeTermId, data: text }); // no trailing Enter — user reviews then runs
     terminals.get(activeTermId)?.term.focus();
-    toast("세션으로 보냈습니다");
+    toast("Sent to session");
   }
 }
 
@@ -826,7 +1063,7 @@ async function openLocalLink(target) {
   if (viewable) {
     openFileViewer({ path: target, name, is_dir: false, is_symlink: false, size: 0 });
   } else {
-    toast("탐색기에서 위치를 열었습니다: " + name);
+    toast("Opened in Explorer: " + name);
   }
 }
 
@@ -860,8 +1097,8 @@ function restorePanelState() {
 function updatePanelToggleIcons() {
   const sb = document.getElementById("btn-toggle-sidebar");
   const sp = document.getElementById("btn-toggle-sessions");
-  if (sb) sb.title = sidebar.classList.contains("collapsed") ? "사이드바 펼치기" : "사이드바 접기";
-  if (sp) sp.title = sessionPanel.classList.contains("collapsed") ? "세션 패널 펼치기" : "세션 패널 접기";
+  if (sb) sb.title = sidebar.classList.contains("collapsed") ? "Expand sidebar" : "Collapse sidebar";
+  if (sp) sp.title = sessionPanel.classList.contains("collapsed") ? "Expand session panel" : "Collapse session panel";
 }
 
 // ── Local path helpers (Windows-first; tolerate / and \) ──
@@ -907,7 +1144,7 @@ async function openFileViewer(entry) {
   const isText = VIEWER_TEXT_EXTS.has(ext) || lower === "dockerfile" || lower.endsWith(".gitignore") || ext === "";
   const sftpId = currentSftpId; // when set, the entry is remote — read over SFTP
   if (!isText) {
-    if (sftpId != null) { toast("원격 바이너리 파일은 미리보기를 지원하지 않습니다.", true); return; }
+    if (sftpId != null) { toast("Preview isn't supported for remote binary files.", true); return; }
     invoke("open_external", { path: entry.path }).catch((e) => toast(String(e), true));
     return;
   }
@@ -928,7 +1165,7 @@ async function openFileViewer(entry) {
       : await invoke("read_text_file", { path: entry.path });
   } catch (e) {
     if (String(e).includes("BINARY")) {
-      if (sftpId != null) { toast("바이너리 파일은 미리보기를 지원하지 않습니다.", true); return; }
+      if (sftpId != null) { toast("Preview isn't supported for binary files.", true); return; }
       invoke("open_external", { path: entry.path }).catch(() => {});
       return;
     }
@@ -989,21 +1226,41 @@ function autosaveEnabled() {
   try { return localStorage.getItem("mymux.autosave") === "true"; } catch { return false; }
 }
 
+// Wire a search input's × clear button: show the × only when there is text,
+// and clear + refocus + re-run the input handler when it is clicked.
+function wireSearchClear(input) {
+  if (!input) return;
+  const wrap = input.closest(".search-wrap");
+  if (!wrap) return;
+  const btn = wrap.querySelector(".search-clear");
+  const sync = () => wrap.classList.toggle("has-text", input.value.length > 0);
+  input.addEventListener("input", sync);
+  if (btn) {
+    btn.addEventListener("click", () => {
+      input.value = "";
+      sync();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+  }
+  sync();
+}
+
 function buildEditor(file) {
   const wrap = document.createElement("div");
   wrap.className = "editor";
   wrap.innerHTML = `
     <div class="editor-find hidden">
-      <input class="ef-find" placeholder="찾기" spellcheck="false" />
-      <button class="ef-prev" title="이전">↑</button>
-      <button class="ef-next" title="다음">↓</button>
-      <input class="ef-replace" placeholder="바꾸기" spellcheck="false" />
-      <button class="ef-rep">바꾸기</button>
-      <button class="ef-repall">모두</button>
-      <span class="ef-sep">줄</span>
-      <input class="ef-goto" type="number" min="1" title="줄 번호" />
-      <button class="ef-go">이동</button>
-      <button class="ef-close" title="닫기">&times;</button>
+      <input class="ef-find" placeholder="Find" spellcheck="false" />
+      <button class="ef-prev" title="Previous">↑</button>
+      <button class="ef-next" title="Next">↓</button>
+      <input class="ef-replace" placeholder="Replace" spellcheck="false" />
+      <button class="ef-rep">Replace</button>
+      <button class="ef-repall">All</button>
+      <span class="ef-sep">Line</span>
+      <input class="ef-goto" type="number" min="1" title="Line number" />
+      <button class="ef-go">Go</button>
+      <button class="ef-close" title="Close">&times;</button>
     </div>
     <div class="editor-main">
       <div class="editor-gutter"></div>
@@ -1063,7 +1320,7 @@ function wireFindBar(wrap, ta) {
       idx = val.indexOf(term, ta.selectionEnd);
       if (idx < 0) idx = val.indexOf(term, 0); // wrap around
     }
-    if (idx < 0) { toast("찾을 수 없음"); return; }
+    if (idx < 0) { toast("Not found"); return; }
     ta.focus();
     ta.setSelectionRange(idx, idx + term.length);
     // Scroll the match into view (approximate by line).
@@ -1122,9 +1379,9 @@ async function saveViewerFile(file) {
     file.dirty = false;
     renderViewerTabs();
     renderViewerTools();
-    toast("저장됨: " + file.name);
+    toast("Saved: " + file.name);
   } catch (e) {
-    toast("저장 실패: " + String(e), true);
+    toast("Save failed: " + String(e), true);
   }
 }
 
@@ -1154,7 +1411,7 @@ function renderViewerTools() {
     const eye = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
     const pencil = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>`;
     editBtn.innerHTML = f.editing ? eye : pencil;
-    editBtn.title = f.editing ? "미리보기" : "편집";
+    editBtn.title = f.editing ? "Preview" : "Edit";
   }
   if (saveBtn) {
     saveBtn.classList.toggle("dirty", !!f.dirty);
@@ -1176,7 +1433,7 @@ function renderViewerTabs() {
     const t = document.createElement("div");
     t.className = "viewer-file-tab" + (f.id === activeViewerId ? " active" : "");
     t.title = f.path;
-    t.innerHTML = `<span class="vft-name">${f.dirty ? "● " : ""}${esc(f.name)}</span><span class="vft-close" title="닫기">&times;</span>`;
+    t.innerHTML = `<span class="vft-name">${f.dirty ? "● " : ""}${esc(f.name)}</span><span class="vft-close" title="Close">&times;</span>`;
     t.addEventListener("click", (e) => {
       if (e.target.classList.contains("vft-close")) { closeViewerFile(f.id); return; }
       activateViewerFile(f.id);
@@ -1226,6 +1483,7 @@ function cdToTerminal(path) {
       }
       targetId = activeTermId; // fallback: best-effort to the active terminal
     }
+    armNotifyCycle(targetId); // user-launched command — its completion should notify
     invoke("pty_write", { id: targetId, data: `cd '${safe}'\r` });
     // Bring that SSH session into view so the user sees the directory change.
     const tab = findTabForPane(targetId);
@@ -1239,6 +1497,64 @@ function cdToTerminal(path) {
     splitPane("horizontal", path);
   } else {
     spawnTerminal(undefined, path);
+  }
+}
+
+// ── Explorer: new folder modal ──
+function openNewFolderModal() {
+  const modal = document.getElementById("newfolder-modal");
+  const nameInput = document.getElementById("newfolder-name");
+  const errEl = document.getElementById("newfolder-error");
+  const openSession = document.getElementById("newfolder-open-session");
+  const tabCurrent = document.getElementById("newfolder-tab-current");
+  const opts = document.getElementById("newfolder-session-opts");
+  if (!modal || !nameInput) return;
+  nameInput.value = "";
+  if (errEl) { errEl.textContent = ""; errEl.classList.add("hidden"); }
+  if (openSession) openSession.checked = true;
+  if (tabCurrent) tabCurrent.checked = true;
+  if (opts) opts.classList.remove("hidden");
+  modal.classList.remove("hidden");
+  nameInput.focus();
+}
+
+function closeNewFolderModal() {
+  const modal = document.getElementById("newfolder-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function showNewFolderError(msg) {
+  const errEl = document.getElementById("newfolder-error");
+  if (!errEl) return;
+  errEl.textContent = msg;
+  errEl.classList.remove("hidden");
+}
+
+async function confirmNewFolder() {
+  const nameInput = document.getElementById("newfolder-name");
+  if (!nameInput) return;
+  const name = nameInput.value.trim();
+  if (!name || name.includes("/") || name.includes("\\")) {
+    showNewFolderError("폴더 이름이 비어있거나 올바르지 않습니다.");
+    return;
+  }
+  let newPath;
+  try {
+    newPath = await invoke("fs_create_dir", { dir: currentExplorerPath, name });
+  } catch (e) {
+    showNewFolderError(String(e));
+    return;
+  }
+  closeNewFolderModal();
+  await loadExplorer();
+  const openSession = document.getElementById("newfolder-open-session");
+  if (openSession && openSession.checked) {
+    const tabNew = document.getElementById("newfolder-tab-new");
+    if (tabNew && tabNew.checked) {
+      spawnTerminal(undefined, newPath);
+    } else {
+      cdToTerminal(newPath);
+    }
   }
 }
 
@@ -1280,7 +1596,7 @@ function renderExplorerFavorites() {
     const chip = document.createElement("div");
     chip.className = "fav-chip";
     chip.title = f.path;
-    chip.innerHTML = `<span class="fav-chip-star">★</span><span class="fav-chip-name">${esc(f.name)}</span><button class="fav-chip-x" title="제거">&times;</button>`;
+    chip.innerHTML = `<span class="fav-chip-star">★</span><span class="fav-chip-name">${esc(f.name)}</span><button class="fav-chip-x" title="Remove">&times;</button>`;
     chip.querySelector(".fav-chip-star").addEventListener("click", () => cdToTerminal(f.path));
     chip.querySelector(".fav-chip-name").addEventListener("click", () => cdToTerminal(f.path));
     chip.querySelector(".fav-chip-x").addEventListener("click", (e) => {
@@ -1341,6 +1657,28 @@ function removeSftpOption(sftpId) {
 // ═══════════════════════════════════════════════
 
 // Create a new PTY-backed pane and return its ptyId
+// Best-effort local tracking of the command line the user is typing, for panes
+// without OSC 133 shell-integration (SSH to a plain server). Accumulates
+// printable keystrokes; applies backspace; and gives up on the current line the
+// moment an escape sequence (arrow keys / history / tab-complete) or a control
+// key (Ctrl-C/U/W) arrives — those edit the line in ways we can't mirror, so a
+// partial guess would be wrong. Only tracks while xterm is on the NORMAL buffer,
+// so typing inside a full-screen TUI never leaks in.
+function trackTypedInput(ti, data) {
+  if (!ti || !ti.term) return;
+  if (ti.term.buffer.active.type !== "normal") { ti.typedBuf = ""; return; }
+  let buf = ti.typedBuf || "";
+  for (let i = 0; i < data.length; i++) {
+    const ch = data[i];
+    if (ch === "\r" || ch === "\n") continue;         // submit — handled by caller
+    if (ch === "\x1b") { buf = ""; break; }           // escape seq (arrows/history) → bail
+    if (ch === "\x7f" || ch === "\b") { buf = buf.slice(0, -1); continue; } // backspace
+    if (ch.charCodeAt(0) < 0x20) { buf = ""; continue; }  // Ctrl-C/U/W… → reset line
+    buf += ch;
+  }
+  ti.typedBuf = buf;
+}
+
 async function createPane(parentEl, shell, args, cwd) {
   const paneEl = document.createElement("div");
   paneEl.className = "pane-leaf";
@@ -1352,18 +1690,38 @@ async function createPane(parentEl, shell, args, cwd) {
   paneEl.style.flexDirection = "column";
   paneEl.appendChild(termWrap);
   paneEl.appendChild(statusBar);
+  // Top-right usage badge (model | effort | ctx%) — filled by scanCtxUsage when
+  // a Claude Code statusline shows up in this pane; hidden while empty (CSS).
+  const ctxBadgeEl = document.createElement("div");
+  ctxBadgeEl.className = "pane-ctx";
+  paneEl.appendChild(ctxBadgeEl);
   parentEl.appendChild(paneEl);
 
   const term = createXterm();
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
+  // Scrollback search — driven by the shared search bar (Ctrl+Shift+F).
+  const searchAddon = new SearchAddon.SearchAddon();
+  term.loadAddon(searchAddon);
+  // Ctrl+Click opens URLs (in-app browser when enabled); a plain click stays a
+  // selection click so it never hijacks text selection over a link.
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((event, uri) => {
+    if (event.ctrlKey || event.metaKey) openLinkFromTerminal(uri);
+    else hintLinkOnce();
+  }));
   term.open(termWrap);
 
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   fitAddon.fit();
 
-  const cols = Math.max(term.cols, 80);
-  const rows = Math.max(term.rows, 24);
+  // Spawn the PTY at the pane's ACTUAL fitted grid — not a forced 80×24 floor.
+  // A narrow split pane is often < 80 cols; forcing the PTY to 80 while xterm
+  // displays fewer makes the program (e.g. Claude Code) lay out to 80 cols, so
+  // its long lines and header rules overflow the visible grid and get truncated
+  // at the right edge instead of wrapping. Fall back to 80×24 only when fit()
+  // hasn't measured yet (cols/rows would be 0).
+  const cols = term.cols || 80;
+  const rows = term.rows || 24;
 
   const id = await invoke("pty_spawn", {
     shell: shell || null,
@@ -1379,13 +1737,38 @@ async function createPane(parentEl, shell, args, cwd) {
   const sessionLabel = shell === "ssh"
     ? "SSH"
     : (cwd ? baseName(cwd) : (shell || "Terminal"));
-  terminals.set(id, { term, fitAddon, paneEl, type: shell === "ssh" ? "ssh" : "local", label: sessionLabel, cwd: cwd || null });
+  // lastInputAt baseline = pane birth, so the long-task check (10+ min since
+  // last input) has a sane anchor even in a pane the user never typed in
+  // (e.g. a restored session auto-replaying its command).
+  terminals.set(id, { term, fitAddon, search: searchAddon, paneEl, type: shell === "ssh" ? "ssh" : "local", shell: shell || null, label: sessionLabel, cwd: cwd || null, unseen: false, marks: [], inputMark: null, lastInputAt: performance.now() });
 
-  // Status bar: label + split/close controls
+  // A brand-new pane's final size isn't settled at spawn (flex sizing, font
+  // load, a split ratio applied just after). The container-level observer only
+  // fires on window/panel resize — never when a fresh pane lays out — so without
+  // this the spawn-time fit can be too wide and the program (e.g. Claude Code)
+  // renders past the visible edge, lines truncated, until the user toggles
+  // sessions (which forces a refit). Observe this pane's host so the PTY grid
+  // reconciles the moment its size settles or changes. Debounced to one frame;
+  // refitAllPanes() skips panes whose pixel size is unchanged, so it's cheap.
+  // GC'd with termWrap when the pane closes (no manual disconnect needed).
+  let roPending = false;
+  new ResizeObserver(() => {
+    if (roPending) return;
+    roPending = true;
+    requestAnimationFrame(() => { roPending = false; refitAllPanes(); });
+  }).observe(termWrap);
+
+  // Status bar: label + split/close controls. The cwd chip tracks the pane's
+  // current directory (setPaneCwd updates it on cd). Blank it when it equals the
+  // label so a folder-named session doesn't show the same name twice (e.g.
+  // "Mymux   Mymux") — `.pane-cwd:empty` hides it. It reappears once you cd into
+  // a folder whose name differs from the label.
+  const cwdLabel = cwd ? baseName(cwd) : "~";
+  const cwdText = cwdLabel === sessionLabel ? "" : cwdLabel;
   statusBar.innerHTML = `
-    <span class="pane-grip" title="드래그해서 패인 이동">&#10287;</span>
+    <span class="pane-grip" title="Drag to move pane">&#10287;</span>
     <span class="pane-label">${esc(sessionLabel)}</span>
-    ${shell !== "ssh" ? `<span class="pane-cwd" title="${esc(cwd || "")}">${esc(cwd ? baseName(cwd) : "~")}</span>` : ""}
+    ${shell !== "ssh" ? `<span class="pane-cwd" title="${esc(cwd || "")}">${esc(cwdText)}</span>` : ""}
     <span class="pane-actions">
       <button class="pane-btn split-h" title="Split horizontally (Ctrl+Shift+D)">&#8596;</button>
       <button class="pane-btn split-v" title="Split vertically (Ctrl+Shift+E)">&#8597;</button>
@@ -1405,20 +1788,82 @@ async function createPane(parentEl, shell, args, cwd) {
     startPaneDrag(id, e);
   });
 
+  // Mouse-wheel must always scroll the scrollback while on the NORMAL buffer.
+  // Some CLIs (Claude Code among them) enable mouse tracking without switching
+  // to the alt screen; xterm then forwards every wheel event to the program as
+  // escape sequences instead of scrolling the viewport — and through ConPTY
+  // those reports don't round-trip usefully, so the wheel goes dead (only the
+  // scrollbar drag still works) and the program's wheel-triggered redraws can
+  // leave half-painted / blank regions. Reclaim the wheel here: on the normal
+  // buffer we scroll the viewport ourselves and swallow the event. Alt-screen
+  // TUIs (vim/htop/less) keep receiving wheel reports as before, and
+  // Ctrl+wheel is left alone for future zoom gestures.
+  if (term.attachCustomWheelEventHandler) {
+    term.attachCustomWheelEventHandler((e) => {
+      try {
+        if (e.ctrlKey) return true;
+        if (term.buffer.active.type !== "normal") return true;
+        if ((term.modes.mouseTrackingMode || "none") === "none") return true; // no conflict — default handling already scrolls
+        // deltaMode 1 = lines, 0 = pixels (~one row per ≈ fontSize*1.2 px).
+        const rowPx = (term.options.fontSize || 14) * 1.2;
+        const lines = e.deltaMode === 1
+          ? Math.trunc(e.deltaY)
+          : Math.sign(e.deltaY) * Math.max(1, Math.round(Math.abs(e.deltaY) / rowPx / 3));
+        if (lines) term.scrollLines(lines);
+        return false;
+      } catch { return true; }
+    });
+  }
+
   // Ctrl +/- to change terminal font size, Ctrl+0 to reset (intercept before
   // xterm/PTY so the keys don't reach the shell or zoom the WebView).
   term.attachCustomKeyEventHandler((e) => {
+    // Real keystrokes re-arm the once-per-cycle task-done notification and
+    // reset the silence window so keystroke echo never counts as "work
+    // output" (see the term.onData note — onData can't tell typing from
+    // xterm-generated replies). Bare modifiers are skipped: Alt fires when
+    // alt-tabbing away, Ctrl on Ctrl+wheel zoom — neither is interaction.
+    if (e.type === "keydown" && !NOTIFY_REARM_SKIP_KEYS.has(e.key)) armNotifyCycle(id);
     if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey) {
-      // Paste (Ctrl/Cmd+V, also Ctrl+Shift+V); copy selection (Ctrl+Shift+C).
-      if (e.key === "v" || e.key === "V") { e.preventDefault(); pasteIntoPane(id); return false; }
-      if (e.shiftKey && (e.key === "c" || e.key === "C")) {
+      // Paste with Ctrl/Cmd+V (also Ctrl+Shift+V). Match e.code too — with the
+      // Korean IME active e.key arrives as "ㅍ"/"ㅊ" or "Process", never the
+      // Latin letter, and the shortcut would fall through to the shell.
+      if (e.code === "KeyV" || e.key === "v" || e.key === "V") { e.preventDefault(); pasteIntoPane(id); return false; }
+      // Copy the selection with Ctrl/Cmd+C (Shift optional). When nothing is
+      // selected, fall through so Ctrl+C still sends SIGINT to the shell.
+      if (e.code === "KeyC" || e.key === "c" || e.key === "C") {
         const sel = term.getSelection();
-        if (sel) { e.preventDefault(); clipboardWrite(sel); return false; }
+        // Clear the selection after copying — if it stuck around, the next
+        // Ctrl+C would copy again instead of interrupting the process.
+        if (sel) { e.preventDefault(); clipboardWrite(sel); term.clearSelection(); return false; }
       }
       if (e.key === "=" || e.key === "+") { e.preventDefault(); adjustTerminalFontSize(1); return false; }
       if (e.key === "-" || e.key === "_") { e.preventDefault(); adjustTerminalFontSize(-1); return false; }
       if (e.key === "0") { e.preventDefault(); setTerminalFontSize(14); return false; }
       if (e.key === "Tab") { e.preventDefault(); focusNextPane(e.shiftKey ? -1 : 1); return false; }
+      // Ctrl+Shift+P — command palette.
+      if (e.shiftKey && (e.key === "P" || e.code === "KeyP")) { e.preventDefault(); openCommandPalette(); return false; }
+      // Ctrl+Shift+↑/↓ — jump between shell prompts (OSC 133 marks).
+      if (e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); jumpPrompt(e.key === "ArrowUp" ? -1 : 1); return false; }
+      // Ctrl+A — select the whole current command-input line (Windows-style).
+      // At an integrated prompt we always intercept (so it never falls through
+      // to readline's beginning-of-line); use Home to jump to the line start.
+      // In a full-screen TUI (alt screen) it passes through to the app.
+      if (!e.shiftKey && (e.key === "a" || e.key === "A" || e.code === "KeyA")) {
+        if (atIntegratedPrompt(terminals.get(id))) {
+          e.preventDefault();
+          const did = selectCurrentInput(id);
+          if (did) hintCtrlAOnce();
+          return false;
+        }
+      }
+      // Ctrl+X — cut the selection, or the current input line, and clear it.
+      if (!e.shiftKey && (e.key === "x" || e.key === "X" || e.code === "KeyX")) {
+        const ti = terminals.get(id);
+        if ((ti && ti.term.getSelection()) || atIntegratedPrompt(ti)) {
+          if (cutCurrentInput(id)) { e.preventDefault(); return false; }
+        }
+      }
     }
     // Shift+Insert → paste
     if (e.type === "keydown" && e.shiftKey && e.key === "Insert") { e.preventDefault(); pasteIntoPane(id); return false; }
@@ -1426,28 +1871,202 @@ async function createPane(parentEl, shell, args, cwd) {
   });
 
   term.onData((data) => {
+    // NOTE: do NOT re-arm the task-done notification here. onData is not only
+    // user typing — xterm also routes terminal-GENERATED data through it:
+    // focus reports CSI I/O (when the running app enables mode 1004, as Claude
+    // Code does), color/DA/DSR query replies, mouse reports, and alt-screen
+    // wheel→arrow conversion. Window-focus churn and idle redraws kept
+    // re-opening the once-per-cycle gate, so a completely idle pane re-flashed
+    // forever. Real interaction re-arms via armNotifyCycle instead: keydown
+    // (custom key handler), paste, UI-launched commands — plus mouse CLICKS
+    // inside a mouse-tracking TUI (picking a Claude Code menu option is input
+    // too). SGR press reports only; hover/move/wheel reports must not re-arm.
+    const ti = terminals.get(id);
+    if (/\x1b\[<[0-2];\d+;\d+M/.test(data)) armNotifyCycle(id);
+    // Remember the command being submitted so a restored session can offer to
+    // re-run it (e.g. relaunch `claude`/`codex`). Two capture paths:
+    //   • Local shells with Mymux OSC 133 integration → getInputRegion (exact).
+    //   • SSH / shells without 133 (a plain remote server) → a locally-tracked
+    //     keystroke line buffer, so re-run works even without tmux on the remote.
+    // Both are gated to the NORMAL buffer, so keystrokes typed INTO a full-screen
+    // app (vim/htop/claude, alt-screen) never masquerade as a shell command.
+    if (ti && commandReplayEnabled()) {
+      try {
+        trackTypedInput(ti, data);
+        if (data.includes("\r") || data.includes("\n")) {
+          const r = getInputRegion(ti);
+          let cmd = r && r.text ? r.text.trim() : "";
+          if (!cmd && ti.term.buffer.active.type === "normal") cmd = (ti.typedBuf || "").trim();
+          if (cmd) { ti.lastCmd = cmd; if (ti.session) ti.session.lastCmd = cmd; }
+          ti.typedBuf = "";
+        }
+      } catch {}
+    }
     const result = handleTerminalInput(data, id);
-    if (result !== "consumed") {
+    if (result === "consumed") return;
+    // Per-tab broadcast (Ctrl+Shift+B): typing in any pane of a broadcasting
+    // tab goes to every pane of that tab — tmux synchronize-panes.
+    const tab = findTabForPane(id);
+    if (tab && tab.broadcast && tab.panes.length > 1) {
+      for (const pid of tab.panes) invoke("pty_write", { id: pid, data });
+    } else {
       invoke("pty_write", { id, data });
     }
   });
 
+  // Notify at most ONCE per input cycle. A stopped/idle program that keeps
+  // ringing the bell or re-emitting an OSC desktop-notification (some TUIs,
+  // pollers, and shells do this while sitting idle) would otherwise re-flash the
+  // pane/fox forever. Shared with the silence watcher + OSC 133;D via the same
+  // notifiedQuiet flag, which term.onData clears the moment the user types — so
+  // the next real interaction re-arms a single fresh notification.
+  const notifyOnce = () => {
+    const t = terminals.get(id);
+    if (!t || t.notifiedQuiet) return;
+    t.notifiedQuiet = true;
+    flashPaneNotify(id);
+  };
+
   // Terminal bell → flash this pane/session (task done / needs input).
-  if (term.onBell) term.onBell(() => flashPaneNotify(id));
+  if (term.onBell) term.onBell(notifyOnce);
   // Many CLIs (incl. claude/codex notification modes) signal completion with an
   // OSC desktop-notification instead of a plain bell — xterm consumes the
   // trailing BEL of an OSC so onBell alone misses those. Catch the common ones.
   if (term.parser && term.parser.registerOscHandler) {
     // OSC 9 ; <message>  (iTerm-style). Skip ConEmu progress form "9;<digit>;…".
-    term.parser.registerOscHandler(9, (data) => { if (!/^[0-9];/.test(data)) flashPaneNotify(id); return false; });
+    term.parser.registerOscHandler(9, (data) => { if (!/^[0-9];/.test(data)) notifyOnce(); return false; });
     // OSC 777 ; notify ; <title> ; <body>  (notify-send style).
-    term.parser.registerOscHandler(777, (data) => { if (/^notify/.test(data)) flashPaneNotify(id); return false; });
+    term.parser.registerOscHandler(777, (data) => { if (/^notify/.test(data)) notifyOnce(); return false; });
+    // OSC 52 ; <target> ; <base64>  — clipboard write from the running app
+    // (tmux/vim/Claude Code "copied" actions). xterm drops it by default, so the
+    // TUI reports "copied" while the Windows clipboard never changes.
+    term.parser.registerOscHandler(52, (data) => {
+      const semi = data.indexOf(";");
+      if (semi < 0) return true;
+      const b64 = data.slice(semi + 1);
+      if (b64 === "?") return true; // clipboard read query — never answer
+      try {
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const text = new TextDecoder().decode(bytes); // base64 wraps UTF-8 bytes
+        if (text) clipboardWrite(text);
+      } catch {}
+      return true;
+    });
+    // OSC 133 shell-integration marks (emitted by our bash rcfile / PS prompt):
+    //   A = prompt start, B = command-input start, D;<code> = command finished.
+    // A registerMarker() tracks each prompt row as the buffer scrolls/trims, so
+    // we can jump between prompts and copy command output blocks; B records where
+    // the typed command begins so we can copy/cut the current input line.
+    term.parser.registerOscHandler(133, (data) => {
+      const t = terminals.get(id);
+      if (!t) return true;
+      const k = data[0];
+      if (k === "A") {
+        try {
+          const m = term.registerMarker(0);
+          if (m) { t.marks.push({ marker: m, exit: null }); if (t.marks.length > 400) t.marks.shift(); }
+        } catch {}
+        // First prompt after restore is ready → replay the remembered command.
+        if (t.pendingReplay) firePendingReplay(id);
+      } else if (k === "B") {
+        try {
+          const m = term.registerMarker(0);
+          if (m) t.inputMark = { marker: m, col: term.buffer.active.cursorX };
+        } catch {}
+      } else if (k === "D") {
+        const ec = parseInt((data.split(";")[1] || ""), 10);
+        const last = t.marks[t.marks.length - 1];
+        if (last && Number.isFinite(ec)) last.exit = ec;
+        // Command finished: if it ran ≥5s since the last keystroke, treat it as
+        // a task completing and flash the pane. Short interactive commands
+        // (ls, cd…) finish well inside the window and stay quiet.
+        // Guard with notifiedQuiet (shared with the silence watcher) so an idle
+        // session whose prompt periodically re-emits 133;D — its lastInputAt is
+        // long stale, so the ≥5s test always passes — flashes only ONCE and then
+        // stays put until the user actually types again (term.onData clears it).
+        if (!t.notifiedQuiet && performance.now() - (t.lastInputAt || 0) >= NOTIFY_MIN_WORK_MS) {
+          t.notifiedQuiet = true;
+          flashPaneNotify(id);
+        }
+        t.outStart = null; // the shell prompt is back — don't double-fire the silence watcher
+      }
+      return true;
+    });
   }
 
-  // Focus tracking
-  term.onFocus = () => setFocusedPane(id);
+  // Focus tracking. xterm self-focuses its textarea on mousedown inside the
+  // canvas and can swallow the event when the running TUI enables mouse
+  // reporting (claude/vim/htop) — but the app only updated focusedPaneId on
+  // 'click', so state kept pointing at the old pane and its focus keeper stole
+  // focus back within a second ("click twice to enter a pane"). Track the
+  // switch on mousedown in the capture phase (runs before xterm can swallow
+  // it), plus a DOM focus listener on the helper textarea (the element that
+  // actually receives focus; xterm 5.5 has no term.onFocus event) so state
+  // syncs whenever xterm focuses itself.
+  if (term.textarea) {
+    term.textarea.addEventListener("focus", () => { if (focusedPaneId !== id) setFocusedPane(id); });
+    // IME (Hangul) composition guard. When returning to the window, the focus
+    // keeper blurs+refocuses this textarea; doing that mid-composition makes the
+    // IME commit the syllable twice ("글자가 2개씩") and detaches its candidate
+    // window. Track composition so restore() leaves an actively-composing textarea
+    // alone, and cancel the pending post-return refocus retries the moment the
+    // user starts composing (composition proves input focus is alive).
+    term.textarea.addEventListener("compositionstart", () => {
+      const ti = terminals.get(id); if (ti) ti.imeComposing = true;
+      cancelFocusReturnRetries();
+    });
+    term.textarea.addEventListener("compositionend", () => {
+      const ti = terminals.get(id); if (ti) ti.imeComposing = false;
+    });
+
+    // ── macOS WKWebView IME shim ──────────────────────────────────────────────
+    // On macOS WebKit the Korean/CJK IME fires NO composition events and instead
+    // delivers every refinement as an `input` event with inputType
+    // `insertReplacementText` (isComposing:false, keyCode 229) — xterm.js never
+    // sees a composition, forwards only the raw first jamo and drops the
+    // replacements, so syllables split (xtermjs/xterm.js#5887, #5894; WKWebView
+    // only, Chrome/Electron unaffected). Hijack that flow at `beforeinput`: erase
+    // the partial we already sent (Backspace ×liveLen) and send the refined
+    // syllable, bypassing xterm entirely. ASCII/normal keys fall through to xterm.
+    if (IS_MAC) {
+      const ta = term.textarea;
+      let liveLen = 0; // display chars of the in-progress syllable already sent to the PTY
+      const commit = () => { liveLen = 0; };
+      ta.addEventListener("beforeinput", (e) => {
+        const it = e.inputType;
+        const d = e.data || "";
+        const isReplace = it === "insertReplacementText";
+        const isImeInsert = it === "insertText" && !!d && /[^\x00-\x7F]/.test(d) && !e.isComposing;
+        if (!isReplace && !isImeInsert) { commit(); return; } // ASCII/other → let xterm handle
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const erase = isReplace ? "\x7f".repeat(liveLen) : "";
+        invoke("pty_write", { id, data: erase + d });
+        liveLen = [...d].length;
+        try { ta.value = ""; } catch {}
+      }, true);
+      ta.addEventListener("compositionend", commit);
+      ta.addEventListener("blur", commit);
+    }
+  }
+  paneEl.addEventListener("mousedown", () => { if (focusedPaneId !== id) setFocusedPane(id); }, true);
   paneEl.addEventListener("click", () => setFocusedPane(id));
   termWrap.addEventListener("click", () => { setFocusedPane(id); term.focus(); });
+  // A plain mouse drag should select text. dragDropEnabled:false re-enables the
+  // webview's native HTML5 drag, which would otherwise hijack a drag that begins
+  // over terminal text and stop xterm's selection — suppress it inside the pane.
+  termWrap.addEventListener("dragstart", (e) => e.preventDefault());
+  // Finishing a drag-select copies automatically (PuTTY-style) — no Ctrl+C
+  // needed. onSelectionChange fires on every drag step, so let it settle before
+  // touching the clipboard; an empty selection (a clear) is skipped.
+  let selCopyTimer = null;
+  term.onSelectionChange(() => {
+    clearTimeout(selCopyTimer);
+    selCopyTimer = setTimeout(() => {
+      const sel = term.getSelection();
+      if (sel) clipboardWrite(sel);
+    }, 120);
+  });
   // Right-click: copy the selection if any, otherwise paste the clipboard (PuTTY-style).
   termWrap.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
@@ -1462,6 +2081,30 @@ async function createPane(parentEl, shell, args, cwd) {
   // appeared inside the "$"). xterm.js answers real DSR (ESC[6n) queries on its
   // own, so the injection is both unnecessary and harmful; removed.
 
+  // Keep this pane focused. The WebView can silently drop the helper-textarea
+  // focus when the app sits idle (cursor goes hollow, typing stops until you
+  // click again). If focus leaves the textarea and lands on *nothing*
+  // (body/null) — i.e. it was dropped, not moved to another pane/input — restore
+  // it to the active pane. Clicking another pane/input/overlay sets a real
+  // activeElement, which is respected (no steal).
+  const helperTa = term.element && term.element.querySelector(".xterm-helper-textarea");
+  if (helperTa) {
+    helperTa.addEventListener("blur", () => {
+      setTimeout(() => {
+        if (focusedPaneId !== id) return;              // only the active pane
+        if (browserTabActive || viewerActive) return;  // not in terminal mode
+        const el = term.element;
+        if (!el || el.classList.contains("focus")) return; // xterm already focused
+        // Leave it only if focus genuinely moved to another input/pane (rename
+        // box, find bar, other terminal); otherwise it was dropped → restore.
+        const ae = document.activeElement;
+        if (ae && ae !== document.body && !el.contains(ae) &&
+            (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
+        try { term.focus(); } catch {}
+      }, 0);
+    });
+  }
+
   setFocusedPane(id);
   return id;
 }
@@ -1474,30 +2117,1329 @@ function setFocusedPane(ptyId) {
   if (t) {
     t.paneEl.classList.add("focused");
     t.term.focus();
+    if (t.unseen) {
+      t.unseen = false;
+      document.querySelector(`.session-item[data-pty-id="${ptyId}"]`)?.classList.remove("unseen");
+    }
   }
   updateSessionActive();
+}
+
+// Safety net for terminal focus. The WebView can drop the active terminal's
+// focus while the app sits idle — sometimes without firing a blur event, so the
+// per-pane blur handler in createPane can miss it. Once a second, if we're in
+// terminal mode and focus has fallen to nothing (body/null) rather than a real
+// element (another pane, an input, an overlay), pull it back to the active pane.
+// This is why a focused session stays selectable until you click elsewhere.
+
+// On window return, WebView2/Chromium leaves xterm's rAF-based renderer paused
+// for a beat, so shell echo written by the poll loop buffers and only paints in
+// a burst (cursor sits still, then a clump of chars appears — the "coming back
+// from another session lags" report). Force an immediate re-render of every
+// visible pane so what's already buffered paints right away.
+function forceRepaintVisiblePanes() {
+  const tab = tabs.get(activeTabIdx);
+  if (!tab || !tab.panes) return;
+  for (const pid of tab.panes) {
+    const t = terminals.get(pid);
+    if (!t || !t.term) continue;
+    try {
+      const rows = t.term.rows || 0;
+      if (rows > 0) t.term.refresh(0, rows - 1);
+    } catch {}
+  }
+}
+
+let focusKeeperStarted = false;
+// Assigned by startFocusKeeper; called from the global keydown handler so that
+// real typing after an Alt-Tab return cancels the remaining focus-restore
+// retries (a keystroke proves input focus is alive, so re-blurring the textarea
+// would only thrash input and repeat characters).
+let cancelFocusReturnRetries = () => {};
+function startFocusKeeper() {
+  if (focusKeeperStarted) return;
+  focusKeeperStarted = true;
+  // macOS WKWebView fires proper focus events and drives IME composition in the
+  // xterm helper textarea normally. The focus-restore loop below is a Windows/
+  // WebView2 workaround that blurs+refocuses that textarea every 250ms — on a
+  // Mac that cancels Hangul/CJK composition mid-syllable (jamo commit one by
+  // one). Skip the whole keeper on macOS.
+  if (IS_MAC) return;
+  // Restore terminal focus to the visible tab's active pane. The WebView drops
+  // the terminal's focus while backgrounded (idle, or when a background app like
+  // WIZVERA Veraport briefly steals OS focus), and on Alt-Tab return it fires no
+  // usable focus event at all (a known WebView2 limitation), so the cursor goes
+  // hollow. Target the visible tab's pane (focusedPaneId can be stale for a
+  // hidden tab), skip if it's off-screen, then bounce the helper textarea so
+  // xterm re-registers focus. `force` re-focuses even when xterm still looks
+  // focused — needed on return, where activeElement/class are stale.
+  const restore = (force) => {
+    if (browserTabActive || viewerActive) return;
+    let pid = focusedPaneId;
+    const tab = tabs.get(activeTabIdx);
+    if (tab && tab.panes.length && !tab.panes.includes(pid)) pid = tab.panes[0];
+    if (pid == null || !terminals.has(pid)) return;
+    const t = terminals.get(pid);
+    if (t.imeComposing) return; // mid-Hangul composition — blur/refocus here double-types & breaks the IME
+    const el = t.term.element;
+    if (!el || !el.offsetParent) return; // not visible → leave it
+    const ta = el.querySelector(".xterm-helper-textarea");
+    if (!force && ta && document.activeElement === ta && el.classList.contains("focus")) return;
+    // Respect focus that genuinely moved to a non-terminal input/overlay.
+    const ae = document.activeElement;
+    if (ae && ae !== document.body && !el.contains(ae) &&
+        (ae.tagName === "INPUT" || ae.isContentEditable ||
+         (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+    // Preserve the scrollback position across the focus dance. Calling .focus()
+    // on the helper textarea (which sits at the cursor row, i.e. the bottom)
+    // makes the browser scroll the viewport to reveal it — so if the user has
+    // scrolled UP to read scrollback and focus is then restored (Alt-Tab return,
+    // or a background app like Veraport stealing focus every few seconds), the
+    // view snaps to the bottom. They scroll up again, it snaps again → the
+    // intermittent "위아래로 튕김" bounce. Save scrollTop and put it back.
+    const vp = el.querySelector(".xterm-viewport");
+    const savedTop = vp ? vp.scrollTop : null;
+    try { if (ta) ta.blur(); } catch {}
+    try { t.term.focus(); } catch {}
+    try { if (ta && document.activeElement !== ta) ta.focus({ preventScroll: true }); } catch {}
+    if (vp && savedTop != null && vp.scrollTop !== savedTop) vp.scrollTop = savedTop;
+    if (focusedPaneId !== pid) { try { setFocusedPane(pid); } catch {} }
+  };
+  // On return, retry across a few frames — WebView2 can move focus to <body> a
+  // tick after the window comes back, overriding an immediate restore. Up to ~5
+  // independent signals (Rust refocus, onFocusChanged, hasFocus flip,
+  // visibilitychange, window focus) can each fire onReturn on a single return,
+  // so COALESCE: run the restore burst at most once per 600ms. Retry handles are
+  // kept so the first real keystroke can cancel the pending re-focuses — once
+  // the user is typing, focus is proven alive and re-blurring only thrashes it.
+  let lastReturn = -1e9;
+  let returnRetries = [];
+  cancelFocusReturnRetries = () => { for (const h of returnRetries) clearTimeout(h); returnRetries = []; };
+  const onReturn = () => {
+    const now = performance.now();
+    if (now - lastReturn < 600) return;
+    lastReturn = now;
+    cancelFocusReturnRetries();
+    restore(true);
+    forceRepaintVisiblePanes(); // wake xterm's rAF renderer so buffered echo paints now, not in a burst
+    returnRetries = [
+      setTimeout(() => restore(true), 80),
+      setTimeout(() => restore(true), 220),
+      setTimeout(() => restore(true), 500),
+    ];
+  };
+  window.addEventListener("focus", (e) => {
+    if (!e.target || e.target === window || e.target === document || e.target === document.body) onReturn();
+    else restore();
+  }, true);
+  // Idle backstop; also poll document.hasFocus() — a false→true flip means the
+  // window returned even when no focus event fired.
+  let hadFocus = document.hasFocus();
+  setInterval(() => {
+    const hf = document.hasFocus();
+    if (hf && !hadFocus) onReturn();
+    hadFocus = hf;
+    restore();
+  }, 250);
+  try { document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") onReturn(); }); } catch {}
+  // Primary Alt-Tab return signal: the Rust side polls the OS foreground window,
+  // focuses the webview (reviving DOM input focus — top-level focus alone does
+  // not), and emits "mymux-refocus". WebView2 fires no usable focus event on
+  // return, so this is the reliable trigger.
+  try {
+    const ev = window.__TAURI__ && window.__TAURI__.event;
+    if (ev && ev.listen) ev.listen("mymux-refocus", () => onReturn());
+  } catch {}
+  // Backstop: Tauri's native window focus event (unreliable on Alt-Tab in this
+  // WebView2 build, hence the Rust poll above — kept for cases where it fires).
+  try {
+    const winApi = window.__TAURI__ && window.__TAURI__.window;
+    if (winApi && winApi.getCurrentWindow) {
+      winApi.getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+        if (focused) { onReturn(); refitAllPanes(); }
+      }).catch(() => {});
+    }
+  } catch {}
+}
+
+// Let the user drag the session panel's left edge to resize its width.
+function setupSessionResizer() {
+  const panel = document.getElementById("session-panel");
+  const resizer = document.getElementById("session-resizer");
+  if (!panel || !resizer) return;
+  const saved = parseInt(localStorage.getItem("mymux.sessionWidth"), 10);
+  if (saved >= 140 && saved <= 1000) panel.style.width = saved + "px";
+  let startX = 0, startW = 0, dragging = false;
+  resizer.addEventListener("mousedown", (e) => {
+    if (panel.classList.contains("collapsed")) return;
+    e.preventDefault();
+    dragging = true;
+    startX = e.clientX;
+    startW = panel.getBoundingClientRect().width;
+    panel.style.transition = "none";          // smooth drag (no 0.2s tween)
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    // Panel is pinned to the right; dragging the handle left widens it.
+    let w = startW + (startX - e.clientX);
+    w = Math.max(140, Math.min(window.innerWidth - 360, w));
+    panel.style.width = w + "px";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    panel.style.transition = "";
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    const w = parseInt(panel.style.width, 10);
+    if (w) localStorage.setItem("mymux.sessionWidth", String(w));
+    try { refitAllPanes(true); } catch {} // terminal grid changed with the panel
+  });
+}
+
+// ── Task-done detection (tmux monitor-silence 계열) ─────────────────────────
+// A pane whose output spans ≥ NOTIFY_MIN_WORK_MS since the last keystroke and
+// then goes quiet for NOTIFY_SILENCE_MS is treated as "task finished" and
+// flashed. Covers programs without OSC 133 shell integration (TUIs, streaming
+// CLIs). The work window ACCUMULATES across quiet gaps — sporadic-output tasks
+// (downloads, plugin updates: burst → silence → burst) must still notify — and
+// only a keystroke resets it (see term.onData), so echo never masquerades as
+// work. To keep periodic-output programs (watch, pollers) from re-flashing
+// every few seconds, each keystroke-to-keystroke cycle notifies at most once.
+const NOTIFY_MIN_WORK_MS = 5000;
+const NOTIFY_SILENCE_MS = 1500;
+// Re-arm the once-per-input-cycle task-done notification for a pane. Called on
+// REAL user interaction only — keydown, paste, TUI mouse clicks, UI-launched
+// commands — never from term.onData wholesale (it also carries xterm-generated
+// focus reports / query replies; see the onData note). Also stamps lastInputAt
+// (gates the OSC 133;D ≥5s check) and resets the output-silence work window.
+const NOTIFY_REARM_SKIP_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "NumLock", "ScrollLock"]);
+function armNotifyCycle(id) {
+  const t = terminals.get(id);
+  if (!t) return;
+  t.lastInputAt = performance.now();
+  t.outStart = null;
+  t.notifiedQuiet = false;
+}
+function trackOutputSilence(id, t) {
+  const now = performance.now();
+  if (t.outStart == null) t.outStart = now;
+  t.lastOutAt = now;
+  if (t.silenceTimer) clearTimeout(t.silenceTimer);
+  t.silenceTimer = setTimeout(() => {
+    t.silenceTimer = null;
+    if (!terminals.has(id)) return;
+    if (t.outStart == null) return; // window reset by a keystroke or OSC 133;D
+    const workedMs = (t.lastOutAt || 0) - t.outStart;
+    if (workedMs >= NOTIFY_MIN_WORK_MS && !t.notifiedQuiet) {
+      t.notifiedQuiet = true; // once per input cycle
+      t.outStart = null;
+      flashPaneNotify(id);
+    }
+    // Below the threshold: keep the window open so later bursts accumulate.
+  }, NOTIFY_SILENCE_MS);
+}
+
+// Where the task-done pulse shows (🔔 toolbar modal): pane border and/or the
+// session-list row. Both off = no visual flash (unseen badge / taskbar
+// attention still apply).
+const notifyFlashPrefs = (() => {
+  const base = { pane: true, list: true, fox: true, character: null, bubble: true, dialect: "chungcheong", ctxBadge: true, ctxVoice: true };
+  let p;
+  try { p = { ...base, ...JSON.parse(localStorage.getItem("notifyFlashPrefs") || "{}") }; }
+  catch { p = { ...base }; }
+  // Migrate the old boolean `fox` flag → `character` ("classic" | "none").
+  // New installs (no saved prefs at all) default straight to "mascot".
+  if (p.character == null) {
+    const hadSavedPrefs = localStorage.getItem("notifyFlashPrefs") != null;
+    p.character = !hadSavedPrefs ? "mascot" : (p.fox ? "classic" : "none");
+  }
+  return p;
+})();
+function saveNotifyFlashPrefs() {
+  try { localStorage.setItem("notifyFlashPrefs", JSON.stringify(notifyFlashPrefs)); } catch {}
 }
 
 // Briefly pulse a pane + its session-list row to notify task completion
 // (driven by the terminal bell — see the pty read loop).
 function flashPaneNotify(id) {
+  // Base 다홍(scarlet); shift the hue a little per session so simultaneous
+  // completions in different panes are tellable apart at a glance.
+  const hue = (8 + (Number(id) || 0) * 24) % 360;
+  const color = `hsl(${hue}, 88%, 58%)`;
   const pulse = (el) => {
     if (!el) return;
     el.classList.remove("notify-flash");
     void el.offsetWidth; // restart the animation
+    el.style.setProperty("--notify-color", color);
     el.classList.add("notify-flash");
-    setTimeout(() => el.classList.remove("notify-flash"), 2600);
+    if (el._notifyTimeout) clearTimeout(el._notifyTimeout);
+    el._notifyTimeout = setTimeout(() => el.classList.remove("notify-flash"), 10200);
   };
   const t = terminals.get(id);
-  if (t) pulse(t.paneEl);
-  pulse(document.querySelector(`.session-item[data-pty-id="${id}"]`));
+  // 10+ minutes since the user's last input → the buddy trades its plain cheer
+  // for a dialect-flavored "작업 다 끝났어, 다음 작업 하자!" line. lastInputAt is
+  // stamped by armNotifyCycle (real input) and at pane creation as a baseline.
+  const longTask = t && performance.now() - (t.lastInputAt || 0) >= BUDDY_LONG_TASK_MS;
+  if (notifyFlashPrefs.pane && t) pulse(t.paneEl);
+  if (notifyFlashPrefs.list) pulse(document.querySelector(`.session-item[data-pty-id="${id}"]`));
+  if (notifyFlashPrefs.character && notifyFlashPrefs.character !== "none" && t) showFoxAt(t.paneEl, id, longTask);
+  // The pulse is invisible when the pane is off-screen or the whole window is
+  // in the background — leave a persistent "unseen" badge for the former and
+  // flash the taskbar icon (no focus steal) for the latter.
+  if (t) {
+    const tab = findTabForPane(id);
+    if (tab && (tab.tabIdx !== activeTabIdx || browserTabActive || viewerActive)) markUnseen(id, t, tab);
+  }
+  if (!document.hasFocus()) invoke("window_attention").catch(() => {});
+}
+
+// Hovering a flashing pane (or its session-list row) acknowledges the
+// notification: stop the pulse on BOTH elements for that session at once.
+// Delegated on document so it covers rows recreated by refreshSessionList.
+function clearPaneFlash(id) {
+  const els = [
+    terminals.get(id)?.paneEl,
+    document.querySelector(`.session-item[data-pty-id="${id}"]`),
+  ];
+  for (const el of els) {
+    if (!el) continue;
+    el.classList.remove("notify-flash");
+    if (el._notifyTimeout) { clearTimeout(el._notifyTimeout); el._notifyTimeout = null; }
+  }
+  // NOTE: deliberately does NOT hide the fox — the mouse usually sits on (or
+  // crosses) the finished pane, so tying the fox to hover-ack made it vanish
+  // the instant it appeared. The fox leaves on click or its own timer.
+}
+
+// ── Fox buddy 🦊 — a little mascot that glides to the pane whose task just
+// finished and sways/blinks there for the pulse duration. Drag to move it
+// anywhere; click to dismiss. Toggled in the 🔔 notify settings modal.
+let foxHideTimer = null;
+let foxFadeTimer = null;
+let foxMascotRevert = null;
+// Shown once ever, the very first time the buddy appears for a brand-new
+// user, explaining what it is and how to turn it off. Never repeats after.
+const FOX_INTRO_KEY = "mymuxFoxIntroSeen";
+let foxIntroPending = (() => { try { return localStorage.getItem(FOX_INTRO_KEY) == null; } catch { return false; } })();
+const FOX_INTRO_MESSAGE = "작업이 끝나면 제가 알려드려요! 🔔 아이콘으로 끌 수도 있어요.";
+// Encouragement lines the buddy speaks, per Korean dialect (표준어 + 4 사투리).
+const BUDDY_PHRASES = {
+  standard:    ["잘했어요! 👏", "수고했어요!", "오늘도 멋져요!", "이대로 쭉 가요!", "완벽해요! ✨", "최고예요!", "고생 많았어요!"],
+  gyeongsang:  ["억수로 잘했다 아이가!", "욕봤다 마!", "단디 했네 그마!", "잘한다 잘한다!", "억수로 대단하데이!", "고생했데이!", "머스마 잘하네!"],
+  jeolla:      ["겁나 잘했어야!", "욕봤네 잉~", "허벌나게 잘했구마잉!", "아따 잘하네 잉!", "수고혔어라~", "겁나게 멋지구마잉!", "잘혔어야~"],
+  gangwon:     ["잘했드래요!", "욕봤드래요~", "참 잘했잖소!", "대단하드래!", "고생 많았드래요!", "멋지드래요!", "잘하잖소~"],
+  chungcheong: ["잘혔슈~", "욕봤슈~", "잘했구먼유~", "대단허유~", "수고혔슈~", "멋지구먼유~", "그려유, 잘혔슈~"],
+};
+// A task that ran 10+ minutes since the user's last input deserves more than a
+// plain cheer: the buddy says "all done — on to the next task!" instead, in the
+// same dialect the user picked for encouragement lines.
+const BUDDY_LONG_TASK_MS = 10 * 60 * 1000;
+const BUDDY_LONG_PHRASES = {
+  standard:    ["작업 다 끝났어요! 다음 작업 하러 가요! 🚀", "긴 작업 끝~ 이제 다음 거 해볼까요?", "다 끝났어요! 다음 작업 시작해요!"],
+  gyeongsang:  ["작업 다 끝났다 아이가! 다음 꺼 하러 가자!", "인자 다 됐데이~ 다음 작업 해뿌자!", "끝났다 마! 다음 거 하러 가재이!"],
+  jeolla:      ["작업 다 끝났어야! 다음 것 하러 가잔께!", "인자 다 됐구마잉~ 다음 작업 해불자잉!", "다 끝났응께 다음 거 하러 가야제~"],
+  gangwon:     ["작업 다 끝났드래요! 다음 거 하러 가요~", "다 됐잖소! 다음 작업 해봅시다!", "인제 끝났드래~ 다음 거 하드래요!"],
+  chungcheong: ["작업 다 끝났슈~ 다음 거 하러 가유~", "인저 다 됐구먼유~ 다음 작업 해유~", "다 끝났으니께 다음 거 해봐유~"],
+};
+// Show the encouragement bubble above (or below) the buddy, clamped to the
+// viewport so it's never clipped off an edge. `left/top/FW/FH` are the buddy's
+// target fixed-position rect.
+function showFoxBubble(fox, left, top, FW, FH, longTask, overrideText) {
+  const bubble = fox.querySelector(".fox-bubble");
+  if (!bubble) return;
+  // overrideText (ctx usage announcements) IS the message — it shows even when
+  // the encouragement bubble is toggled off; it has its own 🔔 toggle instead.
+  if (!notifyFlashPrefs.bubble && !overrideText) { fox.classList.remove("bubble-on", "bubble-below"); return; }
+  if (overrideText) {
+    bubble.textContent = overrideText;
+  } else if (foxIntroPending) {
+    bubble.textContent = FOX_INTRO_MESSAGE;
+    foxIntroPending = false;
+    try { localStorage.setItem(FOX_INTRO_KEY, "1"); } catch {}
+  } else {
+    const dialect = BUDDY_PHRASES[notifyFlashPrefs.dialect] ? notifyFlashPrefs.dialect : "standard";
+    const list = longTask ? BUDDY_LONG_PHRASES[dialect] : BUDDY_PHRASES[dialect];
+    // Vary by pane id + timer handle so repeats differ without Math.random.
+    const idx = (Math.abs(Number(fox._paneId) || 0) + (bubble._spin = (bubble._spin || 0) + 1)) % list.length;
+    bubble.textContent = list[idx];
+  }
+  fox.classList.remove("bubble-below");
+  bubble.style.transform = "translateX(-50%)";
+  bubble.style.removeProperty("--tail-x");
+  fox.classList.add("bubble-on");
+  // Measure now (size is position-independent even while the buddy glides).
+  const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+  const winW = window.innerWidth, winH = window.innerHeight, M = 6;
+  const centerX = left + FW / 2;
+  const bLeft = centerX - bw / 2;
+  let dx = 0;
+  if (bLeft < M) dx = M - bLeft;
+  else if (bLeft + bw > winW - M) dx = (winW - M) - (bLeft + bw);
+  bubble.style.transform = `translateX(calc(-50% + ${Math.round(dx)}px))`;
+  const tailX = Math.max(12, Math.min(bw - 12, bw / 2 - dx));
+  bubble.style.setProperty("--tail-x", `${Math.round(tailX)}px`);
+  if (top - 9 - bh < M) fox.classList.add("bubble-below"); // no room above → drop below
+}
+
+function showFoxAt(paneEl, paneId, longTask, overrideText) {
+  const fox = document.getElementById("fox-buddy");
+  if (!fox || !paneEl) return;
+  // Cancel any in-flight fade-out so a re-appearance shows a solid fox.
+  if (foxFadeTimer) { clearTimeout(foxFadeTimer); foxFadeTimer = null; }
+  fox.classList.remove("fox-leaving");
+  // Pick the character chosen in the 🔔 modal ("classic" | "mascot").
+  const char = notifyFlashPrefs.character === "mascot" ? "mascot" : "classic";
+  fox.dataset.char = char;
+  if (char === "mascot") {
+    // Celebrate: restart the cheer animation, then settle back to idle.
+    const mascot = fox.querySelector(".fox-mascot");
+    if (mascot) {
+      mascot.dataset.state = "idle"; void mascot.offsetWidth; mascot.dataset.state = "cheer";
+      if (foxMascotRevert) clearTimeout(foxMascotRevert);
+      foxMascotRevert = setTimeout(() => { mascot.dataset.state = "idle"; }, 1600);
+    }
+  }
+  const r = paneEl.getBoundingClientRect();
+  if (r.width === 0 || r.height === 0) return; // pane on a hidden tab — unseen badge covers it
+  const FW = 64, FH = 55;
+  // Bottom-right INSIDE the pane, lifted off the edge so it never covers
+  // scrollbars or the bar below. Narrow panes: center horizontally and clamp
+  // into the pane so the fox is never squeezed off the edge.
+  let left = r.right - FW - 14;
+  if (left < r.left + 2) left = Math.max(2, r.left + (r.width - FW) / 2);
+  let top = r.bottom - FH - 18;
+  if (top < r.top + 2) top = Math.max(2, r.top + (r.height - FH) / 2);
+  fox._paneId = paneId;
+  if (fox.classList.contains("hidden")) {
+    // First appearance: place instantly (no glide from a stale position) and
+    // play a little pop so it's unmistakable.
+    fox.style.transition = "none";
+    fox.style.left = left + "px";
+    fox.style.top = top + "px";
+    fox.classList.remove("hidden");
+    void fox.offsetWidth;
+    fox.style.transition = "";
+    fox.classList.remove("fox-pop"); void fox.offsetWidth; fox.classList.add("fox-pop");
+  } else {
+    // Already out: glide over to the newly finished pane.
+    fox.style.left = left + "px";
+    fox.style.top = top + "px";
+    fox.classList.remove("fox-pop"); void fox.offsetWidth; fox.classList.add("fox-pop");
+  }
+  showFoxBubble(fox, left, top, FW, FH, longTask, overrideText); // encouragement bubble (clamped to viewport)
+  if (foxHideTimer) clearTimeout(foxHideTimer);
+  foxHideTimer = setTimeout(hideFox, 10200); // matches the border-pulse lifetime
+}
+function hideFox() {
+  if (foxHideTimer) { clearTimeout(foxHideTimer); foxHideTimer = null; }
+  const fox = document.getElementById("fox-buddy");
+  if (!fox || fox.classList.contains("hidden")) return;
+  fox.classList.remove("bubble-on", "bubble-below");
+  // Fade + shrink out (CSS transition), then fully hide once it's invisible.
+  fox.classList.add("fox-leaving");
+  if (foxFadeTimer) clearTimeout(foxFadeTimer);
+  foxFadeTimer = setTimeout(() => {
+    foxFadeTimer = null;
+    fox.classList.add("hidden");
+    fox.classList.remove("fox-leaving");
+    fox._paneId = null;
+  }, 450); // matches the opacity/transform transition
+}
+// Drag to move (transition off while dragging); a plain click dismisses.
+function initFoxDrag() {
+  const fox = document.getElementById("fox-buddy");
+  if (!fox) return;
+  fox.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const r = fox.getBoundingClientRect();
+    let moved = false;
+    fox.classList.add("dragging");
+    const onMove = (ev) => {
+      if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 3) moved = true;
+      fox.style.left = (r.left + ev.clientX - startX) + "px";
+      fox.style.top = (r.top + ev.clientY - startY) + "px";
+    };
+    const onUp = () => {
+      fox.classList.remove("dragging");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      if (!moved) { hideFox(); return; } // click = acknowledge
+      // Dragged somewhere on purpose — keep it around a bit longer.
+      if (foxHideTimer) { clearTimeout(foxHideTimer); foxHideTimer = setTimeout(hideFox, 20000); }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
+
+// ── Session usage (ctx) badge ────────────────────────────────────────────────
+// Claude Code(+OMC HUD statusline)가 패인에 그리는 `ctx:[██░░]NN%` / `Model: X`
+// 텍스트를 PTY 출력에서 파싱해, 세션 목록과 패인 우상단에 "model | effort | NN%"
+// 배지로 고정 표시한다. effort는 statusline에 없어 ~/.claude/settings.json의
+// effortLevel을 주기적으로 읽는다(전역값 — /model로 바꾸면 그 파일에 저장됨).
+// Codex CLI도 지원: 하단 상태줄의 `NN% context left`(잔량!)를 사용량으로 변환해
+// 같은 배지를 쓰고, 세션 배너의 소문자 `model: gpt-…` 라인에서 모델명을 얻는다.
+// 한 패인에서 두 도구가 번갈아 나오면 나중에 보인 쪽이 현재값이 된다.
+// The bar body never contains "]" and the percent sits right after optional
+// ANSI color codes, so one regex covers both `ctx:67%` and `ctx:[██░░]67%`.
+const CTX_RE = /ctx:(?:\[[^\]]*\])?(?:\x1b\[[0-9;]*m)*(\d{1,3})%/;
+// `Model: Fable 5` is wrapped in cyan — capture stops at the trailing ESC.
+const CTX_MODEL_RE = /Model:\s*(?:\x1b\[[0-9;]*m)*([^\x1b\r\n]{1,24})/;
+// Codex has used both `97% context left` and `Context left: 97%` in its TUI.
+// Match either order (and the newer "remaining" wording) after terminal escape
+// sequences have been removed. Keeping this independent from a line ending is
+// important: Codex repaints its footer with cursor-motion controls, not newlines.
+const CODEX_CTX_RE = /(?:\bcontext(?:\s+window)?\s+(?:left|remaining)\s*:?\s*(\d{1,3})\s*%|\b(\d{1,3})\s*%\s*(?:context(?:\s+window)?\s*)?(?:left|remaining))(?!\w)/i;
+// Codex banner/status line. Limit accepted ids to Codex/OpenAI model families
+// so Claude's own `Model: …` statusline can never populate this field.
+const CODEX_MODEL_RE = /\bmodel\s*:\s*((?:gpt|o|codex)[A-Za-z0-9._-]{0,58})/i;
+// Codex prints its product banner before it has rendered a context footer.
+// Detect that banner so the per-pane indicators can appear immediately with
+// a placeholder instead of waiting for the first completed turn.
+const CODEX_START_RE = /\b(?:openai\s+)?codex(?:\s+cli)?\b/i;
+// CSI covers styles, cursor movement and erase controls. OSC is included because
+// some terminals emit title updates in the same PTY chunk as the status footer.
+const TERMINAL_ESCAPE_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -\/]*[@-~])/g;
+
+function terminalPlainText(text) {
+  return text.replace(TERMINAL_ESCAPE_RE, "");
+}
+// Account-wide Claude rate limits ride the same HUD statusline:
+// `5h:45%(3h42m) wk:12%(2d5h) mo:8%(15d3h)` — value colored, reset time dimmed,
+// stale readings get a `*` after the % and a `~` before the reset time.
+const CL_LIMIT_KEYS = [
+  ["5h:", /5h:(?:\x1b\[[0-9;]*m)*(\d{1,3})%(?:\x1b\[[0-9;]*m|\*)*(?:\((~?[0-9dhm]+)\))?/, "fiveH", "fiveHReset"],
+  ["wk:", /wk:(?:\x1b\[[0-9;]*m)*(\d{1,3})%(?:\x1b\[[0-9;]*m|\*)*(?:\((~?[0-9dhm]+)\))?/, "wk", "wkReset"],
+  ["mo:", /mo:(?:\x1b\[[0-9;]*m)*(\d{1,3})%(?:\x1b\[[0-9;]*m|\*)*(?:\((~?[0-9dhm]+)\))?/, "mo", "moReset"],
+];
+// Account-wide usage shown in the top toolbar. Claude comes from any pane's
+// statusline; Codex from the newest rollout's rate_limits snapshot (poll).
+let claudeLimits = null;    // { fiveH, fiveHReset, wk, wkReset, mo, moReset, at } — from a pane's HUD statusline
+let claudeLimitsApi = null; // same shape (5h+wk only) — from the OAuth usage API; works without OMC/statusline
+let codexLimits = null;     // { pct, label, secondary, resetsAt, plan, at }
+// Two independent sources feed the CL readout: the live pane statusline
+// (claudeLimits) and the direct OAuth usage API (claudeLimitsApi). Whichever was
+// refreshed most recently wins — a rendering Claude pane redraws its statusline
+// constantly so it dominates in-app, while the 60s API poll takes over the
+// moment that statusline goes quiet (Claude closed, or running outside Mymux).
+function activeClaudeLimits() {
+  const aAt = (claudeLimits && claudeLimits.at) || -1;
+  const bAt = (claudeLimitsApi && claudeLimitsApi.at) || -1;
+  if (aAt < 0 && bAt < 0) return null;
+  return bAt > aAt ? claudeLimitsApi : claudeLimits;
+}
+function parseCodexConfig(text) {
+  const get = (key) => {
+    const m = text.match(new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']\\s*$`, "im"));
+    return m ? m[1].trim() : null;
+  };
+  return {
+    model: get("model"),
+    reasoningEffort: get("model_reasoning_effort"),
+  };
+}
+const CTX_STALE_MS = 5 * 60 * 1000; // no statusline redraw for 5 min → dim badge
+const CTX_LEVELS = [50, 70, 85];    // buddy announces when first crossing these
+const CTX_REARM_DROP = 10;          // re-arm once usage falls 10%p under a level
+// Per-dialect announcement lines, indexed by level (50% / 70% / 85%).
+const CTX_PHRASES = {
+  standard:    ["컨텍스트를 반쯤 썼어요! (50%)", "컨텍스트 70%를 넘었어요~ 슬슬 정리를 생각해봐요!", "컨텍스트가 거의 다 찼어요(85%)! /compact 어때요?"],
+  gyeongsang:  ["컨텍스트 반이나 썼다 아이가! (50%)", "70% 넘었데이~ 슬슬 정리해라 마!", "거의 다 찼다 아이가(85%)! /compact 해뿌라!"],
+  jeolla:      ["컨텍스트 반이나 썼어야~ (50%)", "70% 넘었구마잉~ 슬슬 정리허소!", "거의 다 찼당께(85%)! /compact 해불드라고잉!"],
+  gangwon:     ["컨텍스트 반이나 썼드래요~ (50%)", "70% 넘었잖소~ 슬슬 정리하드래요!", "거의 다 찼드래요(85%)! /compact 해봅시다!"],
+  chungcheong: ["컨텍스트 반이나 썼슈~ (50%)", "70% 넘었구먼유~ 슬슬 정리해유~", "거의 다 찼슈(85%)! /compact 해야 혀유~"],
+};
+let claudeEffort = null; // e.g. "xhigh" — from ~/.claude/settings.json
+let codexConfiguredModel = null; // from ~/.codex/config.toml
+let codexSessionModel = null; // active session model from Codex settings events
+let codexConfiguredReasoningEffort = null; // from ~/.codex/config.toml
+let codexSessionReasoningEffort = null; // active session reasoning setting from rollout events
+
+// Scan one pump-tick's worth of PTY output for the statusline patterns. Keeps a
+// short tail so a pattern split across ticks still matches on the next one.
+function scanCtxUsage(id, t, data) {
+  const rawText = (t._ctxTail || "") + data;
+  t._ctxTail = rawText.slice(-240);
+  const text = terminalPlainText(rawText);
+  let changed = false;
+  if (!t.codexDetected && CODEX_START_RE.test(text)) {
+    t.codexDetected = true;
+    if (t.ctxSource !== "codex") {
+      t.ctxSource = "codex";
+      changed = true;
+    }
+  }
+  // Only the LAST occurrence matters — the statuslines redraw constantly and
+  // older matches in the same burst are already outdated.
+  // Claude (OMC HUD): `ctx:NN%` where NN is percent USED.
+  let claudePct = null, claudeAt = -1;
+  const ci = text.lastIndexOf("ctx:");
+  if (ci >= 0) {
+    const m = CTX_RE.exec(text.slice(ci, ci + 90));
+    if (m) { claudePct = Math.min(100, parseInt(m[1], 10)); claudeAt = ci; }
+  }
+  // Codex: `NN% context left` where NN is percent REMAINING → invert.
+  // A status footer is the final visible text in a repaint. Restrict parsing to
+  // that tail so a model reply containing the same words cannot overwrite a
+  // session badge. `trimEnd` retains all meaningful status text.
+  const codexFooter = text.slice(-160).trimEnd();
+  let codexPct = null, codexAt = -1;
+  for (const m of codexFooter.matchAll(new RegExp(CODEX_CTX_RE.source, "gi"))) {
+    if (m.index + m[0].length !== codexFooter.length) continue;
+    const left = parseInt(m[1] || m[2], 10);
+    if (!Number.isNaN(left)) {
+      codexPct = 100 - Math.min(100, left);
+      codexAt = text.length - codexFooter.length + m.index;
+    }
+  }
+  // Both tools can show up in one pane over time — the later sighting wins.
+  const pct = codexAt > claudeAt ? codexPct : claudePct;
+  if (pct != null) {
+    const source = codexAt > claudeAt ? "codex" : "claude";
+    t.ctxAt = performance.now(); // fresh sighting even when the value is equal
+    if (pct !== t.ctxPct || source !== t.ctxSource) { t.ctxPct = pct; t.ctxSource = source; changed = true; }
+    maybeAnnounceCtx(id, t);
+  }
+  const mi = text.lastIndexOf("Model:");
+  if (mi >= 0) {
+    const m = CTX_MODEL_RE.exec(text.slice(mi, mi + 60));
+    if (m) {
+      const name = m[1].trim();
+      if (name && name !== t.ctxModel) { t.ctxModel = name; changed = true; }
+    }
+  }
+  let codexModel = null;
+  for (const m of text.matchAll(new RegExp(CODEX_MODEL_RE.source, "gi"))) codexModel = m[1];
+  if (codexModel && codexModel !== t.codexModel) { t.codexModel = codexModel; changed = true; }
+  // Account-wide Claude rate limits (5h:34% wk:12% …) — global, not per-pane.
+  let limitsChanged = false;
+  for (const [key, re, field, rfield] of CL_LIMIT_KEYS) {
+    const ki = text.lastIndexOf(key);
+    if (ki < 0) continue;
+    const m = re.exec(text.slice(ki, ki + 44));
+    if (!m) continue;
+    const v = Math.min(100, parseInt(m[1], 10));
+    claudeLimits = claudeLimits || {};
+    if (claudeLimits[field] !== v || (m[2] && claudeLimits[rfield] !== m[2])) limitsChanged = true;
+    claudeLimits[field] = v;
+    if (m[2]) claudeLimits[rfield] = m[2];
+    claudeLimits.at = performance.now();
+  }
+  if (limitsChanged) updateGlobalUsageUi();
+  if (changed) updateCtxUi(id, t);
+}
+
+// 초록(0%) → 다홍(~85%) → 빨강(100%) continuous hue ramp.
+function ctxColor(pct) {
+  const hue = Math.max(0, 130 - (pct / 100) * 145);
+  return `hsl(${Math.round(hue)}, 85%, 55%)`;
+}
+function ctxBadgeText(t) {
+  const parts = [];
+  if (t.ctxSource === "codex") {
+    // Codex's status footer has no reasoning setting, so prefer the active
+    // rollout value and fall back to config.toml. ctxPct is converted from "left".
+    parts.push(codexSessionModel || t.codexModel || codexConfiguredModel || "Codex");
+    const effort = codexSessionReasoningEffort || codexConfiguredReasoningEffort;
+    if (effort) parts.push(effort);
+  } else {
+    if (t.ctxModel) parts.push(t.ctxModel);
+    if (claudeEffort) parts.push(claudeEffort);
+  }
+  parts.push(t.ctxPct == null ? "—" : t.ctxPct + "%");
+  return parts.join(" | ");
+}
+
+// Refresh both badges (pane overlay + session-list pill) for one session.
+function updateCtxUi(id, t) {
+  if (t.ctxPct == null && !t.codexDetected) return;
+  const show = notifyFlashPrefs.ctxBadge;
+  const color = t.ctxPct == null ? "var(--text-muted, #8b93a7)" : ctxColor(t.ctxPct);
+  const stale = t.ctxPct != null && performance.now() - (t.ctxAt || 0) > CTX_STALE_MS;
+  const pe = t.paneEl && t.paneEl.querySelector(".pane-ctx");
+  if (pe) {
+    pe.textContent = show ? ctxBadgeText(t) : "";
+    pe.style.color = color;
+    pe.style.borderColor = color;
+    pe.classList.toggle("stale", stale);
+  }
+  const li = document.querySelector(`.session-item[data-pty-id="${id}"]`);
+  if (li) {
+    let se = li.querySelector(".session-ctx");
+    if (!show) { if (se) se.remove(); return; }
+    if (!se) {
+      se = document.createElement("span");
+      se.className = "session-ctx";
+      const nameEl = li.querySelector(".session-name");
+      if (nameEl) nameEl.after(se); else li.appendChild(se);
+    }
+    se.textContent = t.ctxPct == null ? "—" : t.ctxPct + "%";
+    se.title = ctxBadgeText(t); // full "model | effort | ctx" on hover
+    se.style.color = color;
+    se.style.borderColor = color;
+    se.classList.toggle("stale", stale);
+  }
+}
+
+// Buddy speaks when usage first crosses 50/70/85% — once per crossing. A real
+// drop (compact/clear) re-arms the level so the next climb announces again.
+function maybeAnnounceCtx(id, t) {
+  const pct = t.ctxPct;
+  const lvl = CTX_LEVELS.reduce((n, th) => n + (pct >= th ? 1 : 0), 0);
+  const cur = t.ctxLvl || 0;
+  if (lvl > cur) {
+    t.ctxLvl = lvl;
+    if (notifyFlashPrefs.ctxVoice && notifyFlashPrefs.character && notifyFlashPrefs.character !== "none") {
+      const dialect = CTX_PHRASES[notifyFlashPrefs.dialect] ? notifyFlashPrefs.dialect : "standard";
+      showFoxAt(t.paneEl, id, false, CTX_PHRASES[dialect][lvl - 1]);
+    }
+  } else if (lvl < cur && pct <= CTX_LEVELS[cur - 1] - CTX_REARM_DROP) {
+    t.ctxLvl = lvl;
+  }
+}
+
+// ── Account-wide usage (top toolbar) ────────────────────────────────────────
+// `CL 5h:34% wk:12% │ CX 30d:5%` — Claude comes from any pane's statusline,
+// Codex from the newest ~/.codex rollout's rate_limits snapshot (60s poll).
+function usageSeg(label, pct, stale) {
+  const s = document.createElement("span");
+  s.className = "usage-seg" + (stale ? " stale" : "");
+  s.append(label + ":");
+  const b = document.createElement("b");
+  b.textContent = pct + "%";
+  b.style.color = ctxColor(pct);
+  s.appendChild(b);
+  return s;
+}
+function updateGlobalUsageUi() {
+  const el = document.getElementById("usage-global");
+  if (!el) return;
+  el.textContent = "";
+  el.title = "";
+  if (!notifyFlashPrefs.ctxBadge) return;
+  const now = performance.now();
+  const tips = [];
+  const cl = activeClaudeLimits();
+  if (cl && (cl.fiveH != null || cl.wk != null || cl.mo != null)) {
+    const stale = now - (cl.at || 0) > 10 * 60 * 1000;
+    const tool = document.createElement("span");
+    tool.className = "usage-tool";
+    tool.textContent = "CL";
+    el.appendChild(tool);
+    if (cl.fiveH != null) el.appendChild(usageSeg("5h", cl.fiveH, stale));
+    if (cl.wk != null) el.appendChild(usageSeg("wk", cl.wk, stale));
+    if (cl.mo != null) el.appendChild(usageSeg("mo", cl.mo, stale));
+    tips.push("Claude 전체 사용량"
+      + (cl.fiveHReset ? ` · 5h 리셋까지 ${cl.fiveHReset}` : "")
+      + (cl.wkReset ? ` · 주간 리셋까지 ${cl.wkReset}` : ""));
+  }
+  if (codexLimits && codexLimits.pct != null) {
+    if (el.childElementCount) {
+      const div = document.createElement("span");
+      div.className = "usage-div";
+      div.textContent = "│";
+      el.appendChild(div);
+    }
+    const tool = document.createElement("span");
+    tool.className = "usage-tool";
+    tool.textContent = "CX";
+    el.appendChild(tool);
+    el.appendChild(usageSeg(codexLimits.label || "usage", codexLimits.pct, false));
+    if (codexLimits.secondary) el.appendChild(usageSeg(codexLimits.secondary.label || "wk", codexLimits.secondary.pct, false));
+    tips.push(`Codex 전체 사용량 (plan: ${codexLimits.plan || "?"})`
+      + (codexLimits.resetsAt ? ` · 리셋까지 ${fmtEpochRemain(codexLimits.resetsAt)}` : ""));
+  }
+  el.title = tips.join("\n");
+}
+function fmtEpochRemain(epochSec) {
+  const ms = epochSec * 1000 - Date.now();
+  if (ms <= 0) return "곧";
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d > 0) return `${d}d${h % 24}h`;
+  if (h > 0) return `${h}h${m % 60}m`;
+  return `${m}m`;
+}
+// Codex writes a rate_limits snapshot into its session rollout on every reply;
+// mine the newest rollout's tail for the last one. Works no matter where the
+// codex session runs (a Mymux pane, VS Code, a plain terminal).
+function findKeyDeep(obj, key) {
+  if (!obj || typeof obj !== "object") return null;
+  if (obj[key]) return obj[key];
+  for (const v of Object.values(obj)) {
+    const r = findKeyDeep(v, key);
+    if (r) return r;
+  }
+  return null;
+}
+function codexWindowLabel(min) {
+  if (min == null) return "";
+  if (min % 1440 === 0 && min >= 1440) return (min / 1440) + "d";
+  if (min % 60 === 0 && min >= 60) return (min / 60) + "h";
+  return min + "m";
+}
+async function loadCodexLimits() {
+  try {
+    const tail = await invoke("codex_rollout_tail", { maxBytes: 65536 });
+    const lines = tail.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].indexOf('"turn_context"') >= 0 || lines[i].indexOf('"thread_settings_applied"') >= 0) {
+        try {
+          const ev = JSON.parse(lines[i]);
+          const tc = ev.payload || {};
+          const ts = tc.thread_settings || ev.thread_settings || {};
+          const nextModel = (tc.model || tc.settings?.model || tc.collaboration_mode?.settings?.model
+            || ts.model || ts.collaboration_mode?.settings?.model || null);
+          const nextReasoningEffort = (tc.model_reasoning_effort || tc.reasoning_effort
+            || tc.settings?.model_reasoning_effort || tc.settings?.reasoning_effort
+            || tc.collaboration_mode?.settings?.model_reasoning_effort || tc.collaboration_mode?.settings?.reasoning_effort
+            || ts.model_reasoning_effort || ts.reasoning_effort
+            || ts.collaboration_mode?.settings?.model_reasoning_effort || ts.collaboration_mode?.settings?.reasoning_effort || null);
+          if ((nextModel && nextModel !== codexSessionModel)
+            || (nextReasoningEffort && nextReasoningEffort !== codexSessionReasoningEffort)) {
+            if (nextModel) codexSessionModel = nextModel;
+            if (nextReasoningEffort) codexSessionReasoningEffort = nextReasoningEffort;
+            for (const [pid, tt] of terminals) if ((tt.ctxPct != null || tt.codexDetected) && tt.ctxSource === "codex") updateCtxUi(pid, tt);
+          }
+        } catch {}
+      }
+      if (lines[i].indexOf('"rate_limits"') < 0) continue;
+      try {
+        const rl = findKeyDeep(JSON.parse(lines[i]), "rate_limits");
+        const p = rl && rl.primary;
+        if (!p || p.used_percent == null) continue;
+        codexLimits = {
+          pct: Math.min(100, Math.round(p.used_percent)),
+          label: codexWindowLabel(p.window_minutes),
+          secondary: rl.secondary && rl.secondary.used_percent != null
+            ? { pct: Math.min(100, Math.round(rl.secondary.used_percent)), label: codexWindowLabel(rl.secondary.window_minutes) }
+            : null,
+          resetsAt: p.resets_at || null,
+          plan: rl.plan_type || null,
+          at: performance.now(),
+        };
+        updateGlobalUsageUi();
+        return;
+      } catch { /* line cut at the tail boundary — try the previous one */ }
+    }
+  } catch { /* codex not installed / no rollouts — segment stays hidden */ }
+}
+
+// Fetch account-wide Claude usage straight from Anthropic's OAuth endpoint so
+// the CL readout works without OMC's HUD and without a Claude pane in Mymux.
+// Read-only/safe: the Rust side never refreshes or rewrites the login file, so
+// an expired/absent token just errors and this source silently stays empty.
+async function loadClaudeUsageApi() {
+  try {
+    const u = await invoke("claude_account_usage");
+    if (!u || (u.fiveH == null && u.wk == null)) return;
+    claudeLimitsApi = {
+      fiveH: u.fiveH,
+      fiveHReset: fmtIsoRemain(u.fiveHResetsAt),
+      wk: u.wk,
+      wkReset: fmtIsoRemain(u.wkResetsAt),
+      at: performance.now(),
+    };
+    updateGlobalUsageUi();
+  } catch { /* no creds / expired / offline — the CL API source stays absent */ }
+}
+// ISO-8601 instant → compact "3h42m" / "2d5h" remaining, matching the HUD's
+// reset-time format so both CL sources render identically in the tooltip.
+function fmtIsoRemain(iso) {
+  if (!iso) return null;
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!isFinite(ms) || ms <= 0) return null;
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d > 0) return `${d}d${h % 24}h`;
+  if (h > 0) return `${h}h${m % 60}m`;
+  return `${m}m`;
+}
+
+// effort(예: xhigh)는 statusline에 안 나오므로 설정 파일에서 읽는다. /model로
+// 바꾸면 settings.json이 갱신되니 1분 폴링이면 충분히 따라간다.
+async function loadClaudeEffort() {
+  try {
+    const home = await invoke("explorer_home_dir");
+    const txt = await invoke("read_text_file", { path: home + "/.claude/settings.json" });
+    const next = JSON.parse(txt).effortLevel || null;
+    if (next !== claudeEffort) {
+      claudeEffort = next;
+      for (const [pid, tt] of terminals) if (tt.ctxPct != null || tt.codexDetected) updateCtxUi(pid, tt);
+    }
+  } catch { /* no Claude settings — badge simply omits effort */ }
+}
+
+async function loadCodexModelSetting() {
+  try {
+    const home = await invoke("explorer_home_dir");
+    const txt = await invoke("read_text_file", { path: home + "/.codex/config.toml" });
+    const next = parseCodexConfig(txt);
+    if (next.model !== codexConfiguredModel || next.reasoningEffort !== codexConfiguredReasoningEffort) {
+      codexConfiguredModel = next.model;
+      codexConfiguredReasoningEffort = next.reasoningEffort;
+      for (const [pid, tt] of terminals) if ((tt.ctxPct != null || tt.codexDetected) && tt.ctxSource === "codex") updateCtxUi(pid, tt);
+    }
+  } catch { /* no Codex config — badge simply omits the fallback model */ }
+}
+
+function initCtxUsage() {
+  loadClaudeEffort();
+  setInterval(loadClaudeEffort, 60_000);
+  loadCodexModelSetting();
+  setInterval(loadCodexModelSetting, 60_000);
+  loadCodexLimits();
+  setInterval(loadCodexLimits, 5_000);
+  loadClaudeUsageApi();
+  setInterval(loadClaudeUsageApi, 60_000);
+  // Staleness sweep: dim badges whose statusline stopped redrawing (Claude
+  // Code exited or the pane went back to a plain shell).
+  setInterval(() => {
+    for (const [pid, tt] of terminals) if (tt.ctxPct != null || tt.codexDetected) updateCtxUi(pid, tt);
+    updateGlobalUsageUi();
+  }, 30_000);
+}
+document.addEventListener("mouseover", (e) => {
+  const el = e.target.closest?.(".notify-flash");
+  if (!el) return;
+  const pid = Number(el.dataset.ptyId);
+  if (Number.isFinite(pid)) clearPaneFlash(pid);
+  else el.classList.remove("notify-flash");
+});
+
+// ── Activity badges (tmux monitor-activity) ──────────────────────────────
+// Output landing in a pane the user can't see marks its session row and its
+// tab with a dot; viewing the tab clears it.
+function markPaneActivity(id, t) {
+  if (t.unseen) return; // already marked — skip the per-frame DOM work
+  const tab = findTabForPane(id);
+  if (!tab) return;
+  if (tab.tabIdx === activeTabIdx && !browserTabActive && !viewerActive) return; // visible
+  markUnseen(id, t, tab);
+}
+function markUnseen(id, t, tab) {
+  t.unseen = true;
+  document.querySelector(`.session-item[data-pty-id="${id}"]`)?.classList.add("unseen");
+  terminalTabs.querySelector(`.tab[data-id="${tab.tabIdx}"]`)?.classList.add("unseen");
+}
+function clearUnseenForTab(tabIdx) {
+  const tab = tabs.get(tabIdx);
+  if (!tab) return;
+  for (const pid of tab.panes || []) {
+    const t = terminals.get(pid);
+    if (t && t.unseen) {
+      t.unseen = false;
+      document.querySelector(`.session-item[data-pty-id="${pid}"]`)?.classList.remove("unseen");
+    }
+  }
+  terminalTabs.querySelector(`.tab[data-id="${tabIdx}"]`)?.classList.remove("unseen");
+}
+
+// ── Pane zoom (tmux prefix+z) ────────────────────────────────────────────
+// Temporarily maximize the focused pane over its tab as an absolute overlay —
+// no reparenting, so background panes stay live and scroll state is untouched.
+// Every layout operation (split/close/move) clears the zoom first so the
+// overlay never fights the flex-tree math.
+let zoomedPaneId = null;
+function togglePaneZoom() {
+  const t = terminals.get(focusedPaneId);
+  const wasZoomed = zoomedPaneId === focusedPaneId;
+  clearPaneZoom();
+  if (!wasZoomed && t) {
+    const tab = findTabForPane(focusedPaneId);
+    t.paneEl.classList.add("zoomed");
+    if (tab && tab.rootEl) tab.rootEl.classList.add("has-zoom");
+    zoomedPaneId = focusedPaneId;
+  }
+  requestAnimationFrame(() => refitAllPanes());
+}
+function clearPaneZoom() {
+  if (zoomedPaneId == null) return;
+  const t = terminals.get(zoomedPaneId);
+  if (t) t.paneEl.classList.remove("zoomed");
+  const tab = findTabForPane(zoomedPaneId);
+  if (tab && tab.rootEl) tab.rootEl.classList.remove("has-zoom");
+  zoomedPaneId = null;
+}
+
+// ── Per-tab input broadcast (tmux synchronize-panes) ─────────────────────
+function toggleBroadcast() {
+  const tab = tabs.get(activeTabIdx);
+  if (!tab) return;
+  tab.broadcast = !tab.broadcast;
+  updateBroadcastUi();
+  toast(tab.broadcast
+    ? "Broadcast ON — typing goes to every pane in this tab (Ctrl+Shift+B to stop)"
+    : "Broadcast off");
+}
+function updateBroadcastUi() {
+  const tab = tabs.get(activeTabIdx);
+  const on = !!(tab && tab.broadcast);
+  document.getElementById("btn-broadcast")?.classList.toggle("active", on);
+  tabs.forEach((t) => { if (t.rootEl) t.rootEl.classList.toggle("broadcasting", !!t.broadcast); });
+}
+
+// ── Scrollback search (Ctrl+Shift+F) ─────────────────────────────────────
+// One shared bar over the terminal area; it always drives the FOCUSED pane's
+// search addon, so switching panes retargets the same bar.
+function initTermSearch() {
+  const input = document.getElementById("term-search-input");
+  if (!input) return;
+  const addon = () => terminals.get(focusedPaneId)?.search;
+  const find = (back) => {
+    const a = addon();
+    if (!a || !input.value) return;
+    try { back ? a.findPrevious(input.value) : a.findNext(input.value); } catch {}
+  };
+  input.addEventListener("input", () => {
+    const a = addon();
+    if (!a) return;
+    try { input.value ? a.findNext(input.value, { incremental: true }) : a.clearDecorations?.(); } catch {}
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); find(e.shiftKey); }
+    else if (e.key === "Escape") { e.preventDefault(); closeTermSearch(); }
+  });
+  document.getElementById("term-search-prev")?.addEventListener("click", () => find(true));
+  document.getElementById("term-search-next")?.addEventListener("click", () => find(false));
+  document.getElementById("term-search-close")?.addEventListener("click", closeTermSearch);
+}
+function openTermSearch() {
+  if (browserTabActive || viewerActive || !focusedPaneId) return;
+  const bar = document.getElementById("term-search");
+  const input = document.getElementById("term-search-input");
+  if (!bar || !input) return;
+  bar.classList.remove("hidden");
+  input.focus();
+  input.select();
+}
+function closeTermSearch() {
+  const bar = document.getElementById("term-search");
+  if (!bar || bar.classList.contains("hidden")) return;
+  bar.classList.add("hidden");
+  const t = terminals.get(focusedPaneId);
+  if (t) {
+    try { t.search?.clearDecorations?.(); t.term.clearSelection(); } catch {}
+    t.term.focus();
+  }
+}
+
+// ── Terminal URL opening (web-links addon) ───────────────────────────────
+// Ctrl+Click routes into the in-app browser tab when the Browser feature is
+// enabled; otherwise falls back to the OS default browser.
+function openLinkFromTerminal(uri) {
+  if (!/^https?:\/\//i.test(uri)) return;
+  if (browserEnabled()) {
+    if (browserMode !== "native") setBrowserMode("native");
+    setBrowserView(true);
+    const nav = document.getElementById("nav-url");
+    if (nav) nav.value = uri;
+    nativeNavigate(uri);
+  } else {
+    invoke("open_external", { path: uri }).catch((e) => toast(String(e), true));
+  }
+}
+let linkHintShown = false;
+function hintLinkOnce() {
+  if (linkHintShown) return;
+  linkHintShown = true;
+  toast("Ctrl+Click opens links (Ctrl+클릭으로 링크 열기)");
+}
+let ctrlAHintShown = false;
+function hintCtrlAOnce() {
+  if (ctrlAHintShown) return;
+  ctrlAHintShown = true;
+  toast("입력줄 전체 선택됨 — Ctrl+C 복사 / Ctrl+X 잘라내기 (줄 시작은 Home)");
+}
+
+// ── OSC 133 shell integration: prompt jump, block copy, input line copy/cut ──
+// Marks come from our bash rcfile / PowerShell prompt (see terminal.rs).
+
+// The current command-input line as { startLine, startCol, cellLen, text }, or
+// null when nothing is typed or the shell hasn't emitted a 133;B mark yet.
+// True when the pane is sitting at a Mymux-integrated shell prompt (normal
+// buffer, a live 133;B input mark) — as opposed to a full-screen TUI on the
+// alternate screen (vim / claude / htop / less), where Ctrl+A must reach the app.
+function atIntegratedPrompt(t) {
+  return !!(t && t.inputMark && t.inputMark.marker && !t.inputMark.marker.isDisposed
+    && t.term.buffer.active.type === "normal");
+}
+
+function getInputRegion(t) {
+  const im = t && t.inputMark;
+  if (!im || !im.marker || im.marker.isDisposed) return null;
+  const buf = t.term.buffer.active;
+  if (buf.type !== "normal") return null; // alt-screen TUI — not a shell prompt
+  const cols = t.term.cols;
+  const startLine = im.marker.line;
+  const startCol = im.col;
+  // Extend across wrapped continuation rows of the input.
+  let endRow = startLine;
+  while (true) { const n = buf.getLine(endRow + 1); if (n && n.isWrapped) endRow++; else break; }
+  let text = "", lastRow = startLine, lastCellExcl = startCol;
+  for (let row = startLine; row <= endRow; row++) {
+    const line = buf.getLine(row);
+    if (!line) break;
+    const from = row === startLine ? startCol : 0;
+    for (let c = from; c < cols; c++) {
+      const cell = line.getCell(c);
+      if (!cell) continue;
+      const w = cell.getWidth();
+      if (w === 0) continue; // trailing cell of a wide char
+      const ch = cell.getChars() || " ";
+      text += ch;
+      if (ch !== " ") { lastRow = row; lastCellExcl = c + w; }
+    }
+  }
+  const trimmed = text.replace(/[\s ]+$/, "");
+  if (!trimmed) return null;
+  const cellLen = (lastRow - startLine) * cols + (lastCellExcl - startCol);
+  return { startLine, startCol, cellLen, text: trimmed };
+}
+
+// Visually select the current input line. Returns false when there's nothing to
+// select (so Ctrl+A can fall through to readline's beginning-of-line).
+function selectCurrentInput(id) {
+  const t = terminals.get(id);
+  const r = getInputRegion(t);
+  if (!r) return false;
+  try { t.term.select(r.startCol, r.startLine, r.cellLen); } catch { return false; }
+  return true;
+}
+
+function copyCurrentInput(id) {
+  const t = terminals.get(id || focusedPaneId);
+  const r = getInputRegion(t);
+  if (!r) { toast("입력 중인 명령이 없어요 (셸 통합 준비 전이거나 빈 줄)"); return false; }
+  clipboardWrite(r.text);
+  toast("현재 명령줄 복사됨");
+  return true;
+}
+
+// Cut the selection (or, if none, the current input line) and clear it in the
+// shell. Returns false when there's nothing to cut (Ctrl+X falls through).
+function cutCurrentInput(id) {
+  const t = terminals.get(id);
+  if (!t) return false;
+  const sel = t.term.getSelection();
+  const r = getInputRegion(t);
+  const text = sel || (r && r.text);
+  if (!text) return false;
+  clipboardWrite(text);
+  t.term.clearSelection();
+  // Clear the shell's input line: Escape reverts the line in PSReadLine and
+  // cmd.exe; readline (bash/zsh/ssh) uses Ctrl+E then Ctrl+U (to-end, kill-to-start).
+  const sh = (t.shell || "").toLowerCase();
+  const winShell = /power|pwsh|cmd/.test(sh);
+  invoke("pty_write", { id, data: winShell ? "\x1b" : "\x05\x15" });
+  toast("현재 명령줄 잘라냄");
+  return true;
+}
+
+function promptLines(t) {
+  return t.marks
+    .filter((m) => m.marker && !m.marker.isDisposed)
+    .map((m) => m.marker.line)
+    .sort((a, b) => a - b);
+}
+
+// Scroll to the previous / next prompt mark (Ctrl+Shift+↑/↓).
+function jumpPrompt(dir) {
+  const t = terminals.get(focusedPaneId);
+  if (!t) return;
+  const lines = promptLines(t);
+  if (!lines.length) { toast("프롬프트 마크 없음 (bash·PowerShell에서 동작)"); return; }
+  const view = t.term.buffer.active.viewportY;
+  let target = null;
+  if (dir < 0) { for (let i = lines.length - 1; i >= 0; i--) if (lines[i] < view) { target = lines[i]; break; } }
+  else { for (const l of lines) if (l > view) { target = l; break; } }
+  if (target != null) t.term.scrollToLine(target);
+  else toast(dir < 0 ? "첫 프롬프트입니다" : "마지막 프롬프트입니다");
+}
+
+// Copy the command + output block visible at the top of the viewport.
+function copyCommandBlock(id) {
+  const t = terminals.get(id || focusedPaneId);
+  if (!t) return false;
+  const lines = promptLines(t);
+  if (!lines.length) { toast("명령 블록 마크 없음 (bash·PowerShell에서 동작)"); return false; }
+  const buf = t.term.buffer.active;
+  const view = buf.viewportY;
+  let start = lines[0];
+  for (const l of lines) { if (l <= view) start = l; else break; }
+  let end = buf.length - 1;
+  for (const l of lines) if (l > start) { end = l - 1; break; }
+  let text = "";
+  for (let row = start; row <= end; row++) {
+    const line = buf.getLine(row);
+    if (line) text += line.translateToString(true) + "\n";
+  }
+  text = text.replace(/\n+$/, "");
+  if (!text.trim()) { toast("빈 블록"); return false; }
+  clipboardWrite(text);
+  toast("명령 블록 복사됨 (" + (end - start + 1) + "줄)");
+  return true;
+}
+
+// ── Command palette (Ctrl+Shift+P) ───────────────────────────────────────
+function commandPaletteActions() {
+  return [
+    { name: "New terminal / 새 터미널", hint: "Ctrl+Shift+N", run: () => spawnTerminal() },
+    { name: "Split pane horizontally / 가로 분할", hint: "Ctrl+Shift+D", run: () => splitPane("horizontal") },
+    { name: "Split pane vertically / 세로 분할", hint: "Ctrl+Shift+E", run: () => splitPane("vertical") },
+    { name: "Close pane / 패인 닫기", hint: "Ctrl+Shift+W", run: () => focusedPaneId && closePane(focusedPaneId) },
+    { name: "Zoom / restore pane / 패인 최대화", hint: "Ctrl+Shift+Z", run: () => togglePaneZoom() },
+    { name: "Search scrollback / 스크롤백 검색", hint: "Ctrl+Shift+F", run: () => openTermSearch() },
+    { name: "Broadcast input to tab / 입력 브로드캐스트", hint: "Ctrl+Shift+B", run: () => toggleBroadcast() },
+    { name: "Jump to previous prompt / 이전 프롬프트", hint: "Ctrl+Shift+↑", run: () => jumpPrompt(-1) },
+    { name: "Jump to next prompt / 다음 프롬프트", hint: "Ctrl+Shift+↓", run: () => jumpPrompt(1) },
+    { name: "Copy command output block / 명령 블록 복사", hint: "", run: () => copyCommandBlock() },
+    { name: "Copy current command line / 현재 명령줄 복사", hint: "", run: () => copyCurrentInput() },
+    { name: "Cut current command line / 현재 명령줄 잘라내기", hint: "Ctrl+X", run: () => cutCurrentInput(focusedPaneId) },
+    { name: "Select current command line / 현재 명령줄 전체 선택", hint: "Ctrl+A", run: () => selectCurrentInput(focusedPaneId) },
+    { name: "New SSH connection / SSH 연결", hint: "", run: () => openSshModal() },
+    { name: "Toggle browser panel / 브라우저 패널", hint: "", run: () => toggleBrowserEnabled() },
+    { name: "Toggle light / dark theme / 테마 전환", hint: "", run: () => setTheme(currentThemeMode() === "dark" ? "light" : "dark") },
+    { name: "Increase font size / 글자 크게", hint: "Ctrl +", run: () => adjustTerminalFontSize(1) },
+    { name: "Decrease font size / 글자 작게", hint: "Ctrl -", run: () => adjustTerminalFontSize(-1) },
+  ];
+}
+
+let paletteFiltered = [], paletteIndex = 0;
+function initCommandPalette() {
+  const input = document.getElementById("palette-input");
+  const ov = document.getElementById("palette-overlay");
+  if (!input || !ov) return;
+  input.addEventListener("input", () => renderPalette(input.value));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeCommandPalette(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); movePalette(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); movePalette(-1); }
+    else if (e.key === "Enter") { e.preventDefault(); runPaletteSelection(); }
+  });
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) closeCommandPalette(); });
+}
+function openCommandPalette() {
+  const ov = document.getElementById("palette-overlay");
+  const input = document.getElementById("palette-input");
+  if (!ov || !input) return;
+  ov.classList.remove("hidden");
+  input.value = "";
+  renderPalette("");
+  input.focus();
+}
+function closeCommandPalette() {
+  document.getElementById("palette-overlay")?.classList.add("hidden");
+  const t = terminals.get(focusedPaneId);
+  if (t) try { t.term.focus(); } catch {}
+}
+function fuzzyScore(q, s) {
+  if (!q) return 0;
+  q = q.toLowerCase(); s = s.toLowerCase();
+  let qi = 0, score = 0, streak = 0;
+  for (let i = 0; i < s.length && qi < q.length; i++) {
+    if (s[i] === q[qi]) { qi++; streak++; score += streak; } else streak = 0;
+  }
+  return qi === q.length ? score : -1;
+}
+function renderPalette(q) {
+  const list = document.getElementById("palette-list");
+  if (!list) return;
+  const actions = commandPaletteActions();
+  paletteFiltered = (q
+    ? actions.map((a) => ({ a, s: fuzzyScore(q, a.name) })).filter((x) => x.s >= 0).sort((x, y) => y.s - x.s).map((x) => x.a)
+    : actions);
+  paletteIndex = 0;
+  list.innerHTML = "";
+  paletteFiltered.forEach((a, i) => {
+    const li = document.createElement("li");
+    li.className = "palette-item" + (i === 0 ? " sel" : "");
+    li.innerHTML = `<span class="palette-name"></span>${a.hint ? `<span class="palette-hint">${esc(a.hint)}</span>` : ""}`;
+    li.querySelector(".palette-name").textContent = a.name;
+    li.addEventListener("mousemove", () => setPaletteIndex(i));
+    li.addEventListener("click", () => { setPaletteIndex(i); runPaletteSelection(); });
+    list.appendChild(li);
+  });
+  if (!paletteFiltered.length) list.innerHTML = `<li class="palette-empty">No matching command</li>`;
+}
+function setPaletteIndex(i) {
+  paletteIndex = i;
+  document.querySelectorAll("#palette-list .palette-item").forEach((el, idx) => el.classList.toggle("sel", idx === i));
+}
+function movePalette(d) {
+  if (!paletteFiltered.length) return;
+  setPaletteIndex((paletteIndex + d + paletteFiltered.length) % paletteFiltered.length);
+  document.querySelectorAll("#palette-list .palette-item")[paletteIndex]?.scrollIntoView({ block: "nearest" });
+}
+function runPaletteSelection() {
+  const a = paletteFiltered[paletteIndex];
+  closeCommandPalette();
+  if (a) { try { a.run(); } catch (e) { toast(String(e), true); } }
+}
+
+// ── Keyboard shortcuts help (toolbar ⌨ button) ───────────────────────────
+const SHORTCUTS = [
+  ["Panes & tabs / 패인·탭", [
+    ["Ctrl+Shift+D", "Split horizontally / 가로 분할"],
+    ["Ctrl+Shift+E", "Split vertically / 세로 분할"],
+    ["Ctrl+Shift+W", "Close pane / 패인 닫기"],
+    ["Ctrl+Shift+N", "New terminal / 새 터미널·탭"],
+    ["Ctrl+Tab", "Next pane / 다음 패인"],
+    ["Ctrl+Shift+Tab", "Previous pane / 이전 패인"],
+    ["Alt + ← ↑ ↓ →", "Move focus between panes / 패인 간 이동"],
+    ["Ctrl+PageUp / PageDown", "Switch sessions / tabs / 세션(탭) 전환"],
+    ["Ctrl+Shift+Z", "Zoom / restore pane / 패인 최대화"],
+    ["Ctrl + `", "Focus terminal / 터미널 포커스"],
+  ]],
+  ["Terminal tools / 터미널 도구", [
+    ["Ctrl+Shift+P", "Command palette / 커맨드 팔레트"],
+    ["Ctrl+Shift+F", "Search scrollback / 스크롤백 검색"],
+    ["Ctrl+Shift+B", "Broadcast input to tab / 입력 브로드캐스트"],
+    ["Ctrl+Shift+↑ / ↓", "Jump between prompts / 프롬프트 점프"],
+    ["Ctrl + / Ctrl − / Ctrl 0", "Font size / 글자 크기"],
+    ["Ctrl+Click", "Open link in browser / 링크 열기"],
+  ]],
+  ["Command line / 명령줄", [
+    ["Ctrl+A", "Select the current input line / 입력줄 전체 선택"],
+    ["Ctrl+C", "Copy selection (else interrupt) / 선택 복사 (없으면 중단)"],
+    ["Ctrl+X", "Cut the current input line / 입력줄 잘라내기"],
+    ["Ctrl+V  ·  Shift+Insert", "Paste / 붙여넣기"],
+    ["Home", "Beginning of line / 줄 맨 앞으로"],
+  ]],
+];
+function initShortcutsHelp() {
+  const btn = document.getElementById("btn-shortcuts");
+  const ov = document.getElementById("shortcuts-overlay");
+  const body = document.getElementById("shortcuts-body");
+  if (!btn || !ov || !body) return;
+  body.innerHTML = SHORTCUTS.map(([group, rows]) => `
+    <div class="sc-group">
+      <div class="sc-group-title">${esc(group)}</div>
+      ${rows.map(([k, d]) => `<div class="sc-row"><kbd>${esc(k)}</kbd><span>${esc(d)}</span></div>`).join("")}
+    </div>`).join("");
+  btn.addEventListener("click", openShortcutsHelp);
+  document.getElementById("shortcuts-close")?.addEventListener("click", closeShortcutsHelp);
+  ov.addEventListener("mousedown", (e) => { if (e.target === ov) closeShortcutsHelp(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ov.classList.contains("hidden")) closeShortcutsHelp(); });
+}
+function openShortcutsHelp() { document.getElementById("shortcuts-overlay")?.classList.remove("hidden"); }
+function closeShortcutsHelp() {
+  document.getElementById("shortcuts-overlay")?.classList.add("hidden");
+  const t = terminals.get(focusedPaneId);
+  if (t) try { t.term.focus(); } catch {}
 }
 
 // Resolve the user's default-shell preference into an identifier for the
-// backend (undefined → Git Bash default; "powershell" → pwsh -NoLogo; "cmd.exe").
+// backend. Unset preference defaults to PowerShell ("powershell" → pwsh, or
+// built-in powershell.exe when pwsh is absent); "bash" → undefined → Git Bash.
 function getDefaultShellId() {
-  let pref = "bash";
-  try { pref = localStorage.getItem("mymux.defaultShell") || "bash"; } catch {}
+  // macOS: always use the system login shell (zsh); the Windows shell prefs
+  // (PowerShell/CMD/Git Bash) don't exist here. undefined → Rust new_default_prog.
+  if (IS_MAC) return undefined;
+  let pref = "powershell";
+  try { pref = localStorage.getItem("mymux.defaultShell") || "powershell"; } catch {}
   if (pref === "powershell") return "powershell";
   if (pref === "cmd") return "cmd.exe";
   return undefined;
@@ -1533,6 +3475,7 @@ async function spawnTerminal(shell, cwd) {
     addTab(tabIdx, label);
     switchToTab(tabIdx);
     refreshSessionList();
+    return ptyId;
   } catch (err) {
     toast("Failed: " + err, true);
     tabEl.remove();
@@ -1540,9 +3483,40 @@ async function spawnTerminal(shell, cwd) {
   }
 }
 
+// Reparenting a live pane (split/close/drag-retile/move-to-tab) detaches its
+// .xterm-viewport, and the browser resets that element's scrollTop to 0. xterm
+// hears the stray scroll event and believes the user scrolled up, so every
+// later bottom-pin check — refitAllPanes' wasAtBottom, xterm's own
+// follow-output — sees "not at bottom". Net effect: shrink a long session by
+// splitting it and the viewport freezes on the old content region, the last
+// lines (prompt included) hidden below the fold. Capture who sat at the bottom
+// BEFORE the DOM move; the returned repin re-scrolls them now and on the next
+// two frames (the reset event lands within the first frame, and the post-move
+// refit runs a frame later — cover both sides).
+function captureBottomPins() {
+  const pinned = [];
+  for (const [id, t] of terminals) {
+    try {
+      const buf = t.term.buffer.active;
+      if (buf.viewportY >= buf.baseY) pinned.push(id);
+    } catch {}
+  }
+  const apply = () => {
+    for (const id of pinned) {
+      const t = terminals.get(id);
+      if (t) try { t.term.scrollToBottom(); } catch {}
+    }
+  };
+  return () => {
+    apply();
+    requestAnimationFrame(() => { apply(); requestAnimationFrame(apply); });
+  };
+}
+
 // Split the focused pane
 async function splitPane(direction, cwd) {
   if (!focusedPaneId) return;
+  clearPaneZoom(); // layout is about to change — drop any zoom overlay first
   const tInfo = terminals.get(focusedPaneId);
   if (!tInfo) return;
 
@@ -1557,9 +3531,12 @@ async function splitPane(direction, cwd) {
   splitContainer.className = `pane-container ${direction}`;
   splitContainer.style.cssText = "flex:1;";
 
-  // Move existing pane into split
+  // Move existing pane into split (scroll pin captured first — see
+  // captureBottomPins for why reparenting breaks bottom-follow).
+  const repin = captureBottomPins();
   parent.replaceChild(splitContainer, paneEl);
   splitContainer.appendChild(paneEl);
+  repin();
 
   // Add divider
   const divider = document.createElement("div");
@@ -1576,9 +3553,12 @@ async function splitPane(direction, cwd) {
     if (nti) nti.session = { kind: "local", shell: splitShell || null, cwd: cwd || null };
     refreshSessionList();
 
-    // Refit all panes in this tab
+    // Refit all panes in this tab, then re-assert the bottom pin — the spawn
+    // spans several frames, past the repin scheduled at the DOM move.
     await new Promise((r) => requestAnimationFrame(r));
     refitAllPanes();
+    repin();
+    return newPtyId;
   } catch (err) {
     toast("Split failed: " + err, true);
   }
@@ -1625,6 +3605,7 @@ function setupDividerDrag(divider, container, direction) {
 function closePane(ptyId) {
   const tInfo = terminals.get(ptyId);
   if (!tInfo) return;
+  clearPaneZoom(); // layout is about to change — drop any zoom overlay first
 
   const tab = findTabForPane(ptyId);
   if (!tab) return;
@@ -1645,7 +3626,9 @@ function closePane(ptyId) {
   terminals.delete(ptyId);
   tab.panes = tab.panes.filter((p) => p !== ptyId);
 
-  // If split container now has only one child (+ divider), unwrap it
+  // If split container now has only one child (+ divider), unwrap it — a
+  // reparent of the surviving pane/subtree, so preserve its bottom pin.
+  const repin = captureBottomPins();
   const divider = splitContainer.querySelector(".pane-divider");
   if (divider) divider.remove();
 
@@ -1661,6 +3644,17 @@ function closePane(ptyId) {
   }
   refreshSessionList();
   refitAllPanes();
+  repin();
+}
+
+// A PTY that hit EOF — the shell process exited (`exit`, an SSH drop, a crash).
+// The read loop calls this so the dead session doesn't linger frozen on screen;
+// tearing it down is exactly a manual pane close (unwrap the split, close the
+// tab if it was the last pane). Historically this was CALLED from the read loop
+// but never DEFINED, so the ReferenceError was swallowed by that loop's catch
+// and exited panes were left on screen until manually closed.
+function closeTerminal(ptyId) {
+  closePane(ptyId);
 }
 
 function findTabForPane(ptyId) {
@@ -1678,38 +3672,59 @@ function movePaneToTab(ptyId, targetTabIdx) {
   const srcTab = findTabForPane(ptyId);
   const dstTab = tabs.get(targetTabIdx);
   if (!srcTab || !dstTab || srcTab.tabIdx === targetTabIdx) return;
+  clearPaneZoom(); // layout is about to change — drop any zoom overlay first
   const t = terminals.get(ptyId);
-  if (!t) return;
+  if (!t || !dstTab.rootEl) return;
   const leaf = t.paneEl;
 
-  // Detach from the source tree (collapses now-empty split containers).
-  detachAndCollapse(leaf, srcTab);
-  srcTab.panes = srcTab.panes.filter((p) => p !== ptyId);
+  try {
+    // Detach from the source tree (collapses now-empty split containers).
+    // Both the moved leaf and collapsed siblings get reparented — keep pins.
+    const repin = captureBottomPins();
+    detachAndCollapse(leaf, srcTab);
+    srcTab.panes = srcTab.panes.filter((p) => p !== ptyId);
 
-  // Append into the destination root as a new split column/row.
-  const dstRoot = dstTab.rootEl;
-  if (dstRoot.children.length > 0) {
-    const vertical = dstRoot.classList.contains("vertical");
-    const divider = document.createElement("div");
-    divider.className = "pane-divider";
-    dstRoot.appendChild(divider);
-    setupDividerDrag(divider, dstRoot, vertical ? "vertical" : "horizontal");
+    // Append into the destination root as a new split column/row.
+    const dstRoot = dstTab.rootEl;
+    if (dstRoot.children.length > 0) {
+      const vertical = dstRoot.classList.contains("vertical");
+      const divider = document.createElement("div");
+      divider.className = "pane-divider";
+      dstRoot.appendChild(divider);
+      setupDividerDrag(divider, dstRoot, vertical ? "vertical" : "horizontal");
+    }
+    leaf.style.flex = "1";
+    dstRoot.appendChild(leaf);
+    dstTab.panes.push(ptyId);
+
+    // Close the source tab if it has no panes left (and tell the user).
+    const srcEmptied = srcTab.panes.length === 0;
+    const srcLabel = srcTab.label || `Tab ${srcTab.tabIdx + 1}`;
+    if (srcEmptied) closeTab(srcTab.tabIdx);
+
+    switchToTab(targetTabIdx);
+    setFocusedPane(ptyId);
+    refreshSessionList();
+    // Re-assert the pin synchronously now that the leaf is reparented AND
+    // visible (switchToTab) — without this, the pane paints one frame of old
+    // scrollback before the rAF apply snaps it to the bottom. Then re-confirm
+    // after the refit, which spans the next frame.
+    repin();
+    requestAnimationFrame(() => { refitAllPanes(); repin(); });
+    if (srcEmptied) toast(`Closed the '${srcLabel}' tab — it was the last session`);
+  } catch (e) {
+    toast("탭이동 오류: " + (e && e.message), true);
+    console.error("movePaneToTab failed", e);
   }
-  leaf.style.flex = "1";
-  dstRoot.appendChild(leaf);
-  dstTab.panes.push(ptyId);
-
-  // Close the source tab if it has no panes left (and tell the user).
-  const srcEmptied = srcTab.panes.length === 0;
-  const srcLabel = srcTab.label || `Tab ${srcTab.tabIdx + 1}`;
-  if (srcEmptied) closeTab(srcTab.tabIdx);
-
-  switchToTab(targetTabIdx);
-  setFocusedPane(ptyId);
-  refreshSessionList();
-  requestAnimationFrame(() => refitAllPanes());
-  if (srcEmptied) toast(`마지막 세션이라 '${srcLabel}' 탭이 닫혔습니다`);
 }
+
+// NOTE: resize used to leave a stale wrapped prompt + a cursor parked left of
+// the "$" in bash panes. Post-resize PTY "nudges" (cols-1→cols, rows+1→rows)
+// were tried here and made it WORSE: every extra SIGWINCH re-triggers
+// readline's buggy wrapped-prompt redisplay (stale cursor-up math + \b
+// overcorrection by the invisible color escapes — captured with
+// examples/conpty_probe.rs). The real fix is in mymux_bashrc(): the directory
+// lives outside PS1, so the prompt readline redraws can never wrap.
 
 // Refit panes to their container. By default a pane whose pixel size hasn't
 // actually changed is skipped: refitting an unchanged pane reflows xterm (which
@@ -1724,7 +3739,23 @@ function refitAllPanes(force = false) {
       const w = host ? host.clientWidth : 0;
       const h = host ? host.clientHeight : 0;
       if (w === 0 || h === 0) continue;                       // hidden/transient: never fit to 0
-      if (!force && w === t._fitW && h === t._fitH) continue; // unchanged: skip (no jump)
+      if (!force && w === t._fitW && h === t._fitH) {
+        // Pixel size unchanged, so no reflow is needed. But the PTY's grid can
+        // still have drifted out of sync with xterm — a transient bad fit, a
+        // dropped pty_resize, or focus being stolen while backgrounded. A
+        // desynced winsize is exactly what makes a TUI's wrapped lines lose
+        // their indent and collapse to column 0 ("줄바꿈이 앞으로 붙는" 증상):
+        // the program wraps for the PTY's width but xterm renders a narrower
+        // grid, so the overflow rewraps at column 0. Reconcile cheaply — no
+        // fit() means no reflow and no content jump — by just re-notifying the
+        // backend when the live grid differs from what it last received.
+        if (t.term.cols !== t._fitCols || t.term.rows !== t._fitRows) {
+          t._fitCols = t.term.cols;
+          t._fitRows = t.term.rows;
+          invoke("pty_resize", { id, cols: t.term.cols, rows: t.term.rows });
+        }
+        continue;
+      }
       t._fitW = w;
       t._fitH = h;
 
@@ -1768,12 +3799,28 @@ function setTerminalFontSize(size) {
   terminalFontSize = Math.max(8, Math.min(40, size));
   try { localStorage.setItem("mymux.termFontSize", String(terminalFontSize)); } catch {}
   for (const [, t] of terminals) {
-    try { t.term.options.fontSize = terminalFontSize; } catch {}
+    try {
+      t.term.options.fontSize = terminalFontSize;
+      t.term.options.letterSpacing = effectiveLetterSpacing(); // keep tracking across zoom
+    } catch {}
   }
   refitAllPanes(true); // font change keeps pixel size but must re-grid every pane
 }
 function adjustTerminalFontSize(delta) {
   setTerminalFontSize(terminalFontSize + delta);
+}
+// Letter spacing (자간) — persisted ratio of font size, applied to every pane.
+// Mirrors setTerminalFontSize; a wider cell means fewer cols, so re-grid + refit.
+function setLetterSpacingRatio(ratio) {
+  letterSpacingRatio = Math.max(0, Math.min(0.4, Math.round(ratio * 1000) / 1000));
+  try { localStorage.setItem("mymux.termLetterSpacing", String(letterSpacingRatio)); } catch {}
+  for (const [, t] of terminals) {
+    try { t.term.options.letterSpacing = effectiveLetterSpacing(); } catch {}
+  }
+  refitAllPanes(true);
+}
+function adjustLetterSpacing(delta) {
+  setLetterSpacingRatio(letterSpacingRatio + delta);
 }
 
 // Cycle focus through the active tab's panes in reading order
@@ -1897,12 +3944,15 @@ function movePane(srcId, targetId, position) {
   const src = terminals.get(srcId);
   const target = terminals.get(targetId);
   if (!src || !target) return;
+  clearPaneZoom(); // layout is about to change — drop any zoom overlay first
   const tab = findTabForPane(targetId);
   if (!tab || !tab.panes.includes(srcId)) return; // same-tab moves only
 
   const srcLeaf = src.paneEl;
   const targetLeaf = target.paneEl;
 
+  // Re-tiling reparents both leaves (and any collapsed sibling) — keep pins.
+  const repin = captureBottomPins();
   detachAndCollapse(srcLeaf, tab);
 
   const parent = targetLeaf.parentElement;
@@ -1927,9 +3977,10 @@ function movePane(srcId, targetId, position) {
     split.append(targetLeaf, divider, srcLeaf);
   }
   setupDividerDrag(divider, split, vertical ? "vertical" : "horizontal");
+  repin();
 
   setFocusedPane(srcId);
-  requestAnimationFrame(() => refitAllPanes());
+  requestAnimationFrame(() => { refitAllPanes(); repin(); });
 }
 
 async function connectSsh() {
@@ -1942,7 +3993,7 @@ async function connectSshFields(targetVal, portVal, password, keyfile, tmux, tmu
   const target = (targetVal || "").trim();
   if (!target) return false;
   const parts = target.split("@");
-  if (parts.length !== 2) { toast("형식: user@hostname", true); return false; }
+  if (parts.length !== 2) { toast("Format: user@hostname", true); return false; }
   await doSshConnect({
     target,
     username: parts[0],
@@ -2026,8 +4077,8 @@ function renderSshDropdown() {
     const item = document.createElement("div");
     item.className = "ssh-dd-item";
     item.innerHTML = `<span class="ssh-dd-name"></span>` +
-      (c.keyPath ? `<button class="ssh-dd-tmux" type="button" title="tmux로 바로 접속">⚡</button>` : "") +
-      `<button class="ssh-dd-x" type="button" title="삭제">&times;</button>`;
+      (c.keyPath ? `<button class="ssh-dd-tmux" type="button" title="Connect into tmux">⚡</button>` : "") +
+      `<button class="ssh-dd-x" type="button" title="Delete">&times;</button>`;
     const label = c.target + (c.port && c.port != 22 ? `:${c.port}` : "") + (c.keyPath ? "  🔑" : "");
     item.querySelector(".ssh-dd-name").textContent = label;
     item.querySelector(".ssh-dd-name").addEventListener("click", () => { applySshConn(c); toggleSshDropdown(false); });
@@ -2042,7 +4093,7 @@ function toggleSshDropdown(show) {
   if (!list) return;
   if (show === undefined) show = list.classList.contains("hidden");
   if (show) {
-    if (!getSshSaved().length) { list.classList.add("hidden"); toast("저장된 주소가 없습니다."); return; }
+    if (!getSshSaved().length) { list.classList.add("hidden"); toast("No saved addresses."); return; }
     renderSshDropdown();
     list.classList.remove("hidden");
   } else {
@@ -2076,7 +4127,7 @@ function buildSshCommandString(target, port, keyPath, tmux, tmuxName) {
 // Save the modal's connection as a Commands-tab shortcut (Send/dblclick to run).
 async function saveSshAsCommand() {
   const target = (document.getElementById("ssh-modal-input").value || "").trim();
-  if (!target) { toast("주소를 입력하세요 (user@host)", true); return; }
+  if (!target) { toast("Enter an address (user@host)", true); return; }
   const port = document.getElementById("ssh-modal-port").value;
   const keyfile = (document.getElementById("ssh-modal-keyfile").value || "").trim();
   const tmuxChk = document.getElementById("ssh-tmux");
@@ -2085,18 +4136,90 @@ async function saveSshAsCommand() {
   const command = buildSshCommandString(target, port, keyfile, tmux, tmuxName);
   const name = target + (tmux ? (tmuxName ? ` (tmux:${tmuxName})` : " (tmux)") : "");
   try {
-    await invoke("add_command", { name, command, description: "SSH 접속 단축키" });
+    await invoke("add_command", { name, command, description: "SSH connection shortcut" });
     await loadCommands();
-    toast("Commands 탭에 저장됨 — Send로 접속");
+    toast("Saved to Commands — connect with Send");
   } catch (e) {
-    toast("저장 실패: " + String(e), true);
+    toast("Save failed: " + String(e), true);
   }
+}
+
+// ── SSH favorites: one-click reconnect from the session panel ─────────────
+// Stored WITHOUT passwords: {target, port, keyPath, tmux, tmuxName}.
+// Key auth → connects immediately; no key → asks for the password only.
+function getSshFavs() {
+  try { return JSON.parse(localStorage.getItem("mymux.sshFavorites") || "[]"); } catch { return []; }
+}
+function setSshFavs(arr) {
+  try { localStorage.setItem("mymux.sshFavorites", JSON.stringify(arr)); } catch {}
+  renderSshFavs();
+}
+function addSshFav(f) {
+  if (!f || !f.target) return;
+  const key = (x) => `${x.target}|${x.tmux ? x.tmuxName || "(tmux)" : ""}`;
+  const arr = getSshFavs().filter((x) => key(x) !== key(f));
+  arr.unshift({ target: f.target, port: f.port || 22, keyPath: f.keyPath || "", tmux: !!f.tmux, tmuxName: f.tmuxName || "" });
+  setSshFavs(arr.slice(0, 20));
+  toast("★ SSH favorite saved");
+}
+function renderSshFavs() {
+  const list = document.getElementById("ssh-fav-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const f of getSshFavs()) {
+    const li = document.createElement("li");
+    li.className = "ssh-fav-item";
+    const label = f.target + (f.tmux ? ` (tmux${f.tmuxName ? ":" + f.tmuxName : ""})` : "") + (f.keyPath ? " 🔑" : "");
+    li.innerHTML = `<span class="ssh-fav-star">★</span><span class="ssh-fav-name"></span><button class="ssh-fav-x" title="Remove favorite">×</button>`;
+    li.querySelector(".ssh-fav-name").textContent = label;
+    li.title = "Click to connect" + (f.keyPath ? "" : " (asks for the password)");
+    li.addEventListener("click", () => connectSshFav(f));
+    li.querySelector(".ssh-fav-x").addEventListener("click", (e) => {
+      e.stopPropagation();
+      setSshFavs(getSshFavs().filter((x) => !(x.target === f.target && x.tmuxName === f.tmuxName && x.tmux === f.tmux)));
+    });
+    list.appendChild(li);
+  }
+}
+function connectSshFav(f) {
+  const parts = (f.target || "").split("@");
+  if (parts.length !== 2) { toast("Format: user@hostname", true); return; }
+  const opts = {
+    target: f.target, username: parts[0], host: parts[1],
+    port: f.port || 22, keyPath: f.keyPath || null,
+    tmux: !!f.tmux, tmuxName: f.tmuxName || null,
+  };
+  if (f.keyPath) {
+    // Key auth → straight in, no questions.
+    doSshConnect({ ...opts, password: null, auth: "key" });
+  } else {
+    // Password auth → ask for the password only (same prompt as restore).
+    promptSshPassword(opts);
+  }
+}
+// Save the connection of a live SSH pane as a favorite (star on its row).
+function addSshFavFromSession(s) {
+  if (!s || s.kind !== "ssh") return;
+  addSshFav({ target: s.target, port: s.port, keyPath: s.keyPath || "", tmux: !!s.tmux, tmuxName: s.tmuxName || "" });
+}
+// Save the ssh-modal form as a favorite without connecting.
+function saveSshFavFromModal() {
+  const target = (document.getElementById("ssh-modal-input").value || "").trim();
+  if (!target || target.split("@").length !== 2) { toast("Enter an address (user@host)", true); return; }
+  const tmuxChk = document.getElementById("ssh-tmux");
+  addSshFav({
+    target,
+    port: parseInt(document.getElementById("ssh-modal-port").value) || 22,
+    keyPath: (document.getElementById("ssh-modal-keyfile").value || "").trim(),
+    tmux: !!(tmuxChk && tmuxChk.checked),
+    tmuxName: (document.getElementById("ssh-tmux-name").value || "").trim(),
+  });
 }
 
 // One-click: SSH in with the saved key and start/attach a tmux session.
 function quickConnectTmux(c) {
   const parts = (c.target || "").split("@");
-  if (parts.length !== 2) { toast("형식: user@hostname", true); return; }
+  if (parts.length !== 2) { toast("Format: user@hostname", true); return; }
   closeSshModal();
   doSshConnect({
     target: c.target,
@@ -2138,17 +4261,24 @@ async function doSshConnect(opts) {
   }
 
   try {
+    // No password is ever persisted — only the auth *kind*. tmux settings ride
+    // along so favorites / session restore reattach the same tmux session.
+    const sessionMeta = {
+      kind: "ssh", target, username, host, port,
+      keyPath: keyPath || null, auth,
+      tmux: !!opts.tmux, tmuxName: (opts.tmuxName || "").trim() || null,
+      lastCmd: opts.lastCmd || null, // carried through restore so re-run works over SSH
+    };
     const ptyId = await createPane(rootContainer, "ssh", sshArgs);
     terminals.get(ptyId).sshTarget = target;
-    terminals.get(ptyId).session = { kind: "ssh", target, username, host, port, keyPath: keyPath || null, auth };
+    terminals.get(ptyId).session = sessionMeta;
 
     tabs.set(tabIdx, {
       el: tabEl,
       rootEl: rootContainer,
       panes: [ptyId],
       label: `SSH: ${target}`,
-      // No password is ever persisted — only the auth *kind*.
-      session: { kind: "ssh", target, username, host, port, keyPath: keyPath || null, auth },
+      session: sessionMeta,
     });
     addTab(tabIdx, `SSH: ${target}`);
     switchToTab(tabIdx);
@@ -2180,7 +4310,7 @@ function applyBrowserEnabled() {
   const tab = document.getElementById("browser-tab");
   if (tab) tab.style.display = on ? "" : "none";
   const btn = document.getElementById("btn-toggle-browser");
-  if (btn) { btn.classList.toggle("active", on); btn.title = on ? "브라우저 끄기" : "브라우저 켜기"; }
+  if (btn) { btn.classList.toggle("active", on); btn.title = on ? "Turn off browser" : "Turn on browser"; }
   if (!on) {
     // Turning the browser off is also the escape hatch for a stuck native
     // overlay: leave the view if open, and force-hide the child WebView either way.
@@ -2198,7 +4328,7 @@ function initBrowserPanel() {
   const tab = document.createElement("div");
   tab.className = "browser-tab";
   tab.id = "browser-tab";
-  tab.innerHTML = `${ICON.globe}<span>Browser</span><span class="tab-close" title="닫기">&times;</span>`;
+  tab.innerHTML = `${ICON.globe}<span>Browser</span><span class="tab-close" title="Close">&times;</span>`;
   tab.title = "Playwright/CDP browser";
   tab.addEventListener("click", (e) => {
     if (e.target.classList.contains("tab-close")) { setBrowserView(false); return; }
@@ -2609,8 +4739,12 @@ function collectSession() {
       // Multi-pane tab → persist the full split layout (tree).
       arr.push({ label: tab.label, tree: serializePane(tab.rootEl) });
     } else if (tab.session) {
-      // Single-pane tab → flat entry (backward-compatible with v1).
-      arr.push({ ...tab.session, label: tab.label });
+      // Single-pane tab → flat entry (backward-compatible with v1). Pull the
+      // live pane's remembered command (tab.session is a separate object that
+      // isn't updated as the user types).
+      const t0 = tab.panes && terminals.get(tab.panes[0]);
+      const lastCmd = (t0 && t0.session && t0.session.lastCmd) || tab.session.lastCmd || null;
+      arr.push({ ...tab.session, lastCmd, label: tab.label });
     }
   }
   return { version: 2, tabs: arr };
@@ -2627,7 +4761,7 @@ async function buildPaneNode(parentEl, node) {
     } else {
       const id = await createPane(parentEl, s.shell || getDefaultShellId(), null, s.cwd || undefined);
       const t = terminals.get(id);
-      if (t) t.session = { kind: "local", shell: s.shell || null, cwd: s.cwd || null };
+      if (t) t.session = { kind: "local", shell: s.shell || null, cwd: s.cwd || null, lastCmd: s.lastCmd || null };
     }
     return;
   }
@@ -2712,12 +4846,17 @@ async function restoreSession() {
             password: null,
             keyPath: s.keyPath || null,
             auth: "key",
+            tmux: !!s.tmux,
+            tmuxName: s.tmuxName || null,
+            lastCmd: s.lastCmd || null,
           });
         } else {
           pwSessions.push(s); // password auth → prompt below
         }
       } else {
-        await spawnTerminal(s.shell || undefined, s.cwd || undefined);
+        const pid = await spawnTerminal(s.shell || undefined, s.cwd || undefined);
+        const t = pid != null ? terminals.get(pid) : null;
+        if (t && t.session && s.lastCmd) t.session.lastCmd = s.lastCmd;
       }
     } catch (e) {
       console.error("restore tab failed", e);
@@ -2729,9 +4868,105 @@ async function restoreSession() {
     await promptSshPasswordRestore(s);
   }
 
+  // Offer to re-run the commands that were running before quit (claude/codex…).
+  try { await maybeReplayCommands(); } catch (e) { console.error("replay prompt failed", e); }
+
   return tabs.size > 0;
 }
 
+// ── Command replay: after restore, offer to re-run each pane's last command ──
+function commandReplayEnabled() {
+  try { return localStorage.getItem("mymux.replayCommands") !== "false"; } catch { return true; }
+}
+async function maybeReplayCommands() {
+  if (!commandReplayEnabled()) return;
+  const cands = [];
+  for (const [pid, t] of terminals) {
+    const cmd = t.session && t.session.lastCmd;
+    if (cmd) cands.push({ id: pid, cmd, label: t.label || "Terminal" });
+  }
+  if (!cands.length) return;
+  const chosen = await promptReplayCommands(cands);
+  for (const c of chosen) scheduleReplay(c.id, c.cmd);
+}
+// Fire the remembered command once the pane's shell prompt is ready. 133;A
+// (prompt start) is the reliable local trigger; a timed fallback covers SSH /
+// shells without Mymux shell-integration.
+function scheduleReplay(id, cmd) {
+  const t = terminals.get(id);
+  if (!t) return;
+  t.pendingReplay = cmd;
+  if (atIntegratedPrompt(t)) { firePendingReplay(id); return; }
+  // No shell-integration (SSH to a plain server): the remote prompt appears
+  // after a network round-trip, so a fixed delay is unreliable. armReplaySettle
+  // (called from the read loop) fires ~700ms after the prompt output settles;
+  // this hard cap guarantees it still runs if no output ever arrives.
+  if (t._replayFallback) clearTimeout(t._replayFallback);
+  t._replayFallback = setTimeout(() => firePendingReplay(id), 6000);
+}
+// Re-armed on each output burst for a pane awaiting replay: once output has been
+// quiet for a beat, the remote prompt is up → send the command.
+function armReplaySettle(id, t) {
+  if (!t.pendingReplay) return;
+  if (t._replaySettle) clearTimeout(t._replaySettle);
+  t._replaySettle = setTimeout(() => firePendingReplay(id), 700);
+}
+function firePendingReplay(id) {
+  const t = terminals.get(id);
+  if (!t || !t.pendingReplay) return;
+  const cmd = t.pendingReplay;
+  t.pendingReplay = null;
+  if (t._replayFallback) { clearTimeout(t._replayFallback); t._replayFallback = null; }
+  if (t._replaySettle) { clearTimeout(t._replaySettle); t._replaySettle = null; }
+  invoke("pty_write", { id, data: cmd + "\r" });
+}
+// Batch confirm modal: one list, checkboxes (default on), run selected.
+function promptReplayCommands(cands) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById("replay-modal");
+    const list = document.getElementById("replay-list");
+    const btnRun = document.getElementById("replay-run");
+    const btnSkip = document.getElementById("replay-skip");
+    const chkOff = document.getElementById("replay-disable");
+    if (!modal || !list) { resolve([]); return; }
+    list.innerHTML = "";
+    cands.forEach((c, i) => {
+      const row = document.createElement("label");
+      row.className = "chk-row";
+      row.innerHTML = `<input type="checkbox" data-i="${i}" checked /> <b>${esc(c.label)}</b> — <code>${esc(c.cmd)}</code>`;
+      list.appendChild(row);
+    });
+    if (chkOff) chkOff.checked = false;
+    modal.classList.remove("hidden");
+
+    function cleanup() {
+      modal.classList.add("hidden");
+      btnRun.removeEventListener("click", onRun);
+      btnSkip.removeEventListener("click", onSkip);
+    }
+    function finish(chosen) {
+      if (chkOff && chkOff.checked) { try { localStorage.setItem("mymux.replayCommands", "false"); } catch {} }
+      cleanup();
+      resolve(chosen);
+    }
+    function onRun() {
+      const picked = [];
+      list.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+        if (cb.checked) { const c = cands[Number(cb.dataset.i)]; if (c) picked.push(c); }
+      });
+      finish(picked);
+    }
+    function onSkip() { finish([]); }
+    btnRun.addEventListener("click", onRun);
+    btnSkip.addEventListener("click", onSkip);
+  });
+}
+
+// Password-only prompt used by session restore AND favorite clicks.
+// `s` carries target/username/host/port(/keyPath/tmux/tmuxName).
+function promptSshPassword(s) {
+  return promptSshPasswordRestore(s);
+}
 function promptSshPasswordRestore(s) {
   return new Promise((resolve) => {
     const modal = document.getElementById("sshpw-modal");
@@ -2739,7 +4974,7 @@ function promptSshPasswordRestore(s) {
     const btnConnect = document.getElementById("sshpw-connect");
     const btnSkip = document.getElementById("sshpw-skip");
     document.getElementById("sshpw-target").textContent =
-      `${s.username}@${s.host}:${s.port} — 비밀번호를 입력해 재접속`;
+      `${s.username}@${s.host}:${s.port} — enter your password to reconnect`;
     input.value = "";
     modal.classList.remove("hidden");
     setTimeout(() => input.focus(), 50);
@@ -2761,6 +4996,9 @@ function promptSshPasswordRestore(s) {
         password,
         keyPath: s.keyPath || null,
         auth: "password",
+        tmux: !!s.tmux,
+        tmuxName: s.tmuxName || null,
+        lastCmd: s.lastCmd || null,
       });
       resolve();
     }
@@ -2850,7 +5088,16 @@ function createXterm() {
   return new Terminal({
     cursorBlink: true,
     fontSize: terminalFontSize,
-    fontFamily: '"D2Coding", "Cascadia Code", "Consolas", "Noto Sans KR", monospace',
+    // Letter spacing (자간) — a persisted ratio of the font size so it scales with
+    // Ctrl +/- zoom. Default ≈0.1 (~20% of a monospace cell) because Korean/CJK
+    // glyphs look cramped at 0; adjustable from the toolbar (자−/자+).
+    letterSpacing: effectiveLetterSpacing(),
+    // macOS: prefer the native terminal monospace (SF Mono/Menlo) so spacing
+    // matches the system Terminal. D2Coding's wider glyphs made the letters
+    // look too spaced out on Mac. Windows keeps its original chain.
+    fontFamily: IS_MAC
+      ? '"SF Mono", "SFMono-Regular", "Menlo", "Monaco", "D2Coding", monospace'
+      : '"D2Coding", "Cascadia Code", "Consolas", "Noto Sans KR", monospace',
     fontWeight: 300,
     fontWeightBold: 500,
     theme: terminalTheme(),
@@ -2863,8 +5110,8 @@ function addTab(tabIdx, label) {
   tab.dataset.id = tabIdx;
   tab.innerHTML = `
     <span>${esc(label)}</span>
-    <span class="tab-rename" title="이름 변경">&#9998;</span>
-    <span class="tab-close" title="닫기">&times;</span>
+    <span class="tab-rename" title="Rename">&#9998;</span>
+    <span class="tab-close" title="Close">&times;</span>
   `;
   tab.addEventListener("click", (e) => {
     if (e.target.classList.contains("tab-close")) {
@@ -2885,6 +5132,14 @@ function addTab(tabIdx, label) {
   terminalTabs.appendChild(tab);
 }
 
+function switchToAdjacentTab(dir) {
+  const tabEls = Array.from(terminalTabs.querySelectorAll(".tab"));
+  if (tabEls.length < 2) return;
+  const idx = tabEls.findIndex((el) => Number(el.dataset.id) === activeTabIdx);
+  const nextEl = tabEls[(idx + dir + tabEls.length) % tabEls.length];
+  if (nextEl) switchToTab(Number(nextEl.dataset.id));
+}
+
 function switchToTab(tabIdx) {
   if (browserTabActive) setBrowserView(false);
   if (viewerActive) setViewerView(false);
@@ -2900,6 +5155,8 @@ function switchToTab(tabIdx) {
     const focusPane = tabInfo.panes.includes(focusedPaneId) ? focusedPaneId : tabInfo.panes[0];
     setFocusedPane(focusPane);
   }
+  clearUnseenForTab(tabIdx); // its panes are visible now — clear activity dots
+  updateBroadcastUi();       // reflect this tab's broadcast state on the toolbar
   requestAnimationFrame(() => refitAllPanes());
 }
 
@@ -2943,8 +5200,116 @@ function sendToTerminal(command) {
     toast("No active terminal.", true);
     return;
   }
+  armNotifyCycle(activeTermId); // user-launched command — its completion should notify
   invoke("pty_write", { id: activeTermId, data: command + "\r" });
   terminals.get(activeTermId)?.term.focus();
+}
+
+// ── Directory-bound commands (cwd + alias combos) ─────────────────────────
+// Detect a pane's shell family so the "cd here, then run" line uses syntax
+// that shell actually supports (PowerShell 5.1 has no `&&`).
+function paneShellKind(t) {
+  if (!t) return "powershell";
+  if (t.type === "ssh") return "posix";
+  const s = (t.shell || (localStorage.getItem("mymux.defaultShell") || "powershell")).toLowerCase();
+  if (s.includes("pwsh") || s.includes("powershell")) return "powershell";
+  if (s.includes("cmd")) return "cmd";
+  return "posix";
+}
+
+// One line that cds into the command's directory (when set) and runs it.
+// The command only runs if the cd succeeded.
+function commandComboLine(cmd, kind) {
+  const dir = (cmd.cwd || "").trim();
+  if (!dir) return cmd.command;
+  if (kind === "powershell") return `cd '${dir.replace(/'/g, "''")}'; if ($?) { ${cmd.command} }`;
+  if (kind === "cmd") return `cd /d "${dir}" && ${cmd.command}`;
+  return `cd '${dir.replace(/'/g, "'\\''")}' && ${cmd.command}`;
+}
+
+function runCommandCombo(cmd, ptyId = activeTermId) {
+  if (ptyId == null || !terminals.has(ptyId)) {
+    toast("No active terminal.", true);
+    return;
+  }
+  const line = commandComboLine(cmd, paneShellKind(terminals.get(ptyId)));
+  armNotifyCycle(ptyId); // user-launched command — its completion should notify
+  invoke("pty_write", { id: ptyId, data: line + "\r" });
+  terminals.get(ptyId)?.term.focus();
+}
+
+// Write a command line once the new pane's shell is ready: wait for the first
+// OSC 133;A prompt mark (bash rcfile / PS prompt emit it), with a timeout
+// fallback for shells without integration (ConPTY queues the input anyway).
+function sendCommandWhenReady(ptyId, line) {
+  const t0 = performance.now();
+  const tick = () => {
+    const t = terminals.get(ptyId);
+    if (!t) return; // pane closed before the shell came up
+    if ((t.marks && t.marks.length > 0) || performance.now() - t0 > 2500) {
+      armNotifyCycle(ptyId); // user-launched command — its completion should notify
+      invoke("pty_write", { id: ptyId, data: line + "\r" });
+      return;
+    }
+    setTimeout(tick, 120);
+  };
+  setTimeout(tick, 150);
+}
+
+// cd-button context menu: open a session AT the folder and run a saved command.
+async function openSessionWithCommand(path, cmd) {
+  if (currentSftpId) {
+    // Remote: reuse the cd routing (owning SSH pane), as one guarded line.
+    let targetId = null;
+    for (const [id, t] of terminals) {
+      if (t.sftpId === currentSftpId) { targetId = id; break; }
+    }
+    if (targetId == null) targetId = activeTermId;
+    if (targetId == null || !terminals.has(targetId)) { toast("이 서버의 SSH 세션을 찾을 수 없습니다.", true); return; }
+    const safe = String(path).replace(/'/g, "'\\''");
+    armNotifyCycle(targetId); // user-launched command — its completion should notify
+    invoke("pty_write", { id: targetId, data: `cd '${safe}' && ${cmd.command}\r` });
+    const tab = findTabForPane(targetId);
+    if (tab && tab.tabIdx !== activeTabIdx) switchToTab(tab.tabIdx);
+    setFocusedPane(targetId);
+    return;
+  }
+  // Local: new pane already starts in the folder — just run the command there.
+  let ptyId = null;
+  if (!browserTabActive && activeTabIdx != null && focusedPaneId != null && terminals.has(focusedPaneId)) {
+    ptyId = await splitPane("horizontal", path);
+  } else {
+    ptyId = await spawnTerminal(undefined, path);
+  }
+  if (ptyId != null) sendCommandWhenReady(ptyId, cmd.command);
+}
+
+function showCdCommandMenu(e, dirPath) {
+  const menu = document.getElementById("cdcmd-menu");
+  if (!menu) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!savedCmds.length) { toast("No saved commands."); return; }
+  menu.innerHTML = "";
+  const items = [...savedCmds].sort((a, b) => (b.favorite === true) - (a.favorite === true)).slice(0, 15);
+  for (const cmd of items) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.textContent = (cmd.favorite ? "★ " : "") + cmd.name;
+    item.title = cmd.command;
+    item.addEventListener("click", () => {
+      menu.classList.add("hidden");
+      openSessionWithCommand(dirPath, cmd);
+    });
+    menu.appendChild(item);
+  }
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  menu.classList.remove("hidden");
+  const hide = (ev) => {
+    if (!menu.contains(ev.target)) { menu.classList.add("hidden"); document.removeEventListener("mousedown", hide, true); }
+  };
+  document.addEventListener("mousedown", hide, true);
 }
 
 // ═══════════════════════════════════════════════
@@ -2964,9 +5329,27 @@ function setPaneCwd(ptyId, path) {
   t.cwd = path || null;
   const el = t.paneEl && t.paneEl.querySelector(".pane-cwd");
   if (el) {
-    el.textContent = path ? baseName(path) : "~";
+    const lbl = t.paneEl.querySelector(".pane-label");
+    const labelText = lbl ? lbl.textContent : "";
+    const cwdLabel = path ? baseName(path) : "~";
+    // Blank (→ hidden via .pane-cwd:empty) when it would just repeat the label.
+    el.textContent = cwdLabel === labelText ? "" : cwdLabel;
     el.title = path || "";
   }
+}
+
+// Reorder a session within its own tab's panes — changes the session-list order
+// and the #N numbering. (The split layout on screen is left as-is; moving a
+// session to a *different* tab uses movePaneToTab, which relocates the pane.)
+function reorderSessionWithin(tab, dragId, targetId, after) {
+  const arr = tab.panes;
+  const from = arr.indexOf(dragId);
+  if (from < 0) return;
+  arr.splice(from, 1);
+  const to = arr.indexOf(targetId);
+  if (to < 0) arr.push(dragId);
+  else arr.splice(after ? to + 1 : to, 0, dragId);
+  refreshSessionList();
 }
 
 // Rebuild the full session list, grouped by tab.
@@ -2985,7 +5368,7 @@ function refreshSessionList() {
     const group = document.createElement("li");
     group.className = "session-group";
     group.textContent = tab.label || `Tab ${tabIdx + 1}`;
-    group.title = "더블클릭하여 탭 이름 변경 · 세션을 여기로 끌어다 놓으면 이 탭으로 이동";
+    group.title = "Double-click to rename · drop a session here to move it to this tab";
     group.addEventListener("dblclick", () => startRenameTab(tabIdx, group));
     group.addEventListener("dragover", (e) => { e.preventDefault(); group.classList.add("drop-target"); });
     group.addEventListener("dragleave", () => group.classList.remove("drop-target"));
@@ -3004,6 +5387,7 @@ function refreshSessionList() {
 
       const li = document.createElement("li");
       li.className = "session-item" + (ptyId === focusedPaneId ? " active" : "");
+      if (t.unseen) li.classList.add("unseen");
       li.dataset.ptyId = ptyId;
 
       const dotEl = document.createElement("span");
@@ -3027,22 +5411,50 @@ function refreshSessionList() {
       const closeBtn = document.createElement("button");
       closeBtn.className = "session-close";
       closeBtn.textContent = "×";
-      closeBtn.title = "세션 닫기";
+      closeBtn.title = "Close session";
 
-      li.append(dotEl, nameEl, renameBtn, paneNo, closeBtn);
+      // SSH panes: star saves this connection as a one-click favorite.
+      if (t.type === "ssh" && t.session && t.session.kind === "ssh") {
+        const favBtn = document.createElement("button");
+        favBtn.className = "session-fav";
+        favBtn.textContent = "★";
+        favBtn.title = "Save as SSH favorite (one-click reconnect)";
+        favBtn.addEventListener("click", (e) => { e.stopPropagation(); addSshFavFromSession(t.session); });
+        li.append(dotEl, nameEl, renameBtn, favBtn, paneNo, closeBtn);
+      } else {
+        li.append(dotEl, nameEl, renameBtn, paneNo, closeBtn);
+      }
 
-      // Drag a session onto another tab's group header to move it there.
+      // Drag a session: reorder it within its own tab, or drop it onto another
+      // tab's session (or that tab's group header) to move it to that tab.
       li.draggable = true;
       li.addEventListener("dragstart", (e) => {
         e.dataTransfer.setData("text/plain", String(ptyId));
         e.dataTransfer.effectAllowed = "move";
       });
-      li.addEventListener("dragover", (e) => e.preventDefault());
+      li.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        const rect = li.getBoundingClientRect();
+        const after = (e.clientY - rect.top) > rect.height / 2;
+        li.classList.toggle("drop-below", after);
+        li.classList.toggle("drop-above", !after);
+      });
+      li.addEventListener("dragleave", () => li.classList.remove("drop-above", "drop-below"));
       li.addEventListener("drop", (e) => {
         e.preventDefault();
-        const pid = Number(e.dataTransfer.getData("text/plain"));
-        const destTab = findTabForPane(ptyId);
-        if (pid && destTab) movePaneToTab(pid, destTab.tabIdx);
+        li.classList.remove("drop-above", "drop-below");
+        const dragId = Number(e.dataTransfer.getData("text/plain"));
+        if (!dragId || dragId === ptyId) return;
+        const srcTab = findTabForPane(dragId);
+        const dstTab = findTabForPane(ptyId);
+        if (!srcTab || !dstTab) return;
+        if (srcTab.tabIdx === dstTab.tabIdx) {
+          const rect = li.getBoundingClientRect();
+          const after = (e.clientY - rect.top) > rect.height / 2;
+          reorderSessionWithin(dstTab, dragId, ptyId, after); // same tab → reorder
+        } else {
+          movePaneToTab(dragId, dstTab.tabIdx);               // other tab → move
+        }
       });
 
       li.addEventListener("click", () => focusSession(ptyId));
@@ -3053,6 +5465,9 @@ function refreshSessionList() {
       sessionListEl.appendChild(li);
     });
   }
+
+  // Rebuilding dropped the ctx pills — re-attach them for sessions that have one.
+  for (const [pid, tt] of terminals) if (tt.ctxPct != null || tt.codexDetected) updateCtxUi(pid, tt);
 }
 
 // Lightweight: just move the active highlight without rebuilding.
@@ -3193,6 +5608,13 @@ function currentThemeMode() {
   return document.documentElement.getAttribute("data-theme") || "dark";
 }
 
+// #rrggbb → rgba(r,g,b,a); falls back to a visible blue if the value isn't hex.
+function hexToRgba(hex, a) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex).trim());
+  if (!m) return `rgba(90,150,255,${a})`;
+  return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`;
+}
+
 function terminalTheme() {
   const bg = cssVar("--term-bg", "#1a1a2e");
   const fg = cssVar("--term-fg", "#e0e0e0");
@@ -3202,7 +5624,11 @@ function terminalTheme() {
     background: bg,
     foreground: fg,
     cursor: accent,
-    selectionBackground: border,
+    // Accent-tinted, translucent selection — the old `border` color sat almost
+    // on top of the terminal background, so a selection (e.g. Ctrl+A on the
+    // input line) was nearly invisible. Translucent keeps the text readable.
+    selectionBackground: hexToRgba(accent, 0.42),
+    selectionInactiveBackground: hexToRgba(accent, 0.30),
     black: bg,
     red: cssVar("--red", "#f44747"),
     green: cssVar("--green", "#4ec9b0"),
@@ -3274,11 +5700,66 @@ async function loadDrives() {
 
 function highlightActiveDrive() {
   if (!explorerDrives) return;
-  const cur = (currentExplorerPath || "").toUpperCase().replace(/\//g, "\\");
-  explorerDrives.querySelectorAll(".drive-btn").forEach((b) => {
-    const d = (b.dataset.drive || "").toUpperCase().replace(/[\\/]+$/, "");
-    b.classList.toggle("active", !!d && cur.startsWith(d));
-  });
+  const btns = [...explorerDrives.querySelectorAll(".drive-btn")];
+  if (currentSftpId == null) {
+    const cur = (currentExplorerPath || "").toUpperCase().replace(/\//g, "\\");
+    btns.forEach((b) => {
+      const d = (b.dataset.drive || "").toUpperCase().replace(/[\\/]+$/, "");
+      b.classList.toggle("active", !!d && cur.startsWith(d));
+    });
+    return;
+  }
+  // Remote shortcuts: only the LONGEST matching prefix lights up ("/" would
+  // otherwise match every path).
+  const cur = currentExplorerPath || "";
+  let best = null;
+  for (const b of btns) {
+    const p = b.dataset.path;
+    if (!p) continue;
+    if (cur === p || cur.startsWith(p.endsWith("/") ? p : p + "/")) {
+      if (!best || p.length > best.dataset.path.length) best = b;
+    }
+  }
+  btns.forEach((b) => b.classList.toggle("active", b === best));
+}
+
+// Which source the drive-button row is rendered for ("local" or an sftp id).
+// Local shows Windows drive letters; SFTP shows remote shortcuts instead:
+// root + home, plus each mounted volume when the server has /Volumes (macOS —
+// USB sticks and external drives live there).
+let driveRowMode = "local";
+async function renderDriveRow() {
+  if (!explorerDrives) return;
+  const mode = currentSftpId == null ? "local" : String(currentSftpId);
+  if (driveRowMode === mode) { highlightActiveDrive(); return; }
+  driveRowMode = mode;
+  if (mode === "local") { await loadDrives(); highlightActiveDrive(); return; }
+  explorerDrives.innerHTML = "";
+  const sftpId = currentSftpId;
+  const stale = () => currentSftpId !== sftpId || driveRowMode !== mode;
+  const add = (label, path, title) => {
+    const btn = document.createElement("button");
+    btn.className = "drive-btn";
+    btn.dataset.path = path;
+    btn.textContent = label;
+    btn.title = title || path;
+    btn.addEventListener("click", () => explorerGo(path, sftpId));
+    explorerDrives.appendChild(btn);
+  };
+  add("/", "/", "Root");
+  try {
+    const home = await invoke("sftp_home_dir", { sessionId: sftpId });
+    if (stale()) return;
+    if (home && home !== "/") add("~", home, "Home: " + home);
+  } catch {}
+  try {
+    const vols = await invoke("sftp_list_dir", { sessionId: sftpId, path: "/Volumes" });
+    if (stale()) return;
+    for (const v of vols.filter((e) => e.is_dir)) {
+      add(v.name.length > 12 ? v.name.slice(0, 11) + "…" : v.name, v.path, v.name);
+    }
+  } catch {} // no /Volumes — not a Mac; root/home shortcuts still apply
+  highlightActiveDrive();
 }
 
 // ═══════════════════════════════════════════════
@@ -3317,25 +5798,25 @@ function renderCmdList(cmds) {
     const li = document.createElement("li");
     li.className = "cmd-item" + (cmd.favorite ? " is-fav" : "");
     li.innerHTML = `
-      <button class="cmd-x" title="삭제 (바로 삭제)">&times;</button>
+      <button class="cmd-x" title="Delete (no confirm)">&times;</button>
       <div class="cmd-name">${esc(cmd.name)}</div>
       <div class="cmd-row">
-        <span class="cmd-text">${esc(cmd.command)}</span>
+        <span class="cmd-text" title="${esc(cmd.cwd ? "in " + cmd.cwd : "")}">${cmd.alias ? `<span class="cmd-alias">${esc(cmd.alias)}</span>` : ""}${cmd.cwd ? `<span class="cmd-cwd" title="${esc(cmd.cwd)}">📁</span>` : ""}${esc(cmd.command)}</span>
         <span class="cmd-actions">
-          <button class="fav-btn${cmd.favorite ? " on" : ""}" title="즐겨찾기">${cmd.favorite ? "★" : "☆"}</button>
-          <button class="copy-btn" title="복사">Copy</button>
-          <button class="edit-btn" title="편집">Edit</button>
-          <button class="send-btn" title="터미널로 전송">Send</button>
+          <button class="fav-btn${cmd.favorite ? " on" : ""}" title="Favorite">${cmd.favorite ? "★" : "☆"}</button>
+          <button class="copy-btn" title="Copy">Copy</button>
+          <button class="edit-btn" title="Edit">Edit</button>
+          <button class="send-btn" title="Send to terminal">Send</button>
         </span>
       </div>
       ${cmd.description ? `<div class="cmd-desc">${esc(cmd.description)}</div>` : ""}
     `;
-    li.querySelector(".send-btn").addEventListener("click", (e) => { e.stopPropagation(); sendToTerminal(cmd.command); });
+    li.querySelector(".send-btn").addEventListener("click", (e) => { e.stopPropagation(); runCommandCombo(cmd); });
     li.querySelector(".fav-btn").addEventListener("click", (e) => { e.stopPropagation(); toggleFavorite(cmd); });
     li.querySelector(".copy-btn").addEventListener("click", (e) => { e.stopPropagation(); copyCmd(cmd); });
     li.querySelector(".edit-btn").addEventListener("click", (e) => { e.stopPropagation(); openModal(cmd); });
     li.querySelector(".cmd-x").addEventListener("click", (e) => { e.stopPropagation(); quickDeleteCmd(cmd); });
-    li.addEventListener("dblclick", () => sendToTerminal(cmd.command));
+    li.addEventListener("dblclick", () => runCommandCombo(cmd));
     cmdListEl.appendChild(li);
   }
 }
@@ -3353,7 +5834,7 @@ async function quickDeleteCmd(cmd) {
   try {
     await invoke("delete_command", { id: cmd.id });
     await loadCommands();
-    toast("삭제됨");
+    toast("Deleted");
   } catch (e) {
     toast("Error: " + e, true);
   }
@@ -3361,11 +5842,15 @@ async function quickDeleteCmd(cmd) {
 
 // ── Modal ──
 function openModal(cmd) {
+  const inputCwd = document.getElementById("input-cwd");
+  const inputAlias = document.getElementById("input-alias");
   if (cmd) {
     modalTitle.textContent = "Edit Command";
     inputName.value = cmd.name;
     inputCommand.value = cmd.command;
     inputDesc.value = cmd.description || "";
+    if (inputCwd) inputCwd.value = cmd.cwd || "";
+    if (inputAlias) inputAlias.value = cmd.alias || "";
     editingId = cmd.id;
   } else {
     modalTitle.textContent = "Add Command";
@@ -3394,13 +5879,15 @@ async function handleSave(e) {
   const name = inputName.value.trim();
   const command = inputCommand.value.trim();
   const description = inputDesc.value.trim();
+  const cwd = (document.getElementById("input-cwd")?.value || "").trim();
+  const alias = (document.getElementById("input-alias")?.value || "").trim();
   if (!name || !command) return;
   try {
     if (editingId) {
-      await invoke("update_command", { id: editingId, name, command, description });
+      await invoke("update_command", { id: editingId, name, command, description, cwd, alias });
       toast("Updated");
     } else {
-      await invoke("add_command", { name, command, description });
+      await invoke("add_command", { name, command, description, cwd, alias });
       toast("Added");
     }
     closeModal();
@@ -3433,7 +5920,7 @@ function toast(msg, isError) {
   toastEl.style.background = isError ? "var(--red)" : "var(--accent)";
   toastEl.classList.remove("hidden");
   clearTimeout(toastEl._timer);
-  toastEl._timer = setTimeout(() => toastEl.classList.add("hidden"), 2500);
+  toastEl._timer = setTimeout(() => toastEl.classList.add("hidden"), 2000);
 }
 
 function formatSize(bytes) {
@@ -3459,9 +5946,19 @@ function handleTerminalInput(data, ptyId) {
   // Track what user types to build current input line
   if (data === "\r" || data === "\n") {
     // Enter pressed — detect cd command and sync explorer
-    syncExplorerOnCd(currentInput.trim(), ptyId);
+    const typedRaw = currentInput;
+    const typed = currentInput.trim();
+    syncExplorerOnCd(typed, ptyId);
     currentInput = "";
     hideAutocomplete();
+    // Alias typed at the prompt: erase it and run the full combo instead
+    // (cd into the saved directory, then the command — one Enter).
+    const aliasCmd = typed && savedCmds.find((c) => c.alias && c.alias === typed);
+    if (aliasCmd) {
+      invoke("pty_write", { id: ptyId, data: "\x7f".repeat(typedRaw.length) });
+      runCommandCombo(aliasCmd, ptyId);
+      return "consumed";
+    }
     return;
   }
 
@@ -3476,7 +5973,11 @@ function handleTerminalInput(data, ptyId) {
     if (!acPopup.classList.contains("hidden") && acSelectedIdx >= 0) {
       const items = acList.querySelectorAll(".ac-item");
       if (items[acSelectedIdx]) {
-        const cmd = items[acSelectedIdx].dataset.command;
+        const saved = savedCmds.find((c) => c.id === items[acSelectedIdx].dataset.cmdId);
+        // cwd-bound commands expand to the full "cd … then run" line.
+        const cmd = saved
+          ? commandComboLine(saved, paneShellKind(terminals.get(ptyId)))
+          : items[acSelectedIdx].dataset.command;
         // Clear current input and type the command
         const backspaces = "\x7f".repeat(currentInput.length);
         invoke("pty_write", { id: ptyId, data: backspaces });
@@ -3527,9 +6028,14 @@ function showAutocomplete(input, ptyId) {
   const lower = input.toLowerCase();
   const matches = savedCmds.filter(
     (c) =>
+      (c.alias && c.alias.toLowerCase().startsWith(lower)) ||
       c.name.toLowerCase().includes(lower) ||
       c.command.toLowerCase().includes(lower)
   );
+  // Alias hits first — they are deliberate abbreviations, not substring luck.
+  matches.sort((a, b) =>
+    ((b.alias && b.alias.toLowerCase().startsWith(lower)) ? 1 : 0) -
+    ((a.alias && a.alias.toLowerCase().startsWith(lower)) ? 1 : 0));
 
   if (matches.length === 0) {
     hideAutocomplete();
@@ -3539,18 +6045,24 @@ function showAutocomplete(input, ptyId) {
   acList.innerHTML = "";
   acSelectedIdx = 0;
 
+  const shellKind = paneShellKind(terminals.get(ptyId));
   matches.slice(0, 8).forEach((cmd, i) => {
     const li = document.createElement("li");
     li.className = "ac-item" + (i === 0 ? " selected" : "");
     li.dataset.command = cmd.command;
+    li.dataset.cmdId = cmd.id;
+    // Show what will ACTUALLY run — for cwd-bound commands that's the full
+    // "cd <dir> then command" line, not just the bare command.
+    const preview = commandComboLine(cmd, shellKind);
     li.innerHTML = `
-      <span class="ac-name">${esc(cmd.name)}</span>
-      <span class="ac-cmd">${esc(cmd.command)}</span>
+      <span class="ac-name">${cmd.alias ? `<span class="cmd-alias">${esc(cmd.alias)}</span>` : ""}${esc(cmd.name)}</span>
+      <span class="ac-cmd" title="${esc(preview)}">${esc(preview)}</span>
     `;
     li.addEventListener("click", () => {
+      const line = commandComboLine(cmd, paneShellKind(terminals.get(ptyId)));
       const backspaces = "\x7f".repeat(currentInput.length);
-      invoke("pty_write", { id: ptyId, data: backspaces + cmd.command });
-      currentInput = cmd.command;
+      invoke("pty_write", { id: ptyId, data: backspaces + line });
+      currentInput = line;
       hideAutocomplete();
       terminals.get(ptyId)?.term.focus();
     });
@@ -3572,14 +6084,16 @@ function showAutocomplete(input, ptyId) {
     const curX = buf ? buf.cursorX : 0;
     const curY = buf ? buf.cursorY : rows - 1;
     let left = r.left + curX * cw - 16; // tail aligns near the cursor
-    left = Math.max(r.left + 4, Math.min(left, window.innerWidth - 250));
     const lineTop = r.top + curY * ch;
     const lineBottom = r.top + (curY + 1) * ch;
     const gap = 12;
     acPopup.style.left = left + "px";
-    // Reveal first so offsetHeight is measurable (no repaint until JS yields).
+    // Reveal first so offsetHeight/Width are measurable (no repaint until JS yields).
     acPopup.classList.remove("hidden");
     const popupH = acPopup.offsetHeight;
+    // Clamp with the ACTUAL width — the popup grows for long combo lines.
+    left = Math.max(4, Math.min(left, window.innerWidth - acPopup.offsetWidth - 8));
+    acPopup.style.left = left + "px";
     if (lineTop - gap - popupH >= 4) {
       // Enough room above → keep the bubble above the cursor.
       acPopup.style.bottom = (window.innerHeight - lineTop + gap) + "px";
@@ -3697,23 +6211,51 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     if (!newVersion) return; // already up to date
 
-    btn.title = `새 버전 ${newVersion} — 클릭하면 업데이트`;
+    btn.title = `New version ${newVersion} — click to update`;
     btn.classList.remove("hidden");
 
-    btn.addEventListener("click", async () => {
+    const runInstall = async () => {
       if (btn.disabled) return;
       btn.disabled = true;
       const original = btn.textContent;
-      btn.textContent = "업데이트 중…";
+      btn.textContent = "Updating…";
       try {
         // Downloads, installs, and relaunches into the new version.
         await inv("update_install");
       } catch (err) {
         btn.disabled = false;
         btn.textContent = original;
-        if (typeof toast === "function") toast("업데이트 실패: " + err, true);
+        if (typeof toast === "function") toast("Update failed: " + err, true);
         else console.error("update_install failed:", err);
       }
+    };
+
+    const modal = document.getElementById("update-modal");
+    const modalOk = document.getElementById("update-modal-ok");
+    const modalCancel = document.getElementById("update-modal-cancel");
+    const closeUpdateModal = () => {
+      if (modal) modal.classList.add("hidden");
+      // Restore the native browser overlay only if we're still on the browser view.
+      if (browserTabActive && browserMode === "native") openNativePane();
+    };
+    if (modalOk) modalOk.addEventListener("click", () => { closeUpdateModal(); runInstall(); });
+    if (modalCancel) modalCancel.addEventListener("click", closeUpdateModal);
+    if (modal) {
+      modal.addEventListener("click", (e) => { if (e.target === modal) closeUpdateModal(); });
+      modal.addEventListener("keydown", (e) => { if (e.key === "Escape") closeUpdateModal(); });
+    }
+
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      // With open sessions, confirm first — updating closes every session.
+      if (terminals.size > 0 && modal) {
+        // The native browser overlay floats above all HTML; hide it so the modal shows.
+        if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
+        modal.classList.remove("hidden");
+        if (modalOk) modalOk.focus();
+        return;
+      }
+      runInstall();
     });
   };
   start();
@@ -3726,42 +6268,42 @@ window.addEventListener("DOMContentLoaded", () => {
 
 const GUIDE_CLAUDE =
   "\r\n" +
-  "\x1b[1;36m══════ Claude Code 설치 ══════\x1b[0m\r\n" +
+  "\x1b[1;36m══════ Install Claude Code ══════\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[90mNode.js 18+ 가 필요합니다.\x1b[0m\r\n" +
+  "\x1b[90mRequires Node.js 18+.\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ npm (모든 OS)\x1b[0m\r\n" +
+  "\x1b[1;32m▶ npm (all platforms)\x1b[0m\r\n" +
   "  \x1b[33mnpm install -g @anthropic-ai/claude-code\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ 네이티브 설치\x1b[0m\r\n" +
+  "\x1b[1;32m▶ Native install\x1b[0m\r\n" +
   "  \x1b[90mmacOS/Linux\x1b[0m\r\n" +
   "  \x1b[33mcurl -fsSL https://claude.ai/install.sh | bash\x1b[0m\r\n" +
   "  \x1b[90mWindows (PowerShell)\x1b[0m\r\n" +
   "  \x1b[33mirm https://claude.ai/install.ps1 | iex\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ 실행\x1b[0m   \x1b[33mclaude\x1b[0m\r\n" +
-  "\x1b[90m문서: docs.claude.com/claude-code\x1b[0m\r\n" +
+  "\x1b[1;32m▶ Run\x1b[0m   \x1b[33mclaude\x1b[0m\r\n" +
+  "\x1b[90mDocs: docs.claude.com/claude-code\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[2m↓ 아래 셸에 명령을 붙여넣어 설치하세요.\x1b[0m\r\n" +
+  "\x1b[2m↓ Paste a command into the shell below to install.\x1b[0m\r\n" +
   "\r\n";
 
 const GUIDE_CODEX =
   "\r\n" +
-  "\x1b[1;35m══════ Codex CLI 설치 ══════\x1b[0m\r\n" +
+  "\x1b[1;35m══════ Install Codex CLI ══════\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[90mOpenAI Codex CLI. ChatGPT 계정 또는\x1b[0m\r\n" +
-  "\x1b[90mAPI 키가 필요합니다.\x1b[0m\r\n" +
+  "\x1b[90mOpenAI Codex CLI. Requires a ChatGPT account\x1b[0m\r\n" +
+  "\x1b[90mor an API key.\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ npm (모든 OS)\x1b[0m\r\n" +
+  "\x1b[1;32m▶ npm (all platforms)\x1b[0m\r\n" +
   "  \x1b[33mnpm install -g @openai/codex\x1b[0m\r\n" +
   "\r\n" +
   "\x1b[1;32m▶ Homebrew (macOS/Linux)\x1b[0m\r\n" +
   "  \x1b[33mbrew install codex\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[1;32m▶ 실행\x1b[0m   \x1b[33mcodex\x1b[0m\r\n" +
-  "\x1b[90m문서: github.com/openai/codex\x1b[0m\r\n" +
+  "\x1b[1;32m▶ Run\x1b[0m   \x1b[33mcodex\x1b[0m\r\n" +
+  "\x1b[90mDocs: github.com/openai/codex\x1b[0m\r\n" +
   "\r\n" +
-  "\x1b[2m↓ 아래 셸에 명령을 붙여넣어 설치하세요.\x1b[0m\r\n" +
+  "\x1b[2m↓ Paste a command into the shell below to install.\x1b[0m\r\n" +
   "\r\n";
 
 // Decide whether to show the install guide based on what is already installed.
