@@ -67,6 +67,19 @@
   </main>
 
   <div id="drawer-backdrop"></div>
+  <div id="toast" aria-live="polite"></div>
+
+  <div id="paste-modal" class="overlay hidden">
+    <form id="paste-form" class="modal-card">
+      <h2>붙여넣기</h2>
+      <p class="muted">이 브라우저는 클립보드 자동 읽기를 지원하지 않습니다. 아래 칸에 길게 눌러(또는 Ctrl+V) 붙여넣은 후 삽입하세요.</p>
+      <textarea id="paste-input" rows="4" placeholder="여기에 붙여넣기…" autocomplete="off" spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button type="button" id="paste-cancel" class="ghost">취소</button>
+        <button type="submit">삽입</button>
+      </div>
+    </form>
+  </div>
 
   <div id="cmd-modal" class="overlay hidden">
     <form id="cmd-form" class="modal-card">

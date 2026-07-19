@@ -219,6 +219,16 @@ button.mini:hover { border-color: var(--accent); }
 #cmd-list .cmd-actions .run { color: var(--accent); }
 #cmd-list .cmd-actions .del:hover { border-color: var(--danger); color: var(--danger); }
 
+/* ── Toast ── */
+#toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(8px);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--fg); padding: 8px 14px; font-size: 13px; z-index: 60;
+  opacity: 0; pointer-events: none; transition: opacity .15s ease, transform .15s ease;
+  max-width: calc(100vw - 32px);
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 /* ── Modal ── */
 .overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
@@ -237,6 +247,11 @@ button.mini:hover { border-color: var(--accent); }
   color: var(--fg); padding: 9px 11px; font-size: 14px;
 }
 .modal-card input:focus { outline: none; border-color: var(--accent); }
+.modal-card textarea {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--fg); padding: 9px 11px; font-size: 14px; font-family: inherit; resize: vertical;
+}
+.modal-card textarea:focus { outline: none; border-color: var(--accent); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .modal-actions button {
   background: var(--accent); border: none; border-radius: 8px; color: #fff;

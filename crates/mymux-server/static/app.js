@@ -75,8 +75,15 @@
     // Drag-select auto-copy (PuTTY-style): finishing a selection copies it.
     el.addEventListener('mouseup', () => {
       const sel = pane.term.getSelection();
-      if (sel && navigator.clipboard) navigator.clipboard.writeText(sel).catch(() => {});
+      if (sel) copyText(sel);
     });
+    // Observers only (no preventDefault/setData) — xterm's own core already
+    // handles native Ctrl+C/Ctrl+V; this just surfaces whether the browser
+    // ever dispatched the event at all, since a blocked/never-focused
+    // terminal produces silence that's otherwise indistinguishable from
+    // "xterm handled it but the OS clipboard is empty".
+    el.addEventListener('copy', () => toast('네이티브 복사 이벤트 감지됨'));
+    el.addEventListener('paste', () => toast('네이티브 붙여넣기 이벤트 감지됨'));
     term.onData((d) => {
       if (focused !== pane) focusPane(pane);
       if (ctrlArmed && d.length === 1) { d = applyCtrl(d); ctrlArmed = false; updateCtrlBtn(); }
@@ -130,17 +137,78 @@
     try { pane.term.focus(); } catch (e) {}
   }
 
+  // Silent, permanent feedback for clipboard actions — Brave/enterprise
+  // policy can deny navigator.clipboard without ever showing a permission
+  // prompt, so without this the user sees no difference between "worked"
+  // and "silently blocked".
+  let toastTimer = null;
+  function toast(msg) {
+    const el = $('#toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+  }
+
+  // Async Clipboard API needs a permission grant that Firefox never
+  // implements (readText) and mobile Safari very often silently denies —
+  // execCommand('copy') via a throwaway textarea works wherever that happens.
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => toast('복사됨')).catch(() => execCommandCopy(text));
+    } else {
+      execCommandCopy(text);
+    }
+  }
+  function execCommandCopy(text) {
+    const prevActive = document.activeElement;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    if (prevActive instanceof HTMLElement) prevActive.focus();
+    toast(ok ? '복사됨' : '복사 실패 — 브라우저가 차단했습니다');
+  }
+
   // Read the system clipboard and paste into a pane via xterm's paste() — which
   // wraps it in bracketed-paste when the app enabled it, so multi-line pastes
-  // don't run line by line.
+  // don't run line by line. Falls back to a manual paste box when readText()
+  // is unsupported/denied (same permission gap as above — this is the primary
+  // paste path on mobile, since there's no Ctrl+V).
   function pasteInto(pane) {
     const p = pane || focused;
     if (!p) return;
-    if (!navigator.clipboard || !navigator.clipboard.readText) {
-      alert('이 브라우저는 클립보드 읽기를 지원하지 않습니다. Ctrl+V 를 사용하세요.');
-      return;
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText()
+        .then((t) => { if (t) { p.term.paste(t); p.term.focus(); toast('붙여넣음'); } else { openPasteModal(p); } })
+        .catch(() => openPasteModal(p));
+    } else {
+      openPasteModal(p);
     }
-    navigator.clipboard.readText().then((t) => { if (t) { p.term.paste(t); p.term.focus(); } }).catch(() => {});
+  }
+
+  let pastePane = null;
+  function openPasteModal(pane) {
+    pastePane = pane;
+    $('#paste-input').value = '';
+    $('#paste-modal').classList.remove('hidden');
+    $('#paste-input').focus();
+    toast('클립보드 자동 접근 차단됨 — 아래에 직접 붙여넣어 주세요');
+  }
+  function closePasteModal() {
+    $('#paste-modal').classList.add('hidden');
+    pastePane = null;
+  }
+  function insertPaste() {
+    const t = $('#paste-input').value;
+    const p = pastePane || focused;
+    closePasteModal();
+    if (p && t) { p.term.paste(t); p.term.focus(); }
   }
 
   async function createServerTerminal() {
@@ -634,6 +702,9 @@
     $('#cmd-cancel').onclick = closeCmdModal;
     $('#cmd-form').onsubmit = saveCmd;
     $('#cmd-modal').onclick = (e) => { if (e.target.id === 'cmd-modal') closeCmdModal(); };
+    $('#paste-cancel').onclick = closePasteModal;
+    $('#paste-form').onsubmit = (e) => { e.preventDefault(); insertPaste(); };
+    $('#paste-modal').onclick = (e) => { if (e.target.id === 'paste-modal') closePasteModal(); };
     $('#btn-menu').onclick = openDrawer;
     $('#drawer-backdrop').onclick = closeDrawer;
     document.querySelectorAll('#keybar button').forEach((b) => {
