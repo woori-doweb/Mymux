@@ -228,6 +228,29 @@ button.mini:hover { border-color: var(--accent); }
 #cmd-list .cmd-actions .run { color: var(--accent); }
 #cmd-list .cmd-actions .del:hover { border-color: var(--danger); color: var(--danger); }
 
+/* ── Terminal find bar (Ctrl+Shift+F) ── */
+#find-bar {
+  position: absolute; top: 42px; right: 14px; z-index: 25;
+  display: flex; gap: 4px; align-items: center;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px;
+}
+#find-bar input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg); padding: 4px 8px; font-size: 13px; width: 180px;
+}
+#find-bar input:focus { outline: none; border-color: var(--accent); }
+#find-bar button {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg); cursor: pointer; padding: 2px 8px; font-size: 13px;
+}
+#find-bar button:hover { border-color: var(--accent); }
+
+.cmd-alias {
+  color: var(--accent); font-size: 11px; margin-left: 5px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
+}
+
 /* ── Agent status badges (Claude Code hook bridge) ── */
 .agent-badge {
   display: inline-block; min-width: 14px; text-align: center;

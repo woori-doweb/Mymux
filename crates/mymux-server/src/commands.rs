@@ -22,6 +22,8 @@ struct Row {
     command: String,
     description: String,
     favorite: i64,
+    cwd: String,
+    alias: String,
     created_at: String,
 }
 
@@ -33,6 +35,8 @@ pub struct CommandDto {
     command: String,
     description: String,
     favorite: bool,
+    cwd: String,
+    alias: String,
     created_at: String,
 }
 
@@ -44,11 +48,15 @@ impl From<Row> for CommandDto {
             command: r.command,
             description: r.description,
             favorite: r.favorite != 0,
+            cwd: r.cwd,
+            alias: r.alias,
             created_at: r.created_at,
         }
     }
 }
 
+// cwd + alias mirror upstream mycli-core::SavedCommand (v0.1.24+): cwd = run
+// the command from this directory, alias = short abbreviation to expand it.
 #[derive(Deserialize)]
 pub struct CommandInput {
     pub name: String,
@@ -57,6 +65,10 @@ pub struct CommandInput {
     pub description: String,
     #[serde(default)]
     pub favorite: bool,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default)]
+    pub alias: String,
 }
 
 /// Built-in shortcut commands, seeded once per user. Copied verbatim from the
@@ -113,13 +125,25 @@ async fn seed_defaults(state: &AppState, user_id: &str) -> AppResult<()> {
 const MAX_NAME: usize = 100;
 const MAX_COMMAND: usize = 4000;
 const MAX_DESCRIPTION: usize = 500;
+const MAX_CWD: usize = 500;
+const MAX_ALIAS: usize = 20;
 const MAX_COMMANDS_PER_USER: i64 = 500;
 
-/// Trim + bound the input. Returns the trimmed (name, command, description).
-fn clean(input: &CommandInput) -> AppResult<(String, String, String)> {
+struct CleanInput {
+    name: String,
+    command: String,
+    description: String,
+    cwd: String,
+    alias: String,
+}
+
+/// Trim + bound the input.
+fn clean(input: &CommandInput) -> AppResult<CleanInput> {
     let name = input.name.trim().to_string();
     let command = input.command.trim().to_string();
     let description = input.description.trim().to_string();
+    let cwd = input.cwd.trim().to_string();
+    let alias = input.alias.trim().to_string();
     if name.is_empty() {
         return Err(AppError::BadRequest("name is required".into()));
     }
@@ -135,7 +159,19 @@ fn clean(input: &CommandInput) -> AppResult<(String, String, String)> {
     if description.chars().count() > MAX_DESCRIPTION {
         return Err(AppError::BadRequest("description too long".into()));
     }
-    Ok((name, command, description))
+    if cwd.chars().count() > MAX_CWD {
+        return Err(AppError::BadRequest("cwd too long".into()));
+    }
+    if alias.chars().count() > MAX_ALIAS {
+        return Err(AppError::BadRequest("alias too long".into()));
+    }
+    Ok(CleanInput {
+        name,
+        command,
+        description,
+        cwd,
+        alias,
+    })
 }
 
 /// GET /api/commands — the caller's own commands, favorites first then name.
@@ -145,7 +181,7 @@ pub async fn list_commands(
 ) -> AppResult<Json<Vec<CommandDto>>> {
     seed_defaults(&state, &user.id).await?;
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT id, name, command, description, favorite, created_at \
+        "SELECT id, name, command, description, favorite, cwd, alias, created_at \
          FROM saved_commands WHERE owner_user_id = ? \
          ORDER BY favorite DESC, name COLLATE NOCASE ASC",
     )
@@ -161,7 +197,7 @@ pub async fn create_command(
     user: AuthUser,
     Json(input): Json<CommandInput>,
 ) -> AppResult<Json<CommandDto>> {
-    let (name, command, description) = clean(&input)?;
+    let c = clean(&input)?;
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM saved_commands WHERE owner_user_id = ?")
             .bind(&user.id)
@@ -174,25 +210,29 @@ pub async fn create_command(
     let now = util::now_rfc3339();
     sqlx::query(
         "INSERT INTO saved_commands \
-         (id, owner_user_id, name, command, description, favorite, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         (id, owner_user_id, name, command, description, favorite, cwd, alias, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&user.id)
-    .bind(&name)
-    .bind(&command)
-    .bind(&description)
+    .bind(&c.name)
+    .bind(&c.command)
+    .bind(&c.description)
     .bind(input.favorite as i64)
+    .bind(&c.cwd)
+    .bind(&c.alias)
     .bind(&now)
     .bind(&now)
     .execute(&state.db)
     .await?;
     Ok(Json(CommandDto {
         id,
-        name,
-        command,
-        description,
+        name: c.name,
+        command: c.command,
+        description: c.description,
         favorite: input.favorite,
+        cwd: c.cwd,
+        alias: c.alias,
         created_at: now,
     }))
 }
@@ -204,17 +244,19 @@ pub async fn update_command(
     Path(id): Path<String>,
     Json(input): Json<CommandInput>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let (name, command, description) = clean(&input)?;
+    let c = clean(&input)?;
     let now = util::now_rfc3339();
     let res = sqlx::query(
         "UPDATE saved_commands \
-         SET name = ?, command = ?, description = ?, favorite = ?, updated_at = ? \
+         SET name = ?, command = ?, description = ?, favorite = ?, cwd = ?, alias = ?, updated_at = ? \
          WHERE id = ? AND owner_user_id = ?",
     )
-    .bind(&name)
-    .bind(&command)
-    .bind(&description)
+    .bind(&c.name)
+    .bind(&c.command)
+    .bind(&c.description)
     .bind(input.favorite as i64)
+    .bind(&c.cwd)
+    .bind(&c.alias)
     .bind(&now)
     .bind(&id)
     .bind(&user.id)

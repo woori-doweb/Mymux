@@ -72,6 +72,12 @@
         <button data-k="lit:-">-</button>
       </div>
       <div id="ac-popup" class="hidden"><ul id="ac-list"></ul></div>
+      <div id="find-bar" class="hidden">
+        <input id="find-input" placeholder="터미널 검색…" autocomplete="off" spellcheck="false" />
+        <button id="find-prev" type="button" title="이전 (Shift+Enter)">↑</button>
+        <button id="find-next" type="button" title="다음 (Enter)">↓</button>
+        <button id="find-close" type="button" title="닫기 (Esc)">×</button>
+      </div>
     </section>
   </main>
 
@@ -109,6 +115,8 @@
       <label>이름<input type="text" id="cmd-name" required maxlength="100" placeholder="예: Git Status" autocomplete="off" spellcheck="false" /></label>
       <label>명령<input type="text" id="cmd-command" required maxlength="4000" placeholder="예: git status" autocomplete="off" spellcheck="false" /></label>
       <label>설명<input type="text" id="cmd-desc" maxlength="500" placeholder="설명 (선택)" autocomplete="off" spellcheck="false" /></label>
+      <label>실행 디렉터리<input type="text" id="cmd-cwd" maxlength="500" placeholder="예: /srv/mymux-workspaces/api (선택 — cd 후 실행)" autocomplete="off" spellcheck="false" /></label>
+      <label>별칭<input type="text" id="cmd-alias" maxlength="20" placeholder="예: gs (선택 — 자동완성 단축어)" autocomplete="off" spellcheck="false" /></label>
       <p id="cmd-modal-error" class="error"></p>
       <div class="modal-actions">
         <button type="button" id="cmd-cancel" class="ghost">취소</button>
@@ -119,6 +127,8 @@
 
   <script src="vendor/xterm.min.js"></script>
   <script src="vendor/addon-fit.min.js"></script>
+  <script src="vendor/addon-search.min.js"></script>
+  <script src="vendor/addon-web-links.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -68,6 +68,19 @@ pub async fn migrate(pool: &SqlitePool) -> Result<(), AppError> {
     sqlx::raw_sql(include_str!("../migrations/0004_projects_layouts.sql"))
         .execute(pool)
         .await?;
+    // 0005 — saved_commands gains cwd + alias (parity with upstream
+    // mycli-core::SavedCommand). SQLite has no ADD COLUMN IF NOT EXISTS, so
+    // idempotency is by tolerating the duplicate-column error on re-runs.
+    for stmt in [
+        "ALTER TABLE saved_commands ADD COLUMN cwd TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE saved_commands ADD COLUMN alias TEXT NOT NULL DEFAULT ''",
+    ] {
+        if let Err(e) = sqlx::raw_sql(stmt).execute(pool).await {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e.into());
+            }
+        }
+    }
     Ok(())
 }
 

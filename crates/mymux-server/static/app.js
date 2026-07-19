@@ -76,9 +76,13 @@
     });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
+    // Upstream desktop vendors these same addons — clickable URLs + Ctrl+Shift+F search.
+    term.loadAddon(new WebLinksAddon.WebLinksAddon());
+    const search = new SearchAddon.SearchAddon();
+    term.loadAddon(search);
     term.open(host);
 
-    const pane = { id: uid('p'), tabId: null, termId, term, fit, ws: null, el, host, node: null };
+    const pane = { id: uid('p'), tabId: null, termId, term, fit, search, ws: null, el, host, node: null };
     // Focus on click; middle-click pastes the system clipboard (PuTTY/X11 style).
     el.addEventListener('mousedown', (e) => {
       focusPane(pane);
@@ -804,6 +808,13 @@
     renderCommands();
   }
 
+  // A command with a cwd runs from that directory (upstream SavedCommand.cwd
+  // semantics) — in a terminal that means a cd prefix, single-quoted safely.
+  function cmdText(c) {
+    if (!c.cwd) return c.command;
+    return "cd '" + String(c.cwd).replace(/'/g, "'\\''") + "' && " + c.command;
+  }
+
   function mkCmdBtn(label, cls, fn) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -829,16 +840,22 @@
       const name = document.createElement('span');
       name.className = 'cmd-name';
       name.textContent = (c.favorite ? '★ ' : '') + c.name;
+      if (c.alias) {
+        const al = document.createElement('span');
+        al.className = 'cmd-alias';
+        al.textContent = c.alias;
+        name.appendChild(al);
+      }
       const txt = document.createElement('span');
       txt.className = 'cmd-text';
       txt.textContent = c.command;                     // textContent → no XSS
       li.appendChild(name);
       li.appendChild(txt);
       // Row click pastes the command (no newline) into the focused terminal.
-      li.onclick = () => sendToActive(c.command, false);
+      li.onclick = () => sendToActive(cmdText(c), false);
       const actions = document.createElement('div');
       actions.className = 'cmd-actions';
-      actions.appendChild(mkCmdBtn('▶ Run', 'run', () => sendToActive(c.command, true)));
+      actions.appendChild(mkCmdBtn('▶ Run', 'run', () => sendToActive(cmdText(c), true)));
       actions.appendChild(mkCmdBtn(c.favorite ? '★' : '☆', 'fav-btn', () => toggleFav(c)));
       actions.appendChild(mkCmdBtn('✎', 'edit', () => openCmdModal(c)));
       actions.appendChild(mkCmdBtn('×', 'del', () => deleteCmd(c)));
@@ -853,6 +870,8 @@
     $('#cmd-name').value = cmd ? cmd.name : '';
     $('#cmd-command').value = cmd ? cmd.command : '';
     $('#cmd-desc').value = cmd ? (cmd.description || '') : '';
+    $('#cmd-cwd').value = cmd ? (cmd.cwd || '') : '';
+    $('#cmd-alias').value = cmd ? (cmd.alias || '') : '';
     $('#cmd-modal-error').textContent = '';
     $('#cmd-modal').classList.remove('hidden');
     $('#cmd-name').focus();
@@ -869,6 +888,8 @@
       name: $('#cmd-name').value.trim(),
       command: $('#cmd-command').value.trim(),
       description: $('#cmd-desc').value.trim(),
+      cwd: $('#cmd-cwd').value.trim(),
+      alias: $('#cmd-alias').value.trim(),
     };
     if (!body.name || !body.command) {
       $('#cmd-modal-error').textContent = '이름과 명령은 필수입니다.';
@@ -890,7 +911,7 @@
   }
 
   async function toggleFav(c) {
-    const body = { name: c.name, command: c.command, description: c.description || '', favorite: !c.favorite };
+    const body = { name: c.name, command: c.command, description: c.description || '', favorite: !c.favorite, cwd: c.cwd || '', alias: c.alias || '' };
     const r = await api('/api/commands/' + c.id, { method: 'PUT', body: JSON.stringify(body) });
     if (r.ok) await loadCommands();
   }
@@ -926,6 +947,7 @@
     if (!q) { acHide(false); return; }
     acItems = commands.filter((c) =>
       c.name.toLowerCase().startsWith(q) || c.command.toLowerCase().startsWith(q)
+      || (c.alias && c.alias.toLowerCase().startsWith(q))
     ).slice(0, 8);
     if (!acItems.length) { acHide(false); return; }
     acIndex = 0; acNavigated = false;
@@ -939,7 +961,7 @@
     acItems.forEach((c, i) => {
       const li = document.createElement('li');
       if (i === acIndex) li.className = 'sel';
-      const n = document.createElement('span'); n.className = 'n'; n.textContent = c.name;
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = c.name + (c.alias ? ' (' + c.alias + ')' : '');
       const t = document.createElement('span'); t.className = 'c'; t.textContent = c.command;
       li.appendChild(n); li.appendChild(t);
       // mousedown (not click) so the terminal doesn't lose focus first.
@@ -958,8 +980,9 @@
   function acAccept() {
     const c = acItems[acIndex];
     if (!c) { acHide(true); return; }
-    sendRaw('\x7f'.repeat(lineBuf.length) + c.command);   // erase typed prefix, insert full cmd
-    lineBuf = c.command;
+    const full = cmdText(c);
+    sendRaw('\x7f'.repeat(lineBuf.length) + full);   // erase typed prefix, insert full cmd
+    lineBuf = full;
     acHide(true);
     if (focused) focused.term.focus();
   }
@@ -968,6 +991,27 @@
     $('#ac-popup').classList.add('hidden');
     acItems = []; acIndex = -1; acNavigated = false;
     if (dismiss) acDismissed = true;
+  }
+
+  // ── Terminal search (Ctrl+Shift+F, xterm SearchAddon) ──────────────
+  function openFindBar() {
+    $('#find-bar').classList.remove('hidden');
+    $('#find-input').focus();
+    $('#find-input').select();
+  }
+  function closeFindBar() {
+    $('#find-bar').classList.add('hidden');
+    if (focused) {
+      try { focused.search.clearDecorations(); } catch (e) { /* addon state */ }
+      focused.term.focus();
+    }
+  }
+  function findIn(dirBack) {
+    const q = $('#find-input').value;
+    if (!q || !focused) return;
+    try {
+      if (dirBack) focused.search.findPrevious(q); else focused.search.findNext(q);
+    } catch (e) { /* addon not ready */ }
   }
 
   // Runs before xterm processes a key; return false to swallow it. Handles
@@ -980,6 +1024,7 @@
       if (k === 'e') { e.preventDefault(); splitFocused('col'); return false; }
       if (k === 'w') { e.preventDefault(); if (focused) closePane(focused); return false; }
       if (k === 'n') { e.preventDefault(); newTab(); return false; }
+      if (k === 'f') { e.preventDefault(); openFindBar(); return false; }
     }
     if ($('#ac-popup').classList.contains('hidden')) return true;
     switch (e.key) {
@@ -1036,6 +1081,13 @@
     $('#proj-cancel').onclick = closeProjModal;
     $('#proj-form').onsubmit = saveProject;
     $('#proj-modal').onclick = (e) => { if (e.target.id === 'proj-modal') closeProjModal(); };
+    $('#find-next').onclick = () => findIn(false);
+    $('#find-prev').onclick = () => findIn(true);
+    $('#find-close').onclick = closeFindBar;
+    $('#find-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); findIn(e.shiftKey); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeFindBar(); }
+    });
     // Last-chance layout save when the page goes away (debounce may be pending).
     window.addEventListener('pagehide', () => {
       if (!layoutReady) return;
