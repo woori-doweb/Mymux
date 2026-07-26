@@ -88,3 +88,32 @@ xterm은 keydown의 `key === "Enter"`일 때만 `ESC CR`(`\x1b\r`)을 만든다.
   cross-PTY 주입이 재발한다.
 - Shift+Enter 줄바꿈은 이번 범위에서 제외(셸 호환성 검토 필요 — kitty/foot은
   CSI u를 보냄). 요구가 생기면 Alt+Enter와 같은 자리(keyHandler)에서 처리.
+
+## 후속 (같은 날): "다중 분할에서 첫번째 터미널로 포커스가 계속 옮겨감"
+
+### 원인 1 — 배포/캐시 갭 (가장 컸음)
+- 오전 수정이 **배포되지 않은 상태**였다. 실서비스는 `/opt/mymux-console/static`
+  (7/19자)을 서빙 중 → `deploy/deploy.sh`(static-only, 무중단)로 반영.
+- 접속 경로는 nginx가 아니라 **Tailscale Serve**:
+  `https://localhost-0.tail2ca93e.ts.net:9443 → 127.0.0.1:7070` (중간 캐시 없음).
+- mymux-server가 `Last-Modified`만 보내고 `Cache-Control`이 없어 브라우저
+  **휴리스틱 캐시**(수정시각 이후 경과의 10%)가 적용됨 — 7일 묵은 app.js면
+  최대 ~17시간 재검증 없이 캐시 재사용. 게다가 SPA 탭은 스스로 리로드하지
+  않으므로 열려 있는 탭은 영원히 옛 코드로 돈다.
+- 수정: `routes.rs`에 `Cache-Control: no-cache`(재사용 전 재검증, 304로 저렴)
+  전역 레이어 추가. **바이너리 교체 + 서비스 재시작 필요** — 재시작은 서비스
+  cgroup 아래의 라이브 터미널(bash/claude/gjc)을 전부 죽이므로 한가한 시점에
+  `deploy/deploy.sh --build`로 반영할 것. (이번엔 static만 배포함.)
+
+### 원인 2 — closePane이 항상 첫 패인으로 포커스
+- `closePane`이 `firstPane(t.root)`로 포커스를 보내서, 3중 분할에서 어떤
+  패인을 닫아도 **1번 터미널로 점프**했다.
+- 수정: 닫힌 패인의 공간을 물려받는 **형제 서브트리의 firstPane**으로 포커스
+  (`firstPane(sibling) || firstPane(t.root)`). tmux 동작과 일치.
+- E2E: A|(B|C)에서 C 닫기 → B 포커스, 가운데 패인 닫기 → 자리 물려받은 패인
+  포커스, 이후 클릭 왕복 정상 (headless Chromium 확인).
+
+### 배포 상태 체크리스트 (다음에 또 "여전히 안 됨"이 나오면)
+1. `/opt/mymux-console/static/app.js` mtime vs repo — `deploy/deploy.sh --dry-run`
+2. 사용자 브라우저가 새 JS를 받았는지: Cache-Control 반영 전이면 **Ctrl+F5** 필요
+3. 열려 있는 콘솔 탭은 리로드 전까지 옛 코드 — 반드시 새로고침 안내

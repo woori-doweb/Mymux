@@ -49,6 +49,26 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
   배열에서도 무시됐습니다. `term.input()`을 경유해 탭 브로드캐스트 경로도
   유지됩니다.
 
+- **Console: closing a split pane no longer jumps focus to the first terminal / 콘솔: 패인 닫을 때 첫번째 터미널로 포커스 점프 수정.**
+  With 2–3+ splits, closing any pane always focused the tab's first pane.
+  Focus now goes to the sibling pane that inherits the closed pane's space
+  (tmux behavior).
+
+  2~3중 이상 분할에서 패인을 닫으면 항상 탭의 첫번째 패인으로 포커스가
+  이동했습니다. 이제 닫힌 패인의 공간을 물려받는 형제 패인이 포커스를
+  받습니다(tmux 동작).
+
+- **Console: stale frontend after deploys / 콘솔: 배포 후 옛 프론트엔드 캐시 수정.**
+  `mymux-server` sent no `Cache-Control`, so browsers applied heuristic
+  freshness to `app.js` and kept serving a days-old copy after a deploy —
+  fixes appeared "not to work" until a hard refresh. Static and API responses
+  now carry `Cache-Control: no-cache` (revalidate-before-reuse, cheap 304s).
+
+  `mymux-server`가 `Cache-Control`을 보내지 않아 브라우저 휴리스틱 캐시가
+  적용됐고, 배포 후에도 며칠 묵은 `app.js`가 계속 서빙되어 수정이 "여전히
+  안 되는" 것처럼 보였습니다. 이제 정적 파일과 API 응답에
+  `Cache-Control: no-cache`(재사용 전 재검증, 304로 저렴)를 붙입니다.
+
 ---
 
 ## v0.1.34 — 2026-07-18

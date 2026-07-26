@@ -383,7 +383,11 @@
       if (sibling.parent.a === parent) sibling.parent.a = sibling; else sibling.parent.b = sibling;
       applyFlex(sibling.parent);
     }
-    const nf = firstPane(t.root);
+    // Focus the pane that inherits the closed pane's space (the hoisted
+    // sibling subtree), NOT firstPane(t.root) — with 3+ splits that jumped
+    // focus back to the first terminal on every close
+    // ("첫번째 터미널로 포커스가 옮겨감").
+    const nf = firstPane(sibling) || firstPane(t.root);
     if (nf) focusPane(nf);
     fitTree(t.root);
     saveLayoutSoon();

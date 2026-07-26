@@ -68,6 +68,16 @@ pub fn router(state: AppState) -> Router {
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
         ))
+        // `no-cache` = "revalidate before reuse" (cheap 304s), NOT "don't
+        // store". Without it browsers apply heuristic freshness (10% of the
+        // file age since Last-Modified) to the static assets, so a days-old
+        // app.js kept being served from cache after a deploy and users ran
+        // stale frontend code until a hard refresh. Applies to API JSON too,
+        // where revalidate-always is equally correct.
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
         .with_state(state)
 }
 
