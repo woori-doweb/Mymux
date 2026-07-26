@@ -1047,13 +1047,14 @@
   // workspace shortcuts (any time) and autocomplete nav (while popup is open).
   function keyHandler(e) {
     if (e.type !== 'keydown') return true;
-    // Alt+Enter → ESC CR ("Meta+Enter"): soft newline in claude/codex-style
-    // TUIs without submitting. Handled explicitly instead of trusting xterm:
-    // with the Korean IME active e.key arrives as "Process" (keyCode 229) so
-    // xterm emits nothing, and Korean layouts flag right-Alt as AltGraph which
-    // xterm treats as third-level shift. term.input() routes through onData →
-    // the normal send path.
-    if (e.altKey && !e.ctrlKey && !e.metaKey &&
+    // Alt+Enter / Shift+Enter → ESC CR ("Meta+Enter"): soft newline in
+    // claude/codex-style TUIs without submitting. Shift+Enter matches the
+    // chat-app habit and Claude Code's /terminal-setup convention. Handled
+    // explicitly instead of trusting xterm: with the Korean IME active e.key
+    // arrives as "Process" (keyCode 229) so xterm emits nothing, and Korean
+    // layouts flag right-Alt as AltGraph which xterm treats as third-level
+    // shift. term.input() routes through onData → the normal send path.
+    if ((e.altKey || e.shiftKey) && !e.ctrlKey && !e.metaKey &&
         (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
       e.preventDefault();
       if (focused) { try { focused.term.input('\x1b\r'); } catch (err) { sendRaw('\x1b\r'); } }

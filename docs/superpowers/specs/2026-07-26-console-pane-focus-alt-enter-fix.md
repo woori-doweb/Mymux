@@ -117,3 +117,21 @@ xterm은 keydown의 `key === "Enter"`일 때만 `ESC CR`(`\x1b\r`)을 만든다.
 1. `/opt/mymux-console/static/app.js` mtime vs repo — `deploy/deploy.sh --dry-run`
 2. 사용자 브라우저가 새 JS를 받았는지: Cache-Control 반영 전이면 **Ctrl+F5** 필요
 3. 열려 있는 콘솔 탭은 리로드 전까지 옛 코드 — 반드시 새로고침 안내
+
+## 후속 2 (같은 날): "Win11 + Brave에서 Alt 누르면 + 커서, 줄바꿈 안 됨"
+
+- **+ (십자) 커서 = xterm의 Alt+클릭 선택 모드 표시** — Alt가 페이지까지
+  도달한다는 증거일 뿐 오동작이 아니다.
+- **실제 claude TUI로 종단 검증 완료**: 로컬 테스트 인스턴스에서 `claude`
+  (2.1.220)를 패인에 띄우고 headless Chromium 실키로 Alt+Enter/Shift+Enter
+  입력 → 입력창이 `hello / world-alt / third-shift` 3줄로 늘어나는 것을
+  스크린샷으로 확인. **ESC CR → claude 줄바꿈 해석은 이 서버에서 실증됨.**
+- 따라서 "여전히 안 됨"의 잔여 원인은 사용자 Brave 탭의 **옛 app.js**
+  (Cache-Control 미반영 상태의 휴리스틱 캐시 + SPA 탭은 자체 리로드 없음).
+  journald에는 HTTP 접근 로그가 없어(TraceLayer=debug) 클라이언트가 새 JS를
+  받았는지 서버에서 확인 불가 — 사용자에게 **Ctrl+F5** 안내가 유일한 확인로.
+- **Shift+Enter도 줄바꿈으로 추가** (`(e.altKey || e.shiftKey) + Enter` →
+  `\x1b\r`): 채팅앱 습관 + Claude Code `/terminal-setup` 관례와 일치.
+  참고: bash 프롬프트에서 Shift+Enter는 이제 ESC CR이 되어 즉시 실행이 아닐
+  수 있음(readline M-RET) — claude 중심 사용에선 이득이 더 크다고 판단.
+- 항상 동작하는 폴백: `\` 입력 후 Enter (claude 자체 기능, 프론트 무관).
