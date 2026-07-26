@@ -83,9 +83,23 @@
     term.open(host);
 
     const pane = { id: uid('p'), tabId: null, termId, term, fit, search, ws: null, el, host, node: null };
-    // Focus on click; middle-click pastes the system clipboard (PuTTY/X11 style).
-    el.addEventListener('mousedown', (e) => {
+    // Focus on mousedown — CAPTURE phase, so it still runs when the pane hosts
+    // a mouse-tracking TUI (claude/vim/htop) whose xterm swallows the event
+    // before it bubbles. The deferred re-assert runs AFTER the browser's
+    // default mousedown action: clicking pane chrome (border/padding, i.e. a
+    // non-focusable div) natively moves focus to <body>, which used to leave
+    // the pane marked .focused with a dead keyboard until a second click
+    // ("포커스가 한쪽으로만 되는" 증상). Re-focusing on the next tick pulls
+    // input focus into this pane's textarea whatever the click landed on.
+    el.addEventListener('mousedown', () => {
       focusPane(pane);
+      setTimeout(() => {
+        if (focused === pane) { try { pane.term.focus(); } catch (e) {} }
+      }, 0);
+    }, true);
+    // Middle-click paste stays on bubble (PuTTY/X11 style) so a mouse-tracking
+    // TUI that consumes the event still gets the raw middle-click, not a paste.
+    el.addEventListener('mousedown', (e) => {
       if (e.button === 1) { e.preventDefault(); pasteInto(pane); }
     });
     // focusin is authoritative: whatever gains DOM focus in this pane owns focus,
@@ -104,9 +118,20 @@
     el.addEventListener('copy', () => toast('네이티브 복사 이벤트 감지됨'));
     el.addEventListener('paste', () => toast('네이티브 붙여넣기 이벤트 감지됨'));
     term.onData((d) => {
-      if (focused !== pane) focusPane(pane);
-      if (ctrlArmed && d.length === 1) { d = applyCtrl(d); ctrlArmed = false; updateCtrlBtn(); }
-      sendRaw(d); trackInput(d);
+      // Focus-follow REAL typing only. onData is not just user input — xterm
+      // routes terminal-GENERATED data through it too: focus reports CSI I/O
+      // (mode 1004, which Claude Code enables), DA/DSR query replies, mouse
+      // reports. Those are all ESC-prefixed; following them yanked focus back
+      // to the claude pane every time you clicked the other pane after a
+      // split ("포커스가 계속 한쪽으로만 감"). ESC-prefixed real keystrokes
+      // (arrow keys) only ever come from the DOM-focused pane, where
+      // focused === pane already holds.
+      if (focused !== pane && d.charCodeAt(0) !== 27) focusPane(pane);
+      if (ctrlArmed && focused === pane && d.length === 1) { d = applyCtrl(d); ctrlArmed = false; updateCtrlBtn(); }
+      // Route to THIS pane's socket, not the focused one — a background
+      // pane's auto-replies (focus out, DSR) must never land in another PTY.
+      if (pane.ws && pane.ws.readyState === 1) pane.ws.send(JSON.stringify({ type: 'input', data: d }));
+      trackInput(d);
     });
     term.attachCustomKeyEventHandler(keyHandler);
 
@@ -1018,6 +1043,18 @@
   // workspace shortcuts (any time) and autocomplete nav (while popup is open).
   function keyHandler(e) {
     if (e.type !== 'keydown') return true;
+    // Alt+Enter → ESC CR ("Meta+Enter"): soft newline in claude/codex-style
+    // TUIs without submitting. Handled explicitly instead of trusting xterm:
+    // with the Korean IME active e.key arrives as "Process" (keyCode 229) so
+    // xterm emits nothing, and Korean layouts flag right-Alt as AltGraph which
+    // xterm treats as third-level shift. term.input() routes through onData →
+    // the normal send path.
+    if (e.altKey && !e.ctrlKey && !e.metaKey &&
+        (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
+      e.preventDefault();
+      if (focused) { try { focused.term.input('\x1b\r'); } catch (err) { sendRaw('\x1b\r'); } }
+      return false;
+    }
     if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
       const k = e.key.toLowerCase();
       if (k === 'd') { e.preventDefault(); splitFocused('row'); return false; }

@@ -8,6 +8,49 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ---
 
+## Unreleased
+
+### Fixed / 버그 수정
+- **Console: split-pane focus stuck on one side / 콘솔: 분할 패인 포커스 고착 수정.**
+  In the web console (`mymux-server`), clicking the other pane after a split
+  could leave focus stuck on the pane running Claude Code: xterm routes
+  terminal-generated data (focus reports CSI I/O from mode 1004, DSR replies,
+  mouse reports) through `onData`, and the focus-follow there yanked focus back
+  mid-transition, leaving the new pane marked focused with a dead keyboard.
+  Focus-follow now ignores ESC-prefixed (terminal-generated) data, pane input
+  is routed to that pane's own socket so background auto-replies can never
+  land in another PTY, and pane clicks re-assert textarea focus after the
+  browser's default action — so clicks on pane borders/padding focus the
+  terminal too. Verified end-to-end in headless Chromium against a live
+  server (mouse, touch, and claude-like 1004/1002/1006 modes).
+
+  웹 콘솔(`mymux-server`)에서 분할 후 다른 패인을 클릭해도 포커스가 Claude
+  Code가 실행 중인 패인으로 고착되던 문제를 수정했습니다. xterm은 터미널이
+  생성한 데이터(mode 1004 focus report CSI I/O, DSR 응답, 마우스 리포트)도
+  `onData`로 흘려보내는데, 여기에 걸린 포커스 추적이 전환 중에 포커스를
+  되빼앗아 새 패인이 포커스 표시만 되고 키보드는 죽는 상태가 됐습니다. 이제
+  ESC로 시작하는(터미널 생성) 데이터는 포커스 추적에서 제외하고, 패인 입력은
+  해당 패인 자신의 소켓으로 라우팅해 백그라운드 자동 응답이 다른 PTY에
+  주입되지 않게 했으며, 패인 클릭 시 브라우저 기본 동작 이후 textarea
+  포커스를 재확정해 테두리·여백 클릭에서도 포커스가 잡힙니다.
+
+- **Alt+Enter inserts a newline in TUIs / Alt+Enter 줄바꿈 입력 수정.**
+  Alt+Enter now always sends `ESC CR` — the "Meta+Enter" sequence Claude
+  Code / Codex-style TUIs take as "insert newline without submitting" — in
+  both the web console and the desktop app. Previously it silently did
+  nothing with the Korean IME active (the key arrives as `Process`, keyCode
+  229, so xterm emitted nothing) or when the layout flags right-Alt as
+  AltGraph. Routed through `term.input()` so per-tab broadcast still applies.
+
+  웹 콘솔과 데스크톱 앱 모두에서 Alt+Enter가 항상 `ESC CR`(Claude Code·Codex류
+  TUI가 "제출 없이 줄바꿈"으로 해석하는 Meta+Enter 시퀀스)을 전송합니다.
+  기존에는 한글 IME가 켜져 있으면 키가 `Process`(keyCode 229)로 도착해
+  xterm이 아무것도 보내지 않았고, 오른쪽 Alt(한자키)가 AltGraph로 잡히는
+  배열에서도 무시됐습니다. `term.input()`을 경유해 탭 브로드캐스트 경로도
+  유지됩니다.
+
+---
+
 ## v0.1.34 — 2026-07-18
 
 ### Fixed / 버그 수정

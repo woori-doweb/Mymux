@@ -1824,6 +1824,18 @@ async function createPane(parentEl, shell, args, cwd) {
     // xterm-generated replies). Bare modifiers are skipped: Alt fires when
     // alt-tabbing away, Ctrl on Ctrl+wheel zoom — neither is interaction.
     if (e.type === "keydown" && !NOTIFY_REARM_SKIP_KEYS.has(e.key)) armNotifyCycle(id);
+    // Alt+Enter → ESC CR ("Meta+Enter"): soft newline in claude/codex-style
+    // TUIs without submitting. Handled explicitly instead of trusting xterm:
+    // with the Korean IME active e.key arrives as "Process" (keyCode 229) so
+    // xterm emits nothing, and Korean layouts flag right-Alt as AltGraph which
+    // xterm treats as third-level shift. term.input() routes through onData so
+    // per-tab broadcast still applies.
+    if (e.type === "keydown" && e.altKey && !e.ctrlKey && !e.metaKey &&
+        (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter")) {
+      e.preventDefault();
+      try { term.input("\x1b\r"); } catch { invoke("pty_write", { id, data: "\x1b\r" }); }
+      return false;
+    }
     if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.altKey) {
       // Paste with Ctrl/Cmd+V (also Ctrl+Shift+V). Match e.code too — with the
       // Korean IME active e.key arrives as "ㅍ"/"ㅊ" or "Process", never the
