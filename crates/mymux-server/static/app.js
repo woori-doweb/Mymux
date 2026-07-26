@@ -35,7 +35,9 @@
   let commands = [], cmdEditingId = null, cmdFilter = '';
   let acItems = [], acIndex = -1, acNavigated = false, lineBuf = '', acDismissed = false;
   let ctrlArmed = false;
-  const KEY_SEQ = { esc: '\x1b', tab: '\t', 'c-c': '\x03', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' };
+  // `nl` = ESC CR (Meta+Enter): soft newline in claude/codex-style TUIs —
+  // the mobile keybar's ⏎ button, since phones have no Alt/Shift+Enter.
+  const KEY_SEQ = { esc: '\x1b', tab: '\t', 'c-c': '\x03', nl: '\x1b\r', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' };
 
   // fetch wrapper: cookies ride along automatically (same origin); 401 -> login.
   async function api(path, opts) {

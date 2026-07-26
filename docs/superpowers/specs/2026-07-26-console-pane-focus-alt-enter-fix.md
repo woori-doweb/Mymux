@@ -135,3 +135,12 @@ xterm은 keydown의 `key === "Enter"`일 때만 `ESC CR`(`\x1b\r`)을 만든다.
   참고: bash 프롬프트에서 Shift+Enter는 이제 ESC CR이 되어 즉시 실행이 아닐
   수 있음(readline M-RET) — claude 중심 사용에선 이득이 더 크다고 판단.
 - 항상 동작하는 폴백: `\` 입력 후 Enter (claude 자체 기능, 프론트 무관).
+- **사용법 명세**: 수정자 키를 **누른 채** Enter를 눌러야 한다 (Enter keydown
+  시점에 `altKey`/`shiftKey`가 true — Ctrl+C와 같은 원리). Alt를 탭했다 떼고
+  Enter는 일반 제출. Alt를 누른 동안 커서가 +(십자)로 바뀌는 건 xterm의
+  Alt+드래그 선택 표시로 정상.
+- **UI에 사용법 노출 + 모바일 구멍 해결**: 웰컴 화면에 줄바꿈 키 안내 추가,
+  모바일 키바에 ⏎ 버튼(`KEY_SEQ.nl = '\x1b\r'`) 추가 — 폰에는 Alt가 없어
+  줄바꿈 방법이 아예 없었다. 터치 탭으로 `\u001b\r` 프레임 전송 확인.
+- E2E 시 주의: puppeteer `setViewport({isMobile})`는 **페이지를 리로드**한다 —
+  WebSocket.prototype 래퍼가 사라지므로 뷰포트 변경 후 다시 감쌀 것.
