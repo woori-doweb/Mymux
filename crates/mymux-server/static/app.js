@@ -7,6 +7,10 @@
 (function () {
   'use strict';
   const $ = (s) => document.querySelector(s);
+  // Visible build tag (top bar, next to the username). Bump on every static
+  // deploy — this is how remote support tells whether a browser tab is
+  // actually running the deployed frontend or a stale cached copy.
+  const MYMUX_BUILD = '2026-07-26.4';
 
   let me = null;
   let tabs = [];          // { id, name, root(node), contentEl, focusedPaneId }
@@ -1106,7 +1110,8 @@
   async function boot() {
     const r = await api('/api/auth/me');
     me = await r.json();
-    $('#whoami').textContent = me.username + ' (' + me.role + ')';
+    $('#whoami').textContent = me.username + ' (' + me.role + ') · ' + MYMUX_BUILD;
+    console.log('Mymux Console build', MYMUX_BUILD);
     await refreshList();
     await loadProjects();
     await loadAudit();

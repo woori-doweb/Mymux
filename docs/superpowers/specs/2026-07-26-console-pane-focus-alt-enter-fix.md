@@ -144,3 +144,22 @@ xterm은 keydown의 `key === "Enter"`일 때만 `ESC CR`(`\x1b\r`)을 만든다.
   줄바꿈 방법이 아예 없었다. 터치 탭으로 `\u001b\r` 프레임 전송 확인.
 - E2E 시 주의: puppeteer `setViewport({isMobile})`는 **페이지를 리로드**한다 —
   WebSocket.prototype 래퍼가 사라지므로 뷰포트 변경 후 다시 감쌀 것.
+
+## 후속 3 (같은 날): "여전히 안 됨" → 라이브 스택 직접 검증으로 종결
+
+- **사용자와 동일한 접근 경로로 라이브 E2E 완료**: 임시 계정(gjc-e2e, 검증 후
+  disable)을 라이브 DB에 만들고 headless Chromium으로
+  `https://localhost-0.tail2ca93e.ts.net:9443` (Tailscale Serve → 7070,
+  cookie_secure=true, CIDR 100.64/10) 경유 로그인 → 라이브가 서빙하는
+  app.js에 수정 포함 확인 → 라이브 패인에서 claude 실행 → Alt+Enter /
+  Shift+Enter로 `line1 / line2-alt / line3-shift` 3줄 입력 스크린샷 확보.
+  **배포 환경 자체는 정상 동작이 증명됨.**
+- 남는 변수는 클라이언트 탭이 실행 중인 JS뿐 → **상단바 빌드 태그** 추가:
+  `MYMUX_BUILD` 상수를 `#whoami` 옆에 표시 (`user (role) · 2026-07-26.4`).
+  원격 지원 시 "상단에 2026-07-26.4 보이나요?"로 즉시 판별.
+  **규칙: static 배포 때마다 MYMUX_BUILD를 올릴 것** (deploy.sh의 cmp 검증
+  때문에 배포 후 sed 스탬핑은 불가 — 소스에서 올리고 배포).
+- 라이브 테스트 계정 정리: 터미널 종료·탭 닫기(DELETE) 후
+  `user disable --username gjc-e2e` (세션 1개 회수 확인).
+- 참고: 127.0.0.1:7070 직접 접속은 login/API가 CIDR(100.64/10)에 걸릴 수
+  있으므로 라이브 검증은 반드시 ts.net URL로.
