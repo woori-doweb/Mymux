@@ -34,29 +34,31 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
   주입되지 않게 했으며, 패인 클릭 시 브라우저 기본 동작 이후 textarea
   포커스를 재확정해 테두리·여백 클릭에서도 포커스가 잡힙니다.
 
-- **Alt+Enter / Shift+Enter insert a newline in TUIs / Alt+Enter·Shift+Enter 줄바꿈 입력 수정.**
-  Alt+Enter now always sends `ESC CR` — the "Meta+Enter" sequence Claude
-  Code / Codex-style TUIs take as "insert newline without submitting" — in
-  both the web console and the desktop app, and Shift+Enter (chat-app habit,
-  Claude Code `/terminal-setup` convention) does the same in the web console.
-  Previously Alt+Enter silently did nothing with the Korean IME active (the
-  key arrives as `Process`, keyCode 229, so xterm emitted nothing) or when
-  the layout flags right-Alt as AltGraph. Routed through `term.input()` so
-  per-tab broadcast still applies. Verified against a live Claude Code TUI:
-  the input box grows lines instead of submitting. The welcome screen now
-  documents the keys (hold Alt/Shift, then Enter), and the mobile key bar
-  gains a ⏎ button — phones have no Alt, so newline was impossible there.
+- **Alt+Enter / Shift+Enter insert a newline in TUIs (gjc & Claude Code) / Alt+Enter·Shift+Enter 줄바꿈 입력 수정 (gjc·Claude Code).**
+  Alt+Enter and Shift+Enter (web console) and Alt+Enter (desktop) now send a
+  lone LF (`\n`, Ctrl+J) — the byte that inserts a soft newline in BOTH the
+  gjc and Claude Code input boxes (verified against the live TUIs); at a
+  shell prompt it simply acts like Enter. The first attempt sent `ESC CR`
+  ("Meta+Enter"), which only claude honors — gjc consumes it as its separate
+  alt+enter action, which is why "still no newline" persisted in gjc panes.
+  Previously the keys did nothing at all with the Korean IME active (the key
+  arrives as `Process`, keyCode 229, so xterm emitted nothing) or when the
+  layout flags right-Alt as AltGraph. Routed through `term.input()` so
+  per-tab broadcast still applies. The welcome screen documents the keys
+  (hold Alt/Shift, then Enter), and the mobile key bar gains a ⏎ button —
+  phones have no Alt, so newline was impossible there.
 
-  웹 콘솔과 데스크톱 앱 모두에서 Alt+Enter가 항상 `ESC CR`(Claude Code·Codex류
-  TUI가 "제출 없이 줄바꿈"으로 해석하는 Meta+Enter 시퀀스)을 전송하고, 웹
-  콘솔에서는 Shift+Enter(채팅앱 습관, Claude Code `/terminal-setup` 관례)도
-  동일하게 동작합니다. 기존에는 한글 IME가 켜져 있으면 키가
-  `Process`(keyCode 229)로 도착해 xterm이 아무것도 보내지 않았고, 오른쪽
+  웹 콘솔의 Alt+Enter·Shift+Enter와 데스크톱의 Alt+Enter가 LF(`\n`, Ctrl+J)
+  한 바이트를 전송합니다 — gjc와 Claude Code 입력창 **모두**에서 제출 없이
+  줄바꿈되는 값으로, 실제 TUI에서 실측 검증했습니다(셸 프롬프트에서는 Enter와
+  동일하게 동작). 첫 시도는 claude만 해석하는 `ESC CR`(Meta+Enter)을 보내
+  gjc 패인에서 "여전히 줄바꿈 안 됨"이 재현됐습니다 — gjc는 그 시퀀스를
+  별도의 alt+enter 액션으로 소비합니다. 그 이전에는 한글 IME가 켜져 있으면
+  키가 `Process`(keyCode 229)로 도착해 아무것도 전송되지 않았고, 오른쪽
   Alt(한자키)가 AltGraph로 잡히는 배열에서도 무시됐습니다. `term.input()`을
-  경유해 탭 브로드캐스트 경로도 유지되며, 실제 Claude Code TUI에서 입력창이
-  제출 없이 여러 줄로 늘어나는 것까지 확인했습니다. 웰컴 화면에 사용법
-  (Alt/Shift를 누른 채 Enter)을 표기했고, Alt 키가 없는 모바일을 위해 하단
-  키바에 ⏎(줄바꿈) 버튼을 추가했습니다.
+  경유해 탭 브로드캐스트 경로도 유지됩니다. 웰컴 화면에 사용법(Alt/Shift를
+  누른 채 Enter)을 표기했고, Alt 키가 없는 모바일을 위해 하단 키바에
+  ⏎(줄바꿈) 버튼을 추가했습니다.
 
 - **Console: closing a split pane no longer jumps focus to the first terminal / 콘솔: 패인 닫을 때 첫번째 터미널로 포커스 점프 수정.**
   With 2–3+ splits, closing any pane always focused the tab's first pane.

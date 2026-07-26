@@ -163,3 +163,22 @@ xterm은 keydown의 `key === "Enter"`일 때만 `ESC CR`(`\x1b\r`)을 만든다.
   `user disable --username gjc-e2e` (세션 1개 회수 확인).
 - 참고: 127.0.0.1:7070 직접 접속은 login/API가 CIDR(100.64/10)에 걸릴 수
   있으므로 라이브 검증은 반드시 ts.net URL로.
+
+## 후속 4 (같은 날): 대상 TUI는 claude가 아니라 **gjc** — 줄바꿈 바이트 교체
+
+- 사용자 정정: 줄바꿈이 안 되는 건 **gjc 입력창**. gjc TUI 소스
+  (`@gajae-code/tui/src/components/editor.ts`) 분석 + 실측 결과:
+  - `\x1b\r`(기존 전송값)은 gjc가 **별도 "alt+enter" 액션으로 소비** → 줄바꿈 안 됨
+    (실측: `aaabbb` 붙음). claude에서만 줄바꿈이었음.
+  - gjc 고유 shift+enter 인코딩 `\x1b[13;2~`(psmux 패턴)는 gjc에선 줄바꿈이지만
+    **bash 프롬프트에 `;2~` 잔여 문자를 흘림** → 탈락.
+  - **`\n`(LF, Ctrl+J)이 유니버설**: gjc 줄바꿈 ✅ (editor.ts의
+    `data === "\n"` 분기), claude 줄바꿈 ✅ (실측), bash에선 Enter와 동일(무해).
+    gjc 입력창 placeholder도 "Shift+Enter/Ctrl+J: New line"으로 안내.
+- 수정: 콘솔 Alt+Enter/Shift+Enter/모바일 ⏎(`KEY_SEQ.nl`) 모두 `\n` 전송,
+  데스크톱 Alt+Enter도 `\n`으로 통일. 빌드 태그 2026-07-26.5 배포.
+- 검증: 같은 로컬 스택에서 **실키**로 claude(`c2-alt`/`c3-shift`)와
+  gjc(`g2-alt`/`g3-shift`) 모두 3줄 입력 스크린샷 확보.
+- 교훈: "터미널에서 줄바꿈" 요구는 **대상 TUI별로 기대 바이트가 다르다**.
+  다음에 새 TUI가 추가되면 `\n` 해석부터 실측할 것. gjc 키 파서는
+  `@gajae-code/tui/src/keys.ts` (kitty CSI-u + psmux `\x1b[13;2~` + 네이티브).

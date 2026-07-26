@@ -10,7 +10,7 @@
   // Visible build tag (top bar, next to the username). Bump on every static
   // deploy — this is how remote support tells whether a browser tab is
   // actually running the deployed frontend or a stale cached copy.
-  const MYMUX_BUILD = '2026-07-26.4';
+  const MYMUX_BUILD = '2026-07-26.5';
 
   let me = null;
   let tabs = [];          // { id, name, root(node), contentEl, focusedPaneId }
@@ -39,9 +39,11 @@
   let commands = [], cmdEditingId = null, cmdFilter = '';
   let acItems = [], acIndex = -1, acNavigated = false, lineBuf = '', acDismissed = false;
   let ctrlArmed = false;
-  // `nl` = ESC CR (Meta+Enter): soft newline in claude/codex-style TUIs —
-  // the mobile keybar's ⏎ button, since phones have no Alt/Shift+Enter.
-  const KEY_SEQ = { esc: '\x1b', tab: '\t', 'c-c': '\x03', nl: '\x1b\r', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' };
+  // `nl` = LF (Ctrl+J): soft newline for the mobile keybar's ⏎ button, since
+  // phones have no Alt/Shift+Enter. A lone \n inserts a newline in BOTH gjc
+  // and Claude Code (verified empirically); ESC CR only worked in claude —
+  // gjc consumes it as its separate "alt+enter" action.
+  const KEY_SEQ = { esc: '\x1b', tab: '\t', 'c-c': '\x03', nl: '\n', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' };
 
   // fetch wrapper: cookies ride along automatically (same origin); 401 -> login.
   async function api(path, opts) {
@@ -1053,9 +1055,12 @@
   // workspace shortcuts (any time) and autocomplete nav (while popup is open).
   function keyHandler(e) {
     if (e.type !== 'keydown') return true;
-    // Alt+Enter / Shift+Enter → ESC CR ("Meta+Enter"): soft newline in
-    // claude/codex-style TUIs without submitting. Shift+Enter matches the
-    // chat-app habit and Claude Code's /terminal-setup convention. Handled
+    // Alt+Enter / Shift+Enter → LF (Ctrl+J): soft newline without submitting.
+    // \n is the byte that inserts a newline in BOTH gjc and Claude Code
+    // (verified against live TUIs); the previous ESC CR ("Meta+Enter") only
+    // worked in claude — gjc consumes \x1b\r as its own "alt+enter" action,
+    // and gjc's native Shift+Enter encoding (\x1b[13;2~) leaks ";2~" into a
+    // bash prompt. At a shell, \n simply behaves like Enter. Handled
     // explicitly instead of trusting xterm: with the Korean IME active e.key
     // arrives as "Process" (keyCode 229) so xterm emits nothing, and Korean
     // layouts flag right-Alt as AltGraph which xterm treats as third-level
@@ -1063,7 +1068,7 @@
     if ((e.altKey || e.shiftKey) && !e.ctrlKey && !e.metaKey &&
         (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
       e.preventDefault();
-      if (focused) { try { focused.term.input('\x1b\r'); } catch (err) { sendRaw('\x1b\r'); } }
+      if (focused) { try { focused.term.input('\n'); } catch (err) { sendRaw('\n'); } }
       return false;
     }
     if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
