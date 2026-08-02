@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual retry lever — CI was disabled for a month (every day-one run failed
+  # and logs have since expired), so keep a way to rerun it without a push.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref.
 concurrency:
@@ -11,6 +14,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Static guard for the macOS/WKWebView landmines (Korean IME composition,
+  # focus keeper, Keychain credentials, clipboard caps). Cheap, runs first —
+  # see docs/macos-webkit-gotchas.md. Runtime behavior still needs the manual
+  # mac smoke test before release; this only catches the guards being deleted.
+  macos-gotchas:
+    name: macOS gotchas guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check macOS WebKit source invariants
+        run: node scripts/check-macos-gotchas.mjs
+
   build:
     name: build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

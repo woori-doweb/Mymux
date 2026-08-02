@@ -1,5 +1,8 @@
 use mycli_core::{CommandStore, SavedCommand};
 use serde::Serialize;
+use serde_json::Value;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
 
 #[derive(Serialize)]
 pub struct CommandDto {
@@ -8,6 +11,8 @@ pub struct CommandDto {
     pub command: String,
     pub description: String,
     pub favorite: bool,
+    #[serde(rename = "favoriteTarget")]
+    pub favorite_target: String,
     pub cwd: String,
     pub alias: String,
 }
@@ -20,6 +25,7 @@ impl From<SavedCommand> for CommandDto {
             command: c.command,
             description: c.description,
             favorite: c.favorite,
+            favorite_target: c.favorite_target,
             cwd: c.cwd,
             alias: c.alias,
         }
@@ -45,26 +51,56 @@ const DEFAULT_COMMANDS: &[(&str, &str, &str)] = &[
     ("c&p", "git add -A && git commit -m \"update\" && git push", "Commit and push"),
 ];
 
+const DEFAULT_WORKLOG_COMMAND: (&str, &str, &str, &str) = (
+    "작업기록 남기고 마무리",
+    "작업기록 남기고 마무리해줘",
+    "AI session: record completed work and finish the task.",
+    "LOG",
+);
+
 /// Seed built-in shortcuts once (tracked by a marker file so deletions stick).
 fn seed_default_commands(s: &CommandStore) {
     let marker = match dirs::home_dir() {
         Some(h) => h.join(".mycli").join(".defaults_seeded"),
         None => return,
     };
-    if marker.exists() {
+    if !marker.exists() {
+        let existing = s.list().unwrap_or_default();
+        for (name, command, desc) in DEFAULT_COMMANDS {
+            if !existing.iter().any(|c| c.name == *name) {
+                let _ = s.add(SavedCommand::new(
+                    name.to_string(),
+                    command.to_string(),
+                    desc.to_string(),
+                ));
+            }
+        }
+        let _ = std::fs::write(&marker, b"1");
+    }
+
+    // This was added after the original defaults marker existed. Seed it with
+    // its own one-time marker so existing installs receive it without making a
+    // command the user deliberately deleted reappear on every launch.
+    let worklog_marker = marker.with_file_name(".worklog_command_seeded_v1");
+    if worklog_marker.exists() {
         return;
     }
     let existing = s.list().unwrap_or_default();
-    for (name, command, desc) in DEFAULT_COMMANDS {
-        if !existing.iter().any(|c| c.name == *name) {
-            let _ = s.add(SavedCommand::new(
-                name.to_string(),
-                command.to_string(),
-                desc.to_string(),
-            ));
-        }
+    if !existing
+        .iter()
+        .any(|c| c.command == DEFAULT_WORKLOG_COMMAND.1)
+    {
+        let mut cmd = SavedCommand::new(
+            DEFAULT_WORKLOG_COMMAND.0.to_string(),
+            DEFAULT_WORKLOG_COMMAND.1.to_string(),
+            DEFAULT_WORKLOG_COMMAND.2.to_string(),
+        );
+        cmd.alias = DEFAULT_WORKLOG_COMMAND.3.to_string();
+        cmd.favorite = true;
+        cmd.favorite_target = "ai".to_string();
+        let _ = s.add(cmd);
     }
-    let _ = std::fs::write(&marker, b"1");
+    let _ = std::fs::write(&worklog_marker, b"1");
 }
 
 #[tauri::command]
@@ -102,20 +138,25 @@ pub fn update_command(
     alias: Option<String>,
 ) -> Result<(), String> {
     let s = store()?;
-    // Preserve the existing favorite flag (the edit form doesn't carry it).
-    let favorite = s
+    // Preserve shortcut settings; the edit form does not carry either field.
+    let existing = s
         .list()
         .map_err(|e| e.to_string())?
         .iter()
         .find(|c| c.id == id)
-        .map(|c| c.favorite)
-        .unwrap_or(false);
+        .cloned();
+    let favorite = existing.as_ref().map(|c| c.favorite).unwrap_or(false);
+    let favorite_target = existing
+        .as_ref()
+        .map(|c| c.favorite_target.clone())
+        .unwrap_or_else(|| "shell".to_string());
     let cmd = SavedCommand {
         id,
         name,
         command,
         description,
         favorite,
+        favorite_target,
         cwd: cwd.unwrap_or_default(),
         alias: alias.unwrap_or_default(),
     };
@@ -123,14 +164,53 @@ pub fn update_command(
 }
 
 #[tauri::command]
-pub fn set_favorite(id: String, favorite: bool) -> Result<(), String> {
+pub fn set_favorite(
+    id: String,
+    favorite: bool,
+    favorite_target: Option<String>,
+) -> Result<(), String> {
+    if favorite {
+        if let Some(target) = favorite_target.as_deref() {
+            if !is_valid_favorite_target(target) {
+                return Err(format!("Invalid favorite target: {target}"));
+            }
+        }
+    }
     let s = store()?;
     let mut cmds = s.list().map_err(|e| e.to_string())?;
     if let Some(c) = cmds.iter_mut().find(|c| c.id == id) {
         c.favorite = favorite;
+        if favorite {
+            if let Some(target) = favorite_target {
+                c.favorite_target = target;
+            }
+        }
         s.update(c.clone()).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn is_valid_favorite_target(target: &str) -> bool {
+    matches!(target, "shell" | "ai" | "both")
+}
+
+#[cfg(test)]
+mod favorite_target_tests {
+    use super::is_valid_favorite_target;
+
+    #[test]
+    fn accepts_all_supported_favorite_targets() {
+        for target in ["shell", "ai", "both"] {
+            assert!(is_valid_favorite_target(target), "{target}");
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_favorite_targets() {
+        for target in ["", "all", "terminal", "Shell"] {
+            assert!(!is_valid_favorite_target(target), "{target}");
+        }
+    }
 }
 
 #[tauri::command]
@@ -167,14 +247,103 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
-/// Tail of the newest Codex CLI session rollout (~/.codex/sessions/Y/M/D/*.jsonl).
-/// The frontend mines it for the last `rate_limits` snapshot so the toolbar can
-/// show account-wide Codex usage. Rollouts easily exceed the read_text_file cap,
-/// hence a dedicated tail reader. Directory names are zero-padded dates, so the
-/// lexicographically largest entry is the newest — only the newest day dir that
-/// actually contains a rollout is scanned (by mtime) instead of walking them all.
+fn sorted_dirs_desc(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut v: Vec<_> = std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+        .unwrap_or_default();
+    v.sort();
+    v.reverse();
+    v
+}
+
+fn collect_rollout_candidates(
+    sessions: &std::path::Path,
+) -> Vec<(std::time::SystemTime, std::path::PathBuf)> {
+    let mut candidates = Vec::new();
+    for year in sorted_dirs_desc(sessions) {
+        for month in sorted_dirs_desc(&year) {
+            for day in sorted_dirs_desc(&month) {
+                if let Ok(rd) = std::fs::read_dir(&day) {
+                    for e in rd.flatten() {
+                        let path = e.path();
+                        if path.extension().is_some_and(|x| x == "jsonl") {
+                            if let Ok(modified) = e.metadata().and_then(|m| m.modified()) {
+                                candidates.push((modified, path));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates
+}
+
+fn normalize_rollout_cwd_for(value: &str, windows: bool) -> Option<String> {
+    let mut normalized = if windows {
+        value.replace('\\', "/").to_lowercase()
+    } else {
+        value.to_string()
+    };
+    while normalized.ends_with('/') {
+        let preserve_root = normalized == "/"
+            || windows
+                && normalized.len() == 3
+                && normalized.as_bytes()[1] == b':'
+                && normalized.as_bytes()[2] == b'/';
+        if preserve_root {
+            break;
+        }
+        normalized.pop();
+    }
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn rollout_session_cwd_for(path: &std::path::Path, windows: bool) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+        if event.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        if let Some(cwd) = event.pointer("/payload/cwd").and_then(Value::as_str) {
+            return normalize_rollout_cwd_for(cwd, windows);
+        }
+    }
+    None
+}
+
+fn select_rollout_candidate_for(
+    candidates: &[(std::time::SystemTime, std::path::PathBuf)],
+    cwd: Option<&str>,
+    windows: bool,
+) -> Option<std::path::PathBuf> {
+    if let Some(target) = cwd.and_then(|value| normalize_rollout_cwd_for(value, windows)) {
+        for (_, path) in candidates {
+            if rollout_session_cwd_for(path, windows).as_deref() == Some(target.as_str()) {
+                return Some(path.clone());
+            }
+        }
+    }
+    candidates.first().map(|(_, path)| path.clone())
+}
+
+fn select_rollout_candidate(
+    candidates: &[(std::time::SystemTime, std::path::PathBuf)],
+    cwd: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    select_rollout_candidate_for(candidates, cwd, cfg!(windows))
+}
+
+/// Tail of the newest matching Codex CLI rollout
+/// (~/.codex/sessions/Y/M/D/*.jsonl). When a pane cwd is supplied, search every
+/// date directory and prefer the newest rollout whose session metadata has that
+/// exact normalized cwd. Fall back to the globally newest rollout only when no
+/// exact match exists. Rollouts exceed the general text-reader cap, hence a
+/// dedicated tail reader.
 #[tauri::command]
-pub fn codex_rollout_tail(max_bytes: Option<u64>) -> Result<String, String> {
+pub fn codex_rollout_tail(max_bytes: Option<u64>, cwd: Option<String>) -> Result<String, String> {
     use std::io::{Read, Seek, SeekFrom};
     let max_bytes = max_bytes.unwrap_or(65536).min(1_000_000);
     let sessions = dirs::home_dir()
@@ -182,39 +351,9 @@ pub fn codex_rollout_tail(max_bytes: Option<u64>) -> Result<String, String> {
         .join(".codex")
         .join("sessions");
 
-    fn sorted_dirs_desc(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-        let mut v: Vec<_> = std::fs::read_dir(dir)
-            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
-            .unwrap_or_default();
-        v.sort();
-        v.reverse();
-        v
-    }
-
-    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-    'search: for year in sorted_dirs_desc(&sessions) {
-        for month in sorted_dirs_desc(&year) {
-            for day in sorted_dirs_desc(&month) {
-                if let Ok(rd) = std::fs::read_dir(&day) {
-                    for e in rd.flatten() {
-                        let p = e.path();
-                        if p.extension().is_some_and(|x| x == "jsonl") {
-                            if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
-                                if newest.as_ref().map_or(true, |(t, _)| m > *t) {
-                                    newest = Some((m, p));
-                                }
-                            }
-                        }
-                    }
-                }
-                if newest.is_some() {
-                    break 'search; // newest day with any rollout is enough
-                }
-            }
-        }
-    }
-
-    let (_, path) = newest.ok_or("No codex rollout found")?;
+    let candidates = collect_rollout_candidates(&sessions);
+    let path = select_rollout_candidate(&candidates, cwd.as_deref())
+        .ok_or("No codex rollout found")?;
     let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let len = f.metadata().map_err(|e| e.to_string())?.len();
     let start = len.saturating_sub(max_bytes);
@@ -222,6 +361,250 @@ pub fn codex_rollout_tail(max_bytes: Option<u64>) -> Result<String, String> {
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     Ok(String::from_utf8_lossy(&buf).to_string())
+}
+
+#[cfg(test)]
+mod codex_rollout_tests {
+    use super::{
+        collect_rollout_candidates, normalize_rollout_cwd_for, select_rollout_candidate_for,
+    };
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    fn unique_test_dir() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("mymux-rollout-test-{}-{nonce}", std::process::id()))
+    }
+
+    fn write_rollout(path: &Path, cwd: &str, marker: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let meta = serde_json::json!({
+            "type": "session_meta",
+            "payload": { "cwd": cwd, "marker": marker }
+        });
+        std::fs::write(path, format!("{meta}\n")).unwrap();
+    }
+
+    fn set_modified(path: &Path, modified: SystemTime) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    #[test]
+    fn cwd_normalization_is_target_aware() {
+        assert_eq!(
+            normalize_rollout_cwd_for(r"D:\Project\Mymux\\", true),
+            Some("d:/project/mymux".to_string())
+        );
+        assert_eq!(
+            normalize_rollout_cwd_for("d:/PROJECT/mymux/", true),
+            Some("d:/project/mymux".to_string())
+        );
+        assert_eq!(
+            normalize_rollout_cwd_for(r"C:\", true),
+            Some("c:/".to_string())
+        );
+        assert_eq!(
+            normalize_rollout_cwd_for("/", true),
+            Some("/".to_string())
+        );
+        assert_eq!(
+            normalize_rollout_cwd_for("/Project/Mymux/", false),
+            Some("/Project/Mymux".to_string())
+        );
+        assert_eq!(
+            normalize_rollout_cwd_for("/project/mymux/", false),
+            Some("/project/mymux".to_string())
+        );
+        assert_ne!(
+            normalize_rollout_cwd_for("/Project/Mymux", false),
+            normalize_rollout_cwd_for("/project/mymux", false)
+        );
+        assert_eq!(
+            normalize_rollout_cwd_for(r"/tmp\Name/", false),
+            Some(r"/tmp\Name".to_string())
+        );
+        assert_eq!(
+            normalize_rollout_cwd_for("/", false),
+            Some("/".to_string())
+        );
+    }
+
+    #[test]
+    fn exact_cwd_does_not_match_parent_prefix() {
+        let root = unique_test_dir();
+        let prefix = root.join("prefix.jsonl");
+        let exact = root.join("exact.jsonl");
+        write_rollout(&prefix, r"D:\Project\Mymux-old", "prefix");
+        write_rollout(&exact, r"d:/project/mymux/", "exact");
+        let candidates = vec![
+            (SystemTime::UNIX_EPOCH + Duration::from_secs(2), prefix.clone()),
+            (SystemTime::UNIX_EPOCH + Duration::from_secs(1), exact.clone()),
+        ];
+
+        assert_eq!(
+            select_rollout_candidate_for(&candidates, Some(r"D:\Project\Mymux"), true),
+            Some(exact)
+        );
+        assert_eq!(
+            select_rollout_candidate_for(&candidates, Some(r"D:\Project\Missing"), true),
+            Some(prefix)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prior_day_exact_session_beats_newer_unrelated_rollout() {
+        let root = unique_test_dir();
+        let matching = root.join("2026").join("07").join("29").join("matching.jsonl");
+        let unrelated = root.join("2026").join("07").join("30").join("unrelated.jsonl");
+        write_rollout(&matching, r"D:\Project\Mymux", "matching-prior-day");
+        write_rollout(&unrelated, r"D:\Project\Other", "unrelated-newer-day");
+        set_modified(
+            &matching,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+        );
+        set_modified(
+            &unrelated,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+        );
+
+        let candidates = collect_rollout_candidates(&root);
+        assert_eq!(candidates.len(), 2, "all date directories must be searched");
+        assert_eq!(candidates[0].1, unrelated, "candidates must be ordered by mtime");
+
+        assert_eq!(
+            select_rollout_candidate_for(&candidates, Some(r"D:\Project\Mymux"), true),
+            Some(matching)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexResetCredits {
+    pub available_count: u64,
+    pub credits: Vec<CodexResetCredit>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexResetCredit {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub expires_at: Option<i64>,
+}
+
+fn app_server_request(
+    _child: &mut Child,
+    stdin: &mut ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+    id: u64,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    let request = serde_json::json!({
+        "method": method,
+        "id": id,
+        "params": params.unwrap_or_else(|| serde_json::json!({})),
+    });
+    writeln!(stdin, "{}", request).map_err(|e| format!("Codex app-server write failed: {e}"))?;
+    stdin.flush().map_err(|e| format!("Codex app-server flush failed: {e}"))?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).map_err(|e| format!("Codex app-server read failed: {e}"))?;
+        if n == 0 { return Err("Codex app-server closed before replying".to_string()); }
+        let value: Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if value.get("id").and_then(Value::as_u64) != Some(id) { continue; }
+        if let Some(error) = value.get("error") { return Err(format!("Codex app-server error: {error}")); }
+        return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+    }
+}
+
+fn start_codex_app_server() -> Result<(Child, ChildStdin, BufReader<std::process::ChildStdout>), String> {
+    let mut command = Command::new("codex");
+    command
+        .args(["app-server", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    // CREATE_NO_WINDOW prevents the periodically polled app-server process
+    // from flashing a console window and interrupting terminal input.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Cannot start Codex app-server: {e}"))?;
+    let stdin = child.stdin.take().ok_or("Codex app-server stdin unavailable")?;
+    let stdout = child.stdout.take().ok_or("Codex app-server stdout unavailable")?;
+    Ok((child, stdin, BufReader::new(stdout)))
+}
+
+fn initialize_codex_app_server(
+    child: &mut Child,
+    stdin: &mut ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+) -> Result<(), String> {
+    app_server_request(child, stdin, reader, 1, "initialize", Some(serde_json::json!({
+        "clientInfo": { "name": "mymux", "title": "Mymux", "version": env!("CARGO_PKG_VERSION") },
+        "capabilities": { "experimentalApi": true }
+    })))?;
+    writeln!(stdin, "{}", serde_json::json!({"method":"initialized","params":{}}))
+        .map_err(|e| format!("Codex app-server initialized failed: {e}"))?;
+    stdin.flush().map_err(|e| format!("Codex app-server flush failed: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn codex_reset_credits() -> Result<CodexResetCredits, String> {
+    let (mut child, mut stdin, mut reader) = start_codex_app_server()?;
+    let result = (|| {
+        initialize_codex_app_server(&mut child, &mut stdin, &mut reader)?;
+        let result = app_server_request(&mut child, &mut stdin, &mut reader, 2, "account/rateLimits/read", None)?;
+        let credits = result.get("rateLimitResetCredits");
+        let rows = credits.and_then(|v| v.get("credits")).and_then(Value::as_array)
+            .map(|items| items.iter().map(|item| CodexResetCredit {
+                id: item.get("id").and_then(Value::as_str).map(str::to_string),
+                title: item.get("title").and_then(Value::as_str).map(str::to_string),
+                description: item.get("description").and_then(Value::as_str).map(str::to_string),
+                expires_at: item.get("expiresAt").and_then(Value::as_i64),
+            }).collect()).unwrap_or_default();
+        Ok(CodexResetCredits {
+            available_count: credits.and_then(|v| v.get("availableCount")).and_then(Value::as_u64).unwrap_or(0),
+            credits: rows,
+        })
+    })();
+    let _ = child.kill();
+    result
+}
+
+#[tauri::command]
+pub fn codex_consume_reset_credit(credit_id: Option<String>) -> Result<String, String> {
+    let (mut child, mut stdin, mut reader) = start_codex_app_server()?;
+    let result = (|| {
+        initialize_codex_app_server(&mut child, &mut stdin, &mut reader)?;
+        let mut params = serde_json::json!({ "idempotencyKey": uuid::Uuid::new_v4().to_string() });
+        if let Some(id) = credit_id.filter(|s| !s.trim().is_empty()) { params["creditId"] = Value::String(id); }
+        let result = app_server_request(&mut child, &mut stdin, &mut reader, 3, "account/rateLimitResetCredit/consume", Some(params))?;
+        Ok(result.get("outcome").and_then(Value::as_str).unwrap_or("unknown").to_string())
+    })();
+    let _ = child.kill();
+    result
 }
 
 /// Account-wide Claude usage (5-hour + weekly rate-limit utilization) fetched
@@ -386,6 +769,96 @@ pub fn window_attention(window: tauri::WebviewWindow) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Show the desktop buddy overlay at the active monitor's bottom-right and hand
+/// the finished session's details to its webview. Called when a task completes
+/// while the main window is in the background, so the notice is visible even
+/// with Mymux minimized or covered by another app. (macOS positions native
+/// windows freely too; the OS just tends to be watched top-right — either way
+/// the overlay owns its own coordinates.)
+#[tauri::command]
+pub fn buddy_overlay_show(
+    app: tauri::AppHandle,
+    session_id: i64,
+    title: String,
+    character: String,
+    dialect: String,
+    long_task: bool,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+    let overlay = app
+        .get_webview_window("buddy-overlay")
+        .ok_or_else(|| "buddy-overlay window missing".to_string())?;
+    // Bottom-right of the current monitor (fall back to the primary monitor).
+    let monitor = overlay
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| overlay.primary_monitor().ok().flatten());
+    if let Some(m) = monitor {
+        let ms = m.size();
+        let mp = m.position();
+        if let Ok(os) = overlay.outer_size() {
+            // Reserve scales with DPI: a fixed logical margin is more physical
+            // pixels at high scale, so multiply by the monitor's scale factor.
+            let margin = (24.0 * m.scale_factor()) as i32;
+            let reserve = (56.0 * m.scale_factor()) as i32; // clear taskbar / Dock
+            let x = mp.x + ms.width as i32 - os.width as i32 - margin;
+            let y = mp.y + ms.height as i32 - os.height as i32 - reserve;
+            let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    }
+    overlay.show().map_err(|e| e.to_string())?;
+    let _ = overlay.set_always_on_top(true);
+    // Target the overlay explicitly — Tauri v2 emit() broadcasts app-wide.
+    app.emit_to(
+        "buddy-overlay",
+        "buddy:show",
+        serde_json::json!({
+            "sessionId": session_id,
+            "title": title,
+            "character": character,
+            "dialect": dialect,
+            "longTask": long_task,
+        }),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Hide the buddy overlay — its 15s fade-out timer fired, or the app regained
+/// focus and no longer needs the desktop notice.
+#[tauri::command]
+pub fn buddy_overlay_hide(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(overlay) = app.get_webview_window("buddy-overlay") {
+        overlay.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Buddy clicked: bring the main window forward (un-minimize + focus) and tell
+/// the frontend which session to jump to.
+#[tauri::command]
+pub fn buddy_overlay_focus_main(
+    app: tauri::AppHandle,
+    session_id: Option<i64>,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+    if let Some(overlay) = app.get_webview_window("buddy-overlay") {
+        let _ = overlay.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+        // Bring the app forward regardless; only the session jump needs an id.
+        if let Some(sid) = session_id {
+            let _ = app.emit_to("main", "buddy:goto", sid);
+        }
+    }
+    Ok(())
+}
+
 /// Open a native file picker and return the chosen path (e.g. an SSH key file).
 /// Returns None if the user cancels. Runs on a worker thread (sync command) so
 /// the blocking dialog dispatches to the main thread without deadlocking.
@@ -503,21 +976,4 @@ pub fn fs_create_dir(dir: String, name: String) -> Result<String, String> {
     }
     std::fs::create_dir(&target).map_err(|e| e.to_string())?;
     Ok(target.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub fn execute_command(command_text: String) -> Result<String, String> {
-    let output = mycli_core::executor::run(&command_text).map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !stderr.is_empty() && !output.status.success() {
-        return Err(stderr);
-    }
-
-    let mut result = stdout;
-    if !stderr.is_empty() {
-        result.push_str(&stderr);
-    }
-    Ok(result)
 }

@@ -12,14 +12,28 @@ const ICON = {
   globe: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.6 2.7 3.9 5.9 3.9 9s-1.3 6.3-3.9 9c-2.6-2.7-3.9-5.9-3.9-9S9.4 5.7 12 3z"/></svg>`,
   moon: `<svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M20 14.5A8 8 0 0 1 9.5 4 7 7 0 1 0 20 14.5z"/></svg>`,
   sun: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>`,
+  drag: `<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="8" cy="6" r="1.5"/><circle cx="16" cy="6" r="1.5"/><circle cx="8" cy="12" r="1.5"/><circle cx="16" cy="12" r="1.5"/><circle cx="8" cy="18" r="1.5"/><circle cx="16" cy="18" r="1.5"/></svg>`,
+  edit: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>`,
+  memo: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l3 3v15H5z"/><path d="M16 3v4h4M8 11h8M8 15h8"/></svg>`,
+  copy: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></svg>`,
+  star: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>`,
+  close: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  check: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>`,
+  keyboard: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8"/></svg>`,
+  play: `<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.8v14.4a1 1 0 0 0 1.5.9l11-7.2a1 1 0 0 0 0-1.8l-11-7.2A1 1 0 0 0 7 4.8z"/></svg>`,
+  trash: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 3h6l1 4H8zM6 7l1 14h10l1-14M10 11v6M14 11v6"/></svg>`,
 };
 
 // Clipboard: lazy load
 async function clipboardWrite(text) {
   try {
     const clip = window.__TAURI_PLUGIN_CLIPBOARD_MANAGER__;
-    if (clip && clip.writeText) await clip.writeText(text);
-  } catch {}
+    if (!clip || !clip.writeText) return false;
+    await clip.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Paste into a terminal pane (Ctrl+V / Shift+Insert / right-click). An image on
@@ -57,8 +71,15 @@ let modalOverlay, modalTitle, form, inputName, inputCommand, inputDesc, btnCance
 let terminalTabs, terminalContainer, terminalWelcome;
 let sshInput, sshPort, sshPassword, sshKeyfile, btnSshConnect;
 let toastEl, acPopup, acList;
-let sessionPanel, sessionListEl, btnToggleSessions, btnSplitH, btnSplitV;
+let sessionPanel, sessionListEl, btnToggleSessions, btnSplitH, btnSplitV, btnEqualWidth, btnEqualHeight;
 let btnTheme, explorerDrives;
+let pendingTabCloseId = null;
+let explorerDropUnlisten = null;
+let explorerUploadUnlisten = null;
+let activeSftpUpload = null;
+let uploadAiPromptTail = Promise.resolve();
+let explorerFocusGeneration = 0;
+let explorerLoadGeneration = 0;
 
 // ── State ──
 let editingId = null;
@@ -76,6 +97,9 @@ let lastFrameMeta = null;
 let screenInputBound = false;
 let browserMode = "native"; // 'native' (embedded WebView) | 'ai' (CDP screencast)
 let nativeCurrentUrl = "https://www.google.com";
+let browserPages = [];
+let activeBrowserPageId = null;
+let browserInfoOpen = false;
 let paneSyncPending = false;
 let terminalFontSize = (function () {
   try {
@@ -84,6 +108,25 @@ let terminalFontSize = (function () {
   } catch {}
   return 14;
 })();
+const TERMINAL_FONT_FAMILIES = {
+  d2coding: '"D2Coding", "Noto Sans Mono CJK KR", "Cascadia Code", "Consolas", monospace',
+  cascadia: '"Cascadia Code", "Cascadia Mono", "Consolas", monospace',
+  consolas: '"Consolas", "Courier New", monospace',
+  system: IS_MAC
+    ? 'ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Monaco", monospace'
+    : 'ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Consolas", monospace',
+};
+const TERMINAL_FONT_KEY = "mymux.termFontFamily.v1";
+let terminalFontKey = (() => {
+  try {
+    const value = localStorage.getItem(TERMINAL_FONT_KEY);
+    if (value && Object.prototype.hasOwnProperty.call(TERMINAL_FONT_FAMILIES, value)) return value;
+  } catch {}
+  return IS_MAC ? "system" : "d2coding";
+})();
+function terminalFontFamily() {
+  return TERMINAL_FONT_FAMILIES[terminalFontKey] || TERMINAL_FONT_FAMILIES.system;
+}
 // Letter spacing (자간) as a ratio of the font size — adjustable from the toolbar
 // (자−/자+) and persisted. 0 = none; default ≈0.1 (~20% of a cell) because Korean/
 // CJK glyphs look cramped at 0.
@@ -107,9 +150,23 @@ function effectiveLetterSpacing() {
 }
 let savedCmds = [];
 let currentInput = "";
+const COMMAND_HISTORY_KEY = "mymux.commandHistory.v1";
+const COMMAND_HISTORY_ENABLED_KEY = "mymux.commandHistory.enabled";
+const COMMAND_HISTORY_LIMIT = 200;
+let commandHistory = loadCommandHistory();
+// When off, typed commands are no longer recorded and history entries stop
+// appearing in the autocomplete popup. Stored history is kept so flipping it
+// back on restores past suggestions. Default on. Toggle lives in the Commands panel.
+let commandHistoryEnabled = localStorage.getItem(COMMAND_HISTORY_ENABLED_KEY) !== "0";
+function setCommandHistoryEnabled(on) {
+  commandHistoryEnabled = !!on;
+  try { localStorage.setItem(COMMAND_HISTORY_ENABLED_KEY, on ? "1" : "0"); } catch {}
+  if (!on) hideAutocomplete();
+}
 let acSelectedIdx = -1;
 let currentExplorerPath = "";
 let currentSftpId = null;
+let explorerBlockedPaneId = null;
 // Explorer directory history (Chrome-style back/forward). Each entry is
 // { path, sftpId }; explorerHistIdx points at the currently-shown entry.
 let explorerHistory = [];
@@ -118,6 +175,11 @@ let explorerHistIdx = -1;
 let fileClipboard = null; // { path, name, mode: 'copy' | 'cut' }
 let explorerCtxEntry = null;
 let explorerEntries = []; // current dir listing (for in-folder name search)
+// Show dotfiles (names starting with ".", e.g. .env / .bashrc) in the explorer.
+// Persisted; defaults to showing them so config files are reachable + editable.
+let showHiddenFiles = (() => {
+  try { return localStorage.getItem("mymux.showHidden") !== "false"; } catch { return true; }
+})();
 
 // ── Init: wait for both DOM and Tauri ──
 window.addEventListener("DOMContentLoaded", async () => {
@@ -168,6 +230,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   btnToggleSessions = document.getElementById("btn-toggle-sessions");
   btnSplitH = document.getElementById("btn-split-h");
   btnSplitV = document.getElementById("btn-split-v");
+  btnEqualWidth = document.getElementById("btn-equal-width");
+  btnEqualHeight = document.getElementById("btn-equal-height");
   btnTheme = document.getElementById("btn-theme");
   explorerDrives = document.getElementById("explorer-drives");
 
@@ -202,12 +266,16 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // Restore the previous session if one was saved; otherwise open a default terminal.
   try {
-    const restored = await restoreSession();
+    const restored = await promptRestorePreviousSession();
     if (!restored) await maybeShowStartupGuide();
   } catch (e) {
     console.error("Session restore error:", e);
     try { await spawnTerminal(); } catch {}
   }
+
+  // After the restore prompt settled (so modals never stack): first launch of
+  // a new version shows the "업데이트 완료 — 수정사항" changelog modal.
+  maybeShowWhatsNew();
 
   // Panes opened during restore/startup are sized before the container layout
   // AND the embedded font have settled. That leaves the first session fitted to
@@ -222,7 +290,33 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupCloseHandler();
 });
 
+function setupVoiceInput() {
+  const pop=document.getElementById('voice-popover'), toggle=document.getElementById('btn-voice-input'), provider=document.getElementById('voice-provider'), key=document.getElementById('voice-api-key'), save=document.getElementById('voice-save-key'), cmd=document.getElementById('voice-command'), rec=document.getElementById('voice-record'), status=document.getElementById('voice-status');
+  if (!toggle || !rec) return; let media=null, chunks=[], target=null;
+  const sync=()=>{ const local=provider.value==='faster-whisper'; document.getElementById('voice-key-row').classList.toggle('hidden',local); save.classList.toggle('hidden',local); document.getElementById('voice-command-row').classList.toggle('hidden',!local); };
+  toggle.onclick=()=>pop.classList.toggle('hidden'); provider.onchange=sync; sync();
+  save.onclick=async()=>{ try { await invoke('voice_store_deepgram_key',{key:key.value}); key.value=''; status.textContent='Saved encrypted'; } catch(e){ status.textContent=String(e); } };
+  const stop=()=>{ if(media&&media.state==='recording') { media.stop(); } };
+  rec.onpointerdown=async()=>{ try { target=focusedPaneId; if(!target||!terminals.has(target)) throw Error('Select a terminal pane first'); media=await navigator.mediaDevices.getUserMedia({audio:true}); chunks=[]; const mr=new MediaRecorder(media); media.getTracks().forEach(t=>t.stop()); media=null; status.textContent='Recording… release to transcribe'; rec._mr=mr; mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)}; mr.onstop=async()=>{ status.textContent='Transcribing…'; const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'}); try { let text=''; if(provider.value==='deepgram'){ const token=await invoke('voice_deepgram_token'); const ws=new WebSocket('wss://api.deepgram.com/v1/listen?model=nova-3&language=ko&smart_format=true&interim_results=false&token='+encodeURIComponent(token)); text=await new Promise((resolve,reject)=>{ws.onopen=()=>ws.send(blob); ws.onmessage=e=>{try{const d=JSON.parse(e.data); const t=d.channel?.alternatives?.[0]?.transcript;if(t)resolve(t)}catch{}}; ws.onerror=()=>reject(Error('Deepgram connection failed')); setTimeout(()=>reject(Error('Transcription timeout')),30000);}); ws.close(); } else { const b64=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(String(fr.result).split(',')[1]);fr.readAsDataURL(blob)}); text=await invoke('voice_transcribe_local',{audioBase64:b64,command:cmd.value}); } text=String(text).replace(/[\r\n\x00-\x1f]+/g,' ').trim(); if(text&&terminals.has(target)) terminals.get(target).term.paste(text); status.textContent=text?'Inserted':'No speech detected'; }catch(e){status.textContent=String(e)} }; mr.start(); } catch(e){ status.textContent=String(e); } };
+  rec.onpointerup=stop; rec.onpointercancel=stop; rec.onpointerleave=e=>{if(e.buttons===0)stop()};
+  let voiceShortcutActive=false;
+  document.addEventListener('keydown',(e)=>{if(e.ctrlKey&&!e.altKey&&!e.shiftKey&&e.code==='Space'&&!e.repeat){e.preventDefault();voiceShortcutActive=true;rec.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:0,buttons:1}))}},true);
+  document.addEventListener('keyup',(e)=>{if(voiceShortcutActive&&(e.code==='Space'||e.key==='Control')){e.preventDefault();voiceShortcutActive=false;rec.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:0,buttons:0}))}},true);
+}
+
+function setupVoiceInputSafe() {
+  const pop=document.getElementById('voice-popover'), toggle=document.getElementById('btn-voice-input'), provider=document.getElementById('voice-provider'), key=document.getElementById('voice-api-key'), save=document.getElementById('voice-save-key'), runner=document.getElementById('voice-command'), rec=document.getElementById('voice-record'), status=document.getElementById('voice-status');
+  if (!toggle || !rec) return; let stream=null, recorder=null, chunks=[], target=null;
+  const sync=()=>{ const local=provider.value==='faster-whisper'; document.getElementById('voice-key-row').classList.toggle('hidden',local); save.classList.toggle('hidden',local); document.getElementById('voice-command-row').classList.toggle('hidden',!local); };
+  toggle.onclick=()=>pop.classList.toggle('hidden'); provider.onchange=sync; sync();
+  save.onclick=async()=>{ try { await invoke('voice_store_deepgram_key',{key:key.value}); key.value=''; status.textContent='Saved encrypted'; } catch(e){ status.textContent=String(e); } };
+  const stop=()=>{ if(recorder&&recorder.state==='recording') recorder.stop(); };
+  rec.onpointerdown=async(e)=>{ e.preventDefault(); if(recorder) return; try { target=focusedPaneId; if(!target||!terminals.has(target)) throw Error('Select a terminal pane first'); stream=await navigator.mediaDevices.getUserMedia({audio:true}); chunks=[]; recorder=new MediaRecorder(stream); const mr=recorder; mr.ondataavailable=x=>{if(x.data.size)chunks.push(x.data)}; mr.onstop=async()=>{ recorder=null; stream?.getTracks().forEach(t=>t.stop()); stream=null; status.textContent='Transcribing'; const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'}); try { let text=''; if(provider.value==='deepgram'){ const token=await invoke('voice_deepgram_token'); const ws=new WebSocket('wss://api.deepgram.com/v1/listen?model=nova-3&language=ko-KR&smart_format=true&interim_results=false&token='+encodeURIComponent(token)); text=await new Promise((resolve,reject)=>{let all='',done=false,timer=setTimeout(()=>finish(Error('Transcription timeout')),30000); const finish=err=>{if(done)return;done=true;clearTimeout(timer);try{ws.close()}catch{} err?reject(err):resolve(all)}; ws.onopen=()=>{ws.send(blob);ws.send(JSON.stringify({type:'CloseStream'}))}; ws.onmessage=x=>{try{const d=JSON.parse(x.data);const t=d.channel?.alternatives?.[0]?.transcript;if(t)all+=(all?' ':'')+t;if(d.speech_final||d.is_final)finish()}catch{}}; ws.onerror=()=>finish(Error('Deepgram connection failed')); ws.onclose=()=>finish()}); } else { const modelPath=localStorage.getItem('mymux.voice.modelPath')||prompt('faster-whisper 모델 폴더의 절대 경로를 입력하세요'); if(!modelPath) throw Error('Model path is required'); localStorage.setItem('mymux.voice.modelPath',modelPath); const b64=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(String(fr.result).split(',')[1]);fr.readAsDataURL(blob)}); text=await invoke('voice_transcribe_local',{audioBase64:b64,runnerPath:runner.value,modelPath}); } text=String(text).replace(/[\r\n\x00-\x1f]+/g,' ').trim(); if(text&&terminals.has(target)) terminals.get(target).term.paste(text); status.textContent=text?'Inserted':'No speech detected'; }catch(x){status.textContent=String(x)} }; mr.start(); status.textContent='Recording release to transcribe'; } catch(x){stream?.getTracks().forEach(t=>t.stop());stream=null;status.textContent=String(x)} };
+  rec.onpointerup=stop; rec.onpointercancel=stop; rec.onpointerleave=e=>{if(e.buttons===0)stop()};
+}
+
 async function setupListeners() {
+  setupVoiceInputSafe();
   // Sidebar tabs
   document.querySelectorAll(".sidebar-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -315,6 +409,8 @@ async function setupListeners() {
   }
   btnSplitH.addEventListener("click", () => splitPane("horizontal"));
   btnSplitV.addEventListener("click", () => splitPane("vertical"));
+  btnEqualWidth.addEventListener("click", () => equalizeActiveTabSplits("horizontal"));
+  btnEqualHeight.addEventListener("click", () => equalizeActiveTabSplits("vertical"));
 
   // Theme controls
   btnTheme.addEventListener("click", () => setTheme(currentThemeMode() === "dark" ? "light" : "dark"));
@@ -322,6 +418,27 @@ async function setupListeners() {
     sw.addEventListener("click", () => setAccent(sw.dataset.accent));
   });
   btnNewTerminal.addEventListener("click", () => spawnTerminal());
+  const btnTabNew = document.getElementById("btn-tab-new");
+  if (btnTabNew) btnTabNew.addEventListener("click", () => spawnTerminal());
+  setupExplorerFileDrop();
+
+  const tabCloseModal = document.getElementById("tab-close-modal");
+  const tabCloseCancel = document.getElementById("tab-close-cancel");
+  const tabCloseConfirm = document.getElementById("tab-close-confirm");
+  const closeTabPrompt = () => {
+    pendingTabCloseId = null;
+    if (tabCloseModal) tabCloseModal.classList.add("hidden");
+  };
+  if (tabCloseCancel) tabCloseCancel.addEventListener("click", closeTabPrompt);
+  if (tabCloseConfirm) tabCloseConfirm.addEventListener("click", () => {
+    const id = pendingTabCloseId;
+    closeTabPrompt();
+    if (id != null) closeTab(id);
+  });
+  if (tabCloseModal) {
+    tabCloseModal.addEventListener("click", (e) => { if (e.target === tabCloseModal) closeTabPrompt(); });
+    tabCloseModal.addEventListener("keydown", (e) => { if (e.key === "Escape") closeTabPrompt(); });
+  }
 
   // "+ SSH" — open a new SSH connection anytime (works with sessions open).
   const btnSsh = document.getElementById("btn-ssh");
@@ -389,6 +506,11 @@ async function setupListeners() {
   const cmdSearch = document.getElementById("cmd-search");
   if (cmdSearch) cmdSearch.addEventListener("input", () => renderCmdList(savedCmds));
   wireSearchClear(cmdSearch);
+  const cmdHistToggle = document.getElementById("cmd-history-toggle");
+  if (cmdHistToggle) {
+    cmdHistToggle.checked = commandHistoryEnabled;
+    cmdHistToggle.addEventListener("change", () => setCommandHistoryEnabled(cmdHistToggle.checked));
+  }
   btnCancel.addEventListener("click", closeModal);
   modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
   form.addEventListener("submit", handleSave);
@@ -405,6 +527,16 @@ async function setupListeners() {
   if (btnExpFwd) btnExpFwd.addEventListener("click", explorerForward);
   const btnExpNewFolder = document.getElementById("btn-explorer-newfolder");
   if (btnExpNewFolder) btnExpNewFolder.addEventListener("click", openNewFolderModal);
+  const btnExpHidden = document.getElementById("btn-explorer-hidden");
+  if (btnExpHidden) {
+    syncHiddenToggleBtn();
+    btnExpHidden.addEventListener("click", () => {
+      showHiddenFiles = !showHiddenFiles;
+      try { localStorage.setItem("mymux.showHidden", showHiddenFiles ? "true" : "false"); } catch {}
+      syncHiddenToggleBtn();
+      renderFileList(explorerEntries);
+    });
+  }
   const newFolderOpenSession = document.getElementById("newfolder-open-session");
   if (newFolderOpenSession) {
     newFolderOpenSession.addEventListener("change", () => {
@@ -469,6 +601,11 @@ async function setupListeners() {
     if (e.ctrlKey && e.shiftKey && e.key === "E") {
       e.preventDefault();
       splitPane("vertical");
+    }
+    // Ctrl+Shift+O — flip split orientation (side-by-side ↔ stacked)
+    if (e.ctrlKey && e.shiftKey && e.key === "O") {
+      e.preventDefault();
+      flipSplitDirection();
     }
     // Ctrl+Shift+W — close pane
     if (e.ctrlKey && e.shiftKey && e.key === "W") {
@@ -537,10 +674,12 @@ async function setupListeners() {
           const [chunks, exited] = await invoke("pty_read", { id });
           if (chunks.length) {
             const data = chunks.join("");
-            t.term.write(data); // one write, not per-chunk
+            t.term.write(data, () => {
+              const tt = terminals.get(id);
+              if (tt) scanCtxUsage(id, tt, data); // Claude/Codex statusline -> ctx/model badge
+            }); // one write, not per-chunk
             markPaneActivity(id, t); // unseen badge when this pane is hidden
             trackOutputSilence(id, t); // flash when sustained output goes quiet
-            scanCtxUsage(id, t, data); // Claude Code statusline → ctx/model badge
             if (t.pendingReplay) armReplaySettle(id, t); // SSH: replay once the prompt settles
           } else if (exited) closeTerminal(id);
         } catch {}
@@ -589,6 +728,11 @@ async function setupListeners() {
   if (btnFontDec) btnFontDec.addEventListener("click", () => adjustTerminalFontSize(-1));
   const btnFontInc = document.getElementById("btn-font-inc");
   if (btnFontInc) btnFontInc.addEventListener("click", () => adjustTerminalFontSize(1));
+  const terminalFontSelect = document.getElementById("terminal-font");
+  if (terminalFontSelect) {
+    terminalFontSelect.value = terminalFontKey;
+    terminalFontSelect.addEventListener("change", () => setTerminalFontFamily(terminalFontSelect.value));
+  }
 
   // Letter spacing (top bar 자−/자+) — adjust the persisted 자간 ratio live.
   // Hidden on macOS: letter-spacing is force-disabled there (effectiveLetterSpacing),
@@ -650,10 +794,540 @@ async function setupListeners() {
 }
 
 // ═══════════════════════════════════════════════
+function explorerDropPoint(position) {
+  const panel = document.getElementById("panel-explorer");
+  if (!panel || !position) return false;
+  const r = panel.getBoundingClientRect();
+  return dragPointCandidates(position)
+    .some(({ x, y }) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+}
+
+function dragPointCandidates(position) {
+  if (!position) return [];
+  const x = Number(position.x);
+  const y = Number(position.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+  // Tauri reports DragDropEvent.position as physical pixels; DOM hit-testing
+  // uses CSS pixels. Raw physical coordinates can still fall inside the CSS
+  // viewport at 125–200% scaling and select the wrong pane, so never try them
+  // before/alongside the converted point.
+  const scale = window.devicePixelRatio || 1;
+  return [{ x: x / scale, y: y / scale }];
+}
+
+function paneAtDragPoint(position) {
+  for (const point of dragPointCandidates(position)) {
+    if (point.x < 0 || point.y < 0 || point.x > window.innerWidth || point.y > window.innerHeight) continue;
+    const leaf = document.elementFromPoint(point.x, point.y)?.closest?.(".pane-leaf");
+    const ptyId = leaf?.dataset?.ptyId ? Number(leaf.dataset.ptyId) : null;
+    if (ptyId != null && Number.isFinite(ptyId)) return { leaf, ptyId };
+  }
+  return null;
+}
+
+function fileDropTarget(position) {
+  if (explorerDropPoint(position)) {
+    if (explorerBlockedPaneId != null) {
+      return {
+        kind: "blocked",
+        ptyId: explorerBlockedPaneId,
+        message: "이 SSH 세션의 SFTP 연결을 사용할 수 없습니다.",
+      };
+    }
+    if (!currentExplorerPath) return null;
+    return {
+      kind: "explorer",
+      sftpId: currentSftpId,
+      remoteDir: currentExplorerPath,
+      ptyId: currentSftpId == null ? null : sftpOwnerPaneId(currentSftpId),
+    };
+  }
+
+  const hit = paneAtDragPoint(position);
+  if (!hit) return null;
+  const owner = terminals.get(hit.ptyId);
+  if (!owner || owner.type !== "ssh") return null;
+  if (owner.sftpId == null) {
+    const detail = owner.sftpStatus === "connecting"
+      ? "SFTP 연결 중입니다. 잠시 후 다시 시도하세요."
+      : owner.sftpStatus === "unsupported"
+        ? "이 서버는 SFTP를 지원하지 않습니다."
+        : "이 SSH 세션의 SFTP 연결을 사용할 수 없습니다.";
+    return { kind: "blocked", ptyId: hit.ptyId, message: detail };
+  }
+  return {
+    kind: "ssh-pane",
+    ptyId: hit.ptyId,
+    sftpId: owner.sftpId,
+    remoteDir: owner.remotePath || owner.session?.remotePath || owner.cwd || owner.session?.cwd || null,
+  };
+}
+
+function setExplorerDropState(active, message = "Drop files here to copy or upload") {
+  const panel = document.getElementById("panel-explorer");
+  const hint = document.getElementById("explorer-drop-hint");
+  if (panel) panel.classList.toggle("file-drop-active", active);
+  if (hint) {
+    hint.textContent = message;
+    hint.classList.toggle("hidden", !active);
+  }
+}
+
+function clearPaneDropState() {
+  document.querySelectorAll(".pane-leaf.file-drop-active").forEach((pane) => {
+    pane.classList.remove("file-drop-active", "file-drop-blocked");
+    delete pane.dataset.fileDropMessage;
+  });
+}
+
+function showFileDropTarget(target) {
+  setExplorerDropState(false);
+  clearPaneDropState();
+  if (!target) return;
+  if (target.kind === "explorer") {
+    setExplorerDropState(
+      true,
+      target.sftpId == null ? "Drop files here to copy" : "Drop files here to upload",
+    );
+    return;
+  }
+  const pane = target.ptyId == null ? null : terminals.get(target.ptyId)?.paneEl;
+  if (!pane) return;
+  pane.dataset.fileDropMessage = target.kind === "blocked"
+    ? target.message
+    : `이 SSH 세션으로 업로드${target.remoteDir ? ` · ${target.remoteDir}` : ""}`;
+  pane.classList.add("file-drop-active");
+  pane.classList.toggle("file-drop-blocked", target.kind === "blocked");
+}
+
+function resetUploadProgressPlacement() {
+  const card = document.getElementById("explorer-upload-progress");
+  const panel = document.getElementById("panel-explorer");
+  const fileList = document.getElementById("file-list");
+  if (!card || !panel) return;
+  card.classList.remove("pane-upload-progress");
+  if (fileList && fileList.parentElement === panel) panel.insertBefore(card, fileList);
+  else panel.appendChild(card);
+}
+
+function placeUploadProgress(ptyId) {
+  const card = document.getElementById("explorer-upload-progress");
+  const pane = ptyId == null ? null : terminals.get(ptyId)?.paneEl;
+  if (!card || !pane) {
+    resetUploadProgressPlacement();
+    return;
+  }
+  pane.appendChild(card);
+  card.classList.add("pane-upload-progress");
+}
+
+function sftpOwnerPaneId(sftpId) {
+  for (const [id, t] of terminals) {
+    if (t.sftpId === sftpId) return id;
+  }
+  return null;
+}
+
+function renderUploadProgress(percent, title, detail) {
+  const card = document.getElementById("explorer-upload-progress");
+  if (!card) return;
+  const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+  card.classList.remove("hidden");
+  card.style.setProperty("--upload-pct", `${pct}%`);
+  card.setAttribute("aria-valuenow", String(Math.round(pct)));
+  const titleEl = card.querySelector(".upload-progress-title");
+  const detailEl = card.querySelector(".upload-progress-detail");
+  if (titleEl && title) titleEl.textContent = title;
+  if (detailEl) detailEl.textContent = detail || `${Math.round(pct)}%`;
+}
+
+function finishUploadProgress(delay = 1200) {
+  const card = document.getElementById("explorer-upload-progress");
+  setTimeout(() => {
+    if (!activeSftpUpload && card) {
+      card.classList.add("hidden");
+      resetUploadProgressPlacement();
+    }
+  }, delay);
+}
+
+function localDroppedName(path) {
+  return String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || String(path || "");
+}
+
+function aiSafeUploadedName(name) {
+  return String(name).replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) => {
+    if (character === "\n") return "\\n";
+    if (character === "\r") return "\\r";
+    if (character === "\t") return "\\t";
+    return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  });
+}
+
+function promptUploadedNamesToAi(ptyId, names, remoteDir) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById("sftp-ai-prompt-modal");
+    const list = document.getElementById("sftp-ai-prompt-files");
+    const message = document.getElementById("sftp-ai-prompt-message");
+    const insert = document.getElementById("sftp-ai-prompt-insert");
+    const skip = document.getElementById("sftp-ai-prompt-skip");
+    const close = document.getElementById("sftp-ai-prompt-close");
+    if (!modal || !list || !insert || !skip || !close) {
+      resolve(false);
+      return;
+    }
+
+    const owner = terminals.get(ptyId);
+    const label = owner ? sessionLabelFor(owner) : "SSH";
+    message.textContent =
+      `${label} AI 입력창에 업로드한 파일명을 넣을까요?` +
+      (remoteDir ? ` 대상 폴더: ${remoteDir}` : "");
+    list.innerHTML = "";
+    names.forEach((name) => {
+      const item = document.createElement("li");
+      item.textContent = name;
+      list.appendChild(item);
+    });
+
+    const finish = (accepted) => {
+      modal.classList.add("hidden");
+      insert.removeEventListener("click", onInsert);
+      skip.removeEventListener("click", onSkip);
+      close.removeEventListener("click", onSkip);
+      modal.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKey);
+      resolve(accepted);
+    };
+    const onInsert = () => finish(true);
+    const onSkip = () => finish(false);
+    const onBackdrop = (event) => { if (event.target === modal) finish(false); };
+    const onKey = (event) => { if (event.key === "Escape") finish(false); };
+
+    insert.addEventListener("click", onInsert);
+    skip.addEventListener("click", onSkip);
+    close.addEventListener("click", onSkip);
+    modal.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKey);
+    modal.classList.remove("hidden");
+    insert.focus();
+  });
+}
+
+async function queueUploadedNamesToAi(ptyId, sftpId, names, remoteDir) {
+  let release;
+  const previous = uploadAiPromptTail;
+  uploadAiPromptTail = new Promise((resolve) => { release = resolve; });
+  await previous;
+  try {
+    const owner = terminals.get(ptyId);
+    if (!owner || owner.sftpId !== sftpId || !owner.aiMode) return false;
+    return await promptUploadedNamesToAi(ptyId, names, remoteDir);
+  } finally {
+    release();
+  }
+}
+
+async function requestSftpUploadCancel() {
+  const upload = activeSftpUpload;
+  if (!upload || !upload.id || upload.cancelRequested) return;
+  upload.cancelRequested = true;
+  const button = document.getElementById("explorer-upload-cancel");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Cancelling…";
+  }
+  renderUploadProgress(
+    upload.total > 0
+      ? Math.min(100, (upload.completedBytes + upload.currentItemBytes) * 100 / upload.total)
+      : 0,
+    "Cancelling upload…",
+    "Removing incomplete remote items…",
+  );
+  try {
+    await invoke("sftp_cancel_upload", { uploadId: upload.id });
+  } catch (error) {
+    if (activeSftpUpload === upload) {
+      upload.cancelRequested = false;
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Cancel";
+      }
+      toast(`Could not cancel upload: ${String(error)}`, true);
+    }
+  }
+}
+
+function onSftpUploadProgress(event) {
+  const payload = event && event.payload;
+  const active = activeSftpUpload;
+  if (!payload || !active || payload.uploadId !== active.id) return;
+  const itemBytes = Math.max(0, Number(payload.bytesTransferred) || 0);
+  active.currentItemBytes = itemBytes;
+  const transferred = Math.min(active.total, active.completedBytes + itemBytes);
+  const pct = active.total > 0 ? transferred * 100 / active.total : 100;
+  renderUploadProgress(
+    pct,
+    `Uploading ${active.currentIndex + 1} of ${active.fileCount}`,
+    `${formatSize(transferred)} / ${formatSize(active.total)} · ${Math.round(pct)}%`,
+  );
+}
+
+async function handleExplorerFileDrop(paths, target = null) {
+  const files = Array.isArray(paths) ? paths.filter(Boolean) : [];
+  if (!files.length) return;
+  if (activeSftpUpload) {
+    toast("An SFTP upload is already in progress.", true);
+    return;
+  }
+
+  // Freeze the source and destination for the whole batch. A session/folder
+  // click while uploading cannot redirect later files to a different server.
+  const uploadSftpId = target ? target.sftpId : currentSftpId;
+  let uploadRemoteDir = target ? target.remoteDir : currentExplorerPath;
+  const ownerPtyId = target?.ptyId ??
+    (uploadSftpId == null ? null : sftpOwnerPaneId(uploadSftpId));
+  if (uploadSftpId != null && !uploadRemoteDir) {
+    try {
+      uploadRemoteDir = await invoke("sftp_home_dir", { sessionId: uploadSftpId });
+    } catch (error) {
+      toast(`SFTP upload destination is unavailable: ${String(error)}`, true);
+      return;
+    }
+  }
+  if (!uploadRemoteDir) return;
+  if (uploadSftpId != null) {
+    const owner = ownerPtyId == null ? null : terminals.get(ownerPtyId);
+    const ownerLabel = owner ? sessionLabelFor(owner) : `SFTP ${uploadSftpId}`;
+    const preview = files.slice(0, 5).map((path) => `• ${path}`).join("\n");
+    const more = files.length > 5 ? `\n… and ${files.length - 5} more` : "";
+    if (!window.confirm(
+      `Upload to the server?\n\nSession: ${ownerLabel}\nDestination: ${uploadRemoteDir}\n` +
+      `${preview}${more}\n\n` +
+      "Existing remote items are never overwritten."
+    )) return;
+  }
+
+  placeUploadProgress(target?.kind === "ssh-pane" ? ownerPtyId : null);
+  if (target?.kind !== "ssh-pane") {
+    setExplorerDropState(true, uploadSftpId == null ? "Copying files…" : "Preparing upload…");
+  }
+  let ok = 0;
+  const errors = [];
+  const uploadedNames = [];
+  let upload = null;
+  if (uploadSftpId != null) {
+    activeSftpUpload = { id: null, preflight: true };
+    const cancelButton = document.getElementById("explorer-upload-cancel");
+    if (cancelButton) {
+      cancelButton.disabled = true;
+      cancelButton.textContent = "Cancel";
+    }
+    renderUploadProgress(0, "Preparing upload…", `Scanning ${files.length} item(s)`);
+  }
+  try {
+    if (uploadSftpId == null) {
+      for (const localPath of files) {
+        try {
+          await invoke("fs_copy_path", { src: localPath, destDir: uploadRemoteDir });
+          ok++;
+        } catch (e) {
+          errors.push(`${localPath}: ${String(e)}`);
+        }
+      }
+    } else {
+      const accepted = [];
+      for (const localPath of files) {
+        try {
+          const size = Number(await invoke("sftp_upload_size", { localPath })) || 0;
+          accepted.push({ localPath, size });
+        } catch (e) {
+          errors.push(`${localPath}: ${String(e)}`);
+        }
+      }
+      if (!accepted.length) {
+        toast(`No files can be uploaded. ${errors[0] || "All items were rejected."}`, true);
+        return;
+      }
+
+      upload = {
+        id: null,
+        total: accepted.reduce((sum, item) => sum + item.size, 0),
+        completedBytes: 0,
+        currentIndex: 0,
+        fileCount: accepted.length,
+        currentItemBytes: 0,
+        cancelRequested: false,
+        cancelled: false,
+        begun: false,
+      };
+      activeSftpUpload = upload;
+      try {
+        upload.id = String(await invoke("sftp_begin_upload", {
+          sessionId: uploadSftpId,
+          remoteDir: uploadRemoteDir,
+        }));
+        upload.begun = true;
+      } catch (error) {
+        errors.push(`Could not start upload: ${String(error)}`);
+      }
+      if (upload.begun) {
+        const cancelButton = document.getElementById("explorer-upload-cancel");
+        if (cancelButton) {
+          cancelButton.disabled = false;
+          cancelButton.textContent = "Cancel";
+        }
+        renderUploadProgress(0, `Uploading 1 of ${accepted.length}`, `0 B / ${formatSize(upload.total)}`);
+
+        for (let index = 0; index < accepted.length; index++) {
+          if (upload.cancelRequested) {
+            upload.cancelled = true;
+            break;
+          }
+          const { localPath, size } = accepted[index];
+          upload.currentIndex = index;
+          upload.currentItemBytes = 0;
+          try {
+            await invoke("sftp_upload_path", {
+              sessionId: uploadSftpId,
+              localPath,
+              remoteDir: uploadRemoteDir,
+              uploadId: upload.id,
+            });
+            upload.completedBytes += size;
+            uploadedNames.push(localDroppedName(localPath));
+            ok++;
+          } catch (e) {
+            const message = String(e);
+            if (message.includes("UPLOAD_CANCELLED")) {
+              upload.cancelled = true;
+              if (message.includes("Cleanup incomplete:")) {
+                errors.push(`${localPath}: ${message}`);
+              }
+              break;
+            }
+            errors.push(`${localPath}: ${message}`);
+          }
+        }
+      }
+    }
+  } finally {
+    setExplorerDropState(false);
+    if (upload) {
+      if (upload.begun) {
+        try {
+          await invoke("sftp_finish_upload", { uploadId: upload.id });
+        } catch (error) {
+          errors.push(`Could not finish upload state: ${String(error)}`);
+        }
+      }
+      const cancelButton = document.getElementById("explorer-upload-cancel");
+      if (cancelButton) cancelButton.disabled = true;
+      if (upload.cancelled) {
+        const transferred = Math.min(upload.total, upload.completedBytes);
+        const pct = upload.total > 0 ? transferred * 100 / upload.total : 0;
+        renderUploadProgress(pct, "Upload cancelled", `${ok} item(s) completed`);
+      } else if (!errors.length) {
+        renderUploadProgress(100, "Upload complete", `${formatSize(upload.total)} · 100%`);
+      } else {
+        const transferred = Math.min(upload.total, upload.completedBytes);
+        const pct = upload.total > 0 ? transferred * 100 / upload.total : 0;
+        renderUploadProgress(pct, "Upload failed", `${ok} item(s) completed · ${errors.length} failed`);
+      }
+      finishUploadProgress(upload.cancelled || errors.length ? 3000 : 1400);
+    }
+    if (uploadSftpId != null) activeSftpUpload = null;
+    if (uploadSftpId != null && !upload) {
+      const card = document.getElementById("explorer-upload-progress");
+      if (card) card.classList.add("hidden");
+      resetUploadProgressPlacement();
+    }
+  }
+
+  if (currentSftpId === uploadSftpId && currentExplorerPath === uploadRemoteDir) {
+    await loadExplorer();
+  }
+  if (upload && upload.cancelled) {
+    const cleanupWarning = errors.length ? ` ${errors[0]}` : "";
+    toast(`Upload cancelled; ${ok} item(s) completed.${cleanupWarning}`, errors.length > 0);
+  } else if (errors.length) {
+    toast(`${ok} item(s) copied/uploaded; ${errors.length} failed. ${errors[0]}`, true);
+  } else {
+    toast(`${ok} item(s) ${uploadSftpId == null ? "copied" : "uploaded"}`);
+    if (ownerPtyId != null) {
+      const owner = terminals.get(ownerPtyId);
+      if (owner && notifyFlashPrefs.character !== "none") {
+        showFoxAt(owner.paneEl, ownerPtyId, false, "업로드가 완료되었어요!");
+      }
+    }
+  }
+
+  const aiOwner = ownerPtyId == null ? null : terminals.get(ownerPtyId);
+  if (uploadSftpId != null && uploadedNames.length &&
+      aiOwner && aiOwner.sftpId === uploadSftpId && aiOwner.aiMode) {
+    const insertNames = await queueUploadedNamesToAi(
+      ownerPtyId,
+      uploadSftpId,
+      uploadedNames,
+      uploadRemoteDir,
+    );
+    const liveOwner = terminals.get(ownerPtyId);
+    if (insertNames && liveOwner && liveOwner.sftpId === uploadSftpId && liveOwner.aiMode) {
+      // Keep the paste strictly single-line. If bracketed paste is unavailable,
+      // embedded newlines can become Enter and submit the first filename.
+      await sendMemoToPane(
+        ownerPtyId,
+        uploadedNames.map(aiSafeUploadedName).join(", "),
+        false,
+      );
+      toast("업로드한 파일명을 AI 입력창에 넣었습니다.");
+    } else if (insertNames) {
+      toast("AI 입력 대상 세션이 변경되어 파일명을 넣지 않았습니다.", true);
+    }
+  }
+}
+
+async function setupExplorerFileDrop() {
+  try {
+    const winApi = window.__TAURI__ && window.__TAURI__.window;
+    const win = winApi && winApi.getCurrentWindow ? winApi.getCurrentWindow() : null;
+    if (!win || !win.onDragDropEvent) return;
+    const eventApi = window.__TAURI__ && window.__TAURI__.event;
+    if (eventApi && eventApi.listen && !explorerUploadUnlisten) {
+      explorerUploadUnlisten = await eventApi.listen("sftp-upload-progress", onSftpUploadProgress);
+    }
+    const cancelButton = document.getElementById("explorer-upload-cancel");
+    if (cancelButton && cancelButton.dataset.bound !== "true") {
+      cancelButton.dataset.bound = "true";
+      cancelButton.addEventListener("click", requestSftpUploadCancel);
+    }
+    explorerDropUnlisten = await win.onDragDropEvent(({ payload }) => {
+      if (!payload) return;
+      if (payload.type === "over") {
+        showFileDropTarget(fileDropTarget(payload.position));
+      } else if (payload.type === "drop") {
+        const target = fileDropTarget(payload.position);
+        showFileDropTarget(null);
+        if (target?.kind === "blocked") {
+          toast(target.message, true);
+        } else if (target) {
+          handleExplorerFileDrop(payload.paths, target);
+        }
+      } else {
+        showFileDropTarget(null);
+      }
+    });
+  } catch (e) {
+    console.warn("Explorer file drop setup failed", e);
+  }
+}
+
 // EXPLORER
 // ═══════════════════════════════════════════════
 
 async function loadExplorer() {
+  const loadGeneration = ++explorerLoadGeneration;
+  const loadSftpId = currentSftpId;
+  const loadPath = currentExplorerPath;
   fileListEl.innerHTML = "";
   explorerPath.textContent = currentExplorerPath || "/";
   explorerPath.title = (currentExplorerPath || "") + " — click to copy";
@@ -661,17 +1335,29 @@ async function loadExplorer() {
 
   try {
     let entries;
-    if (currentSftpId) {
+    if (loadSftpId) {
       entries = await invoke("sftp_list_dir", {
-        sessionId: currentSftpId,
-        path: currentExplorerPath,
+        sessionId: loadSftpId,
+        path: loadPath,
       });
     } else {
-      entries = await invoke("explorer_list_local", { path: currentExplorerPath });
+      entries = await invoke("explorer_list_local", { path: loadPath });
     }
+    if (loadGeneration !== explorerLoadGeneration ||
+        currentSftpId !== loadSftpId || currentExplorerPath !== loadPath) return;
     explorerEntries = entries;
     renderFileList(entries);
+    if (loadSftpId != null) {
+      const ownerId = sftpOwnerPaneId(loadSftpId);
+      const owner = ownerId == null ? null : terminals.get(ownerId);
+      if (owner) {
+        owner.remotePath = loadPath;
+        if (owner.session) owner.session.remotePath = loadPath;
+        saveSessionNow();
+      }
+    }
   } catch (err) {
+    if (loadGeneration !== explorerLoadGeneration) return;
     fileListEl.innerHTML = `<li style="padding:10px;color:var(--red);font-size:12px;">${esc(String(err))}</li>`;
   }
 }
@@ -680,8 +1366,8 @@ function renderFileList(entries) {
   fileListEl.innerHTML = "";
   const q = (document.getElementById("explorer-search")?.value || "").trim().toLowerCase();
   for (const entry of entries) {
-    // Skip hidden files starting with .
-    if (entry.name.startsWith(".")) continue;
+    // Hidden files (names starting with ".") are shown unless the toggle is off.
+    if (!showHiddenFiles && entry.name.startsWith(".")) continue;
     if (q && !entry.name.toLowerCase().includes(q)) continue;
 
     const li = document.createElement("li");
@@ -731,6 +1417,16 @@ function renderFileList(entries) {
 
     fileListEl.appendChild(li);
   }
+}
+
+// Reflect the show-hidden state on the eye toggle button (active = showing).
+function syncHiddenToggleBtn() {
+  const btn = document.getElementById("btn-explorer-hidden");
+  if (!btn) return;
+  btn.classList.toggle("on", showHiddenFiles);
+  btn.title = showHiddenFiles
+    ? "숨김 파일(.으로 시작) 숨기기"
+    : "숨김 파일(.으로 시작) 표시";
 }
 
 function navigateTo(path) {
@@ -812,6 +1508,10 @@ async function filePaste() {
 // (back/forward replays). `sftpId` defaults to the current source so plain
 // folder clicks keep whichever mode (local PC / SFTP) is active.
 function explorerGo(path, sftpId = currentSftpId, record = true) {
+  explorerBlockedPaneId = null;
+  if (explorerMode) {
+    explorerMode.querySelectorAll("option[data-sftp-blocked]").forEach((option) => option.remove());
+  }
   currentSftpId = sftpId == null ? null : sftpId;
   currentExplorerPath = path;
   if (record) {
@@ -842,11 +1542,19 @@ function explorerForward() {
 function syncExplorerNav() {
   const back = document.getElementById("btn-explorer-back");
   const fwd = document.getElementById("btn-explorer-forward");
-  if (back) back.disabled = explorerHistIdx <= 0;
-  if (fwd) fwd.disabled = explorerHistIdx >= explorerHistory.length - 1;
+  if (back) back.disabled = explorerBlockedPaneId != null || explorerHistIdx <= 0;
+  if (fwd) fwd.disabled =
+    explorerBlockedPaneId != null || explorerHistIdx >= explorerHistory.length - 1;
   const btnNewFolder = document.getElementById("btn-explorer-newfolder");
-  if (btnNewFolder) btnNewFolder.classList.toggle("hidden", currentSftpId != null);
+  if (btnNewFolder) {
+    btnNewFolder.classList.toggle(
+      "hidden",
+      explorerBlockedPaneId != null || currentSftpId != null,
+    );
+  }
+  if (btnExplorerUp) btnExplorerUp.disabled = explorerBlockedPaneId != null;
   if (explorerMode) {
+    if (explorerBlockedPaneId != null) return;
     const want = currentSftpId == null ? "local" : String(currentSftpId);
     if (explorerMode.value !== want && [...explorerMode.options].some((o) => o.value === want)) {
       explorerMode.value = want;
@@ -1141,7 +1849,10 @@ function fileExt(name) {
 async function openFileViewer(entry) {
   const ext = fileExt(entry.name);
   const lower = entry.name.toLowerCase();
-  const isText = VIEWER_TEXT_EXTS.has(ext) || lower === "dockerfile" || lower.endsWith(".gitignore") || ext === "";
+  // Dotfiles (.env, .bashrc, .npmrc, .gitconfig …) are text config; treat any
+  // leading-dot name as text so it opens in the editor. True binaries (e.g.
+  // .DS_Store) still fall back to the OS app via the backend's BINARY guard.
+  const isText = VIEWER_TEXT_EXTS.has(ext) || lower === "dockerfile" || lower.endsWith(".gitignore") || lower.startsWith(".") || ext === "";
   const sftpId = currentSftpId; // when set, the entry is remote — read over SFTP
   if (!isText) {
     if (sftpId != null) { toast("Preview isn't supported for remote binary files.", true); return; }
@@ -1466,33 +2177,43 @@ function closeViewerFile(id) {
 
 // Operate the CLI in a folder: open a new local terminal already in that
 // directory, or `cd` the active SSH terminal for remote paths (escaped).
-function cdToTerminal(path) {
-  if (currentSftpId) {
-    const safe = String(path).replace(/'/g, "'\\''");
-    // Route the cd to the SSH terminal that OWNS this sftp session (its pane
-    // stores t.sftpId at connect time — see doSshConnect), not just whatever
-    // pane happens to be active. Otherwise the cd lands in a local/other shell.
-    let targetId = null;
-    for (const [id, t] of terminals) {
-      if (t.sftpId === currentSftpId) { targetId = id; break; }
-    }
+// ── Explorer: new folder modal ──
+async function cdToTerminal(path) {
+  if (currentSftpId != null) {
+    const sftpId = currentSftpId;
+    const targetId = sftpOwnerPaneId(sftpId);
     if (targetId == null || !terminals.has(targetId)) {
-      if (activeTermId == null || !terminals.has(activeTermId)) {
-        toast("이 서버의 SSH 세션을 찾을 수 없습니다.", true);
-        return;
-      }
-      targetId = activeTermId; // fallback: best-effort to the active terminal
+      toast("The SSH session for this server is no longer available.", true);
+      return;
     }
-    armNotifyCycle(targetId); // user-launched command — its completion should notify
-    invoke("pty_write", { id: targetId, data: `cd '${safe}'\r` });
-    // Bring that SSH session into view so the user sees the directory change.
+    let resolved;
+    try {
+      resolved = await invoke("sftp_resolve_dir", { sessionId: sftpId, path: String(path) });
+    } catch (error) {
+      toast("Remote directory is unavailable: " + error, true);
+      return;
+    }
+    const owner = terminals.get(targetId);
+    if (!owner || owner.sftpId !== sftpId) {
+      toast("The SSH/SFTP session changed before cd could run.", true);
+      return;
+    }
+    const safe = resolved.replace(/'/g, "'\\''");
+    armNotifyCycle(targetId);
+    await invoke("pty_write", { id: targetId, data: `cd '${safe}'\r` });
+    owner.remotePath = resolved;
+    owner.cwd = resolved;
+    if (owner.session) {
+      owner.session.remotePath = resolved;
+      owner.session.cwd = resolved;
+    }
+    explorerGo(resolved, sftpId);
+    saveSessionNow();
     const tab = findTabForPane(targetId);
     if (tab && tab.tabIdx !== activeTabIdx) switchToTab(tab.tabIdx);
     setFocusedPane(targetId);
     return;
   }
-  // Local: open the folder in the CURRENT window by splitting the active tab.
-  // Fall back to a new tab only when no terminal pane is active.
   if (!browserTabActive && activeTabIdx != null && focusedPaneId != null && terminals.has(focusedPaneId)) {
     splitPane("horizontal", path);
   } else {
@@ -1500,7 +2221,6 @@ function cdToTerminal(path) {
   }
 }
 
-// ── Explorer: new folder modal ──
 function openNewFolderModal() {
   const modal = document.getElementById("newfolder-modal");
   const nameInput = document.getElementById("newfolder-name");
@@ -1572,7 +2292,7 @@ function toggleExplorerFav(path, name) {
   const favs = getExplorerFavorites();
   const idx = favs.findIndex((f) => f.path === path);
   if (idx >= 0) favs.splice(idx, 1);
-  else favs.push({ path, name: name || baseName(path) || path });
+  else favs.push({ path, name: name || baseName(path) || path, commandId: null });
   setExplorerFavorites(favs);
   renderExplorerFavorites();
   loadExplorer(); // refresh star state in the list
@@ -1581,6 +2301,103 @@ function removeExplorerFav(path) {
   setExplorerFavorites(getExplorerFavorites().filter((f) => f.path !== path));
   renderExplorerFavorites();
   loadExplorer();
+}
+const FAVORITE_PERMISSION_ALIASES = new Set(["cl", "cy"]);
+function isFavoritePermissionCommand(cmd) {
+  if (!cmd) return false;
+  const alias = String(cmd.alias || "").trim().toLowerCase();
+  const name = String(cmd.name || "").trim().toLowerCase();
+  return FAVORITE_PERMISSION_ALIASES.has(alias) || FAVORITE_PERMISSION_ALIASES.has(name);
+}
+function favoritePermissionCommands() {
+  return savedCmds.filter((cmd) => cmd && cmd.command && isFavoritePermissionCommand(cmd));
+}
+function favoriteCommand(favorite) {
+  if (!favorite || !favorite.commandId) return null;
+  const cmd = savedCmds.find((item) => item && item.id === favorite.commandId);
+  // A deleted command must not leave a favorite permanently unopenable.
+  if (!cmd || !cmd.command || !isFavoritePermissionCommand(cmd)) return null;
+  return cmd;
+}
+function associateFavoriteCommand(favorite, cmd) {
+  const favs = getExplorerFavorites();
+  const current = favs.find((item) => item.path === favorite.path);
+  if (!current) return;
+  current.commandId = cmd ? cmd.id : null;
+  setExplorerFavorites(favs);
+  renderExplorerFavorites();
+}
+function showFavoriteCommandMenu(event, favorite) {
+  const menu = document.getElementById("cdcmd-menu");
+  if (!menu) return;
+  event.preventDefault();
+  event.stopPropagation();
+  menu.innerHTML = "";
+
+  const title = document.createElement("div");
+  title.className = "ctx-menu-title";
+  title.textContent = `${favorite.name || baseName(favorite.path)} 열기`;
+  menu.appendChild(title);
+  let hide = null;
+  let onKeyDown = null;
+  const closeMenu = () => {
+    menu.classList.add("hidden");
+    if (hide) document.removeEventListener("mousedown", hide, true);
+    if (onKeyDown) document.removeEventListener("keydown", onKeyDown, true);
+  };
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "취소 — 쉘 디렉토리만 열기";
+  cancel.addEventListener("click", () => {
+    closeMenu();
+    cdToTerminal(favorite.path);
+  });
+  menu.appendChild(cancel);
+
+  const commands = favoritePermissionCommands();
+  for (const cmd of commands) {
+    const row = document.createElement("div");
+    row.className = "fav-command-row";
+    const run = document.createElement("button");
+    run.type = "button";
+    run.textContent = cmd.description || cmd.command;
+    run.title = cmd.command;
+    run.addEventListener("click", () => {
+      closeMenu();
+      openSessionWithCommand(favorite.path, cmd);
+    });
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "fav-link-btn";
+    link.textContent = favorite.commandId === cmd.id ? "연결됨" : "연결";
+    link.title = "이 폴더를 클릭하면 이 명령어로 바로 열기";
+    link.addEventListener("click", (e) => {
+      e.stopPropagation();
+      associateFavoriteCommand(favorite, cmd);
+      closeMenu();
+      openSessionWithCommand(favorite.path, cmd);
+    });
+    row.append(run, link);
+    menu.appendChild(row);
+  }
+
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.classList.remove("hidden");
+  hide = (ev) => {
+    if (!menu.contains(ev.target)) {
+      closeMenu();
+      // Escape or clicking away has the same safe fallback as Cancel: keep
+      // the user's folder navigation request, but do not run a command.
+      if (ev.type === "keydown" || ev.type === "mousedown") cdToTerminal(favorite.path);
+    }
+  };
+  document.addEventListener("mousedown", hide, true);
+  onKeyDown = (ev) => {
+    if (ev.key === "Escape") hide(ev);
+  };
+  document.addEventListener("keydown", onKeyDown, true);
 }
 function renderExplorerFavorites() {
   const el = document.getElementById("explorer-favorites");
@@ -1597,8 +2414,14 @@ function renderExplorerFavorites() {
     chip.className = "fav-chip";
     chip.title = f.path;
     chip.innerHTML = `<span class="fav-chip-star">★</span><span class="fav-chip-name">${esc(f.name)}</span><button class="fav-chip-x" title="Remove">&times;</button>`;
-    chip.querySelector(".fav-chip-star").addEventListener("click", () => cdToTerminal(f.path));
-    chip.querySelector(".fav-chip-name").addEventListener("click", () => cdToTerminal(f.path));
+    const openFavorite = (e) => {
+      e.stopPropagation();
+      const cmd = favoriteCommand(f);
+      if (cmd) openSessionWithCommand(f.path, cmd);
+      else showFavoriteCommandMenu(e, f);
+    };
+    chip.querySelector(".fav-chip-star").addEventListener("click", openFavorite);
+    chip.querySelector(".fav-chip-name").addEventListener("click", openFavorite);
     chip.querySelector(".fav-chip-x").addEventListener("click", (e) => {
       e.stopPropagation();
       removeExplorerFav(f.path);
@@ -1622,25 +2445,42 @@ async function goUp() {
 
 function onExplorerModeChange() {
   const val = explorerMode.value;
+  if (val.startsWith("blocked:")) return;
+  const generation = ++explorerFocusGeneration;
   if (val === "local") {
-    invoke("explorer_home_dir").then((home) => explorerGo(home, null));
+    invoke("explorer_home_dir").then((home) => {
+      if (generation === explorerFocusGeneration) explorerGo(home, null);
+    });
   } else {
     // val is sftp session id
     const id = parseInt(val);
+    const ownerId = sftpOwnerPaneId(id);
+    const owner = ownerId == null ? null : terminals.get(ownerId);
+    const remembered = owner &&
+      (owner.remotePath || owner.session?.remotePath || owner.cwd);
+    if (remembered) {
+      explorerGo(remembered, id);
+      return;
+    }
     invoke("sftp_home_dir", { sessionId: id })
-      .then((home) => explorerGo(home, id))
-      .catch(() => explorerGo("/", id));
+      .then((home) => {
+        if (generation === explorerFocusGeneration) explorerGo(home, id);
+      })
+      .catch(() => {
+        if (generation === explorerFocusGeneration) explorerGo("/", id);
+      });
   }
 }
 
-function addSftpOption(sftpId, label) {
+function addSftpOption(sftpId, label, autoSwitch = true) {
   const opt = document.createElement("option");
   opt.value = sftpId;
   opt.textContent = label;
   explorerMode.appendChild(opt);
-  // Auto switch to new SFTP
-  explorerMode.value = sftpId;
-  onExplorerModeChange();
+  if (autoSwitch) {
+    explorerMode.value = sftpId;
+    onExplorerModeChange();
+  }
 }
 
 function removeSftpOption(sftpId) {
@@ -1695,6 +2535,11 @@ async function createPane(parentEl, shell, args, cwd) {
   const ctxBadgeEl = document.createElement("div");
   ctxBadgeEl.className = "pane-ctx";
   paneEl.appendChild(ctxBadgeEl);
+  // Favorite commands become a draggable edge dock while an AI CLI owns this
+  // pane, leaving the terminal's command input unobstructed.
+  const commandShortcutsEl = document.createElement("div");
+  commandShortcutsEl.className = "pane-command-shortcuts";
+  paneEl.appendChild(commandShortcutsEl);
   parentEl.appendChild(paneEl);
 
   const term = createXterm();
@@ -1703,10 +2548,11 @@ async function createPane(parentEl, shell, args, cwd) {
   // Scrollback search — driven by the shared search bar (Ctrl+Shift+F).
   const searchAddon = new SearchAddon.SearchAddon();
   term.loadAddon(searchAddon);
-  // Ctrl+Click opens URLs (in-app browser when enabled); a plain click stays a
-  // selection click so it never hijacks text selection over a link.
+  // Ctrl+Click opens URLs in the in-app browser. Login URLs are the one
+  // intentional exception: a normal click opens them in Mymux too, because
+  // Claude Code/Codex print an OAuth URL as the action the user must take.
   term.loadAddon(new WebLinksAddon.WebLinksAddon((event, uri) => {
-    if (event.ctrlKey || event.metaKey) openLinkFromTerminal(uri);
+    if (event.ctrlKey || event.metaKey || isAiLoginUrl(uri)) openLinkFromTerminal(uri, isAiLoginUrl(uri));
     else hintLinkOnce();
   }));
   term.open(termWrap);
@@ -1740,7 +2586,8 @@ async function createPane(parentEl, shell, args, cwd) {
   // lastInputAt baseline = pane birth, so the long-task check (10+ min since
   // last input) has a sane anchor even in a pane the user never typed in
   // (e.g. a restored session auto-replaying its command).
-  terminals.set(id, { term, fitAddon, search: searchAddon, paneEl, type: shell === "ssh" ? "ssh" : "local", shell: shell || null, label: sessionLabel, cwd: cwd || null, unseen: false, marks: [], inputMark: null, lastInputAt: performance.now() });
+  terminals.set(id, { id, term, fitAddon, search: searchAddon, paneEl, commandShortcutsEl, type: shell === "ssh" ? "ssh" : "local", shell: shell || null, label: sessionLabel, cwd: cwd || null, unseen: false, marks: [], inputMark: null, lastInputAt: performance.now() });
+  renderPaneCommandShortcuts(id);
 
   // A brand-new pane's final size isn't settled at spawn (flex sizing, font
   // load, a split ratio applied just after). The container-level observer only
@@ -1755,7 +2602,11 @@ async function createPane(parentEl, shell, args, cwd) {
   new ResizeObserver(() => {
     if (roPending) return;
     roPending = true;
-    requestAnimationFrame(() => { roPending = false; refitAllPanes(); });
+    requestAnimationFrame(() => {
+      roPending = false;
+      refitAllPanes();
+      positionPaneCommandDock(terminals.get(id));
+    });
   }).observe(termWrap);
 
   // Status bar: label + split/close controls. The cwd chip tracks the pane's
@@ -1768,15 +2619,19 @@ async function createPane(parentEl, shell, args, cwd) {
   statusBar.innerHTML = `
     <span class="pane-grip" title="Drag to move pane">&#10287;</span>
     <span class="pane-label">${esc(sessionLabel)}</span>
-    ${shell !== "ssh" ? `<span class="pane-cwd" title="${esc(cwd || "")}">${esc(cwdText)}</span>` : ""}
+    ${shell !== "ssh" ? `<span class="pane-cwd">${esc(cwdText)}</span>` : ""}
     <span class="pane-actions">
       <button class="pane-btn split-h" title="Split horizontally (Ctrl+Shift+D)">&#8596;</button>
       <button class="pane-btn split-v" title="Split vertically (Ctrl+Shift+E)">&#8597;</button>
+      <button class="pane-btn flip" title="분할 방향 전환 상하 ↔ 좌우 (Ctrl+Shift+O)">&#8635;</button>
       <button class="pane-btn close" title="Close pane (Ctrl+Shift+W)">&times;</button>
     </span>
   `;
+  const paneCwd = statusBar.querySelector(".pane-cwd");
+  if (paneCwd) paneCwd.title = cwd || "";
   statusBar.querySelector(".split-h").addEventListener("click", (e) => { e.stopPropagation(); setFocusedPane(id); splitPane("horizontal"); });
   statusBar.querySelector(".split-v").addEventListener("click", (e) => { e.stopPropagation(); setFocusedPane(id); splitPane("vertical"); });
+  statusBar.querySelector(".flip").addEventListener("click", (e) => { e.stopPropagation(); setFocusedPane(id); flipSplitDirection(); });
   statusBar.querySelector(".close").addEventListener("click", (e) => { e.stopPropagation(); closePane(id); });
 
   // Mouse-drag the status bar onto another pane's edge (top/bottom/left/right)
@@ -1857,6 +2712,13 @@ async function createPane(parentEl, shell, args, cwd) {
       if (e.key === "Tab") { e.preventDefault(); focusNextPane(e.shiftKey ? -1 : 1); return false; }
       // Ctrl+Shift+P — command palette.
       if (e.shiftKey && (e.key === "P" || e.code === "KeyP")) { e.preventDefault(); openCommandPalette(); return false; }
+      // Ctrl+Shift+Backspace clears the whole draft in Claude Code and Codex.
+      // Claude supports Ctrl+U as a prompt-clear action. Codex currently treats
+      // Ctrl+U as kill-to-line-start, so move to the end and repeat it enough to
+      // consume a large multi-line paste without submitting or resetting chat.
+      if (e.shiftKey && (e.key === "Backspace" || e.code === "Backspace")) {
+        if (clearAiComposer(id)) { e.preventDefault(); return false; }
+      }
       // Ctrl+Shift+↑/↓ — jump between shell prompts (OSC 133 marks).
       if (e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); jumpPrompt(e.key === "ArrowUp" ? -1 : 1); return false; }
       // Ctrl+A — select the whole current command-input line (Windows-style).
@@ -2003,6 +2865,7 @@ async function createPane(parentEl, shell, args, cwd) {
           flashPaneNotify(id);
         }
         t.outStart = null; // the shell prompt is back — don't double-fire the silence watcher
+        markPaneReturnedToShell(id, t);
       }
       return true;
     });
@@ -2033,29 +2896,51 @@ async function createPane(parentEl, shell, args, cwd) {
       const ti = terminals.get(id); if (ti) ti.imeComposing = false;
     });
 
-    // ── macOS WKWebView IME shim ──────────────────────────────────────────────
-    // On macOS WebKit the Korean/CJK IME fires NO composition events and instead
-    // delivers every refinement as an `input` event with inputType
-    // `insertReplacementText` (isComposing:false, keyCode 229) — xterm.js never
-    // sees a composition, forwards only the raw first jamo and drops the
-    // replacements, so syllables split (xtermjs/xterm.js#5887, #5894; WKWebView
-    // only, Chrome/Electron unaffected). Hijack that flow at `beforeinput`: erase
-    // the partial we already sent (Backspace ×liveLen) and send the refined
-    // syllable, bypassing xterm entirely. ASCII/normal keys fall through to xterm.
+    // ── macOS WKWebView Korean/CJK IME fix ────────────────────────────────────
+    // macOS-only. On WebKit (WKWebView) the very FIRST character of a typing run
+    // arrives as a committed `input` event of type `insertText` (isComposing
+    // false) BEFORE WKWebView starts a composition; every later character then
+    // comes through normal composition events that xterm handles correctly. Left
+    // alone, xterm forwards that first jamo raw, so the opening syllable splits
+    // into consonant+vowel ("ㅈ ㅏ 도행전"). WKWebView-only — Chrome/WebView2 are
+    // unaffected (xtermjs/xterm.js#5887, #5894). See docs/macos-webkit-gotchas.md.
+    //
+    // Fix: intercept that first `insertText` at `beforeinput`, DON'T send the jamo
+    // standalone — seed the textarea with it so the composition that follows
+    // builds the whole syllable and xterm's native handler emits it composed. Any
+    // stray `insertReplacementText` (before composition engages) is rerouted
+    // through xterm's OWN data pipeline (coreService.triggerDataEvent → onData) —
+    // never straight to the PTY — so command-history tracking and the shortcut
+    // autocomplete stay in sync (writing to the PTY directly desynced both: it
+    // broke Backspace and auto-inserted shortcuts).
     if (IS_MAC) {
       const ta = term.textarea;
-      let liveLen = 0; // display chars of the in-progress syllable already sent to the PTY
+      let liveLen = 0; // chars of the in-progress syllable already sent to the PTY
+      const feed = (data) => {
+        if (!data) return;
+        try { if (typeof term.input === "function") { term.input(data, true); return; } } catch {}
+        try { term._core.coreService.triggerDataEvent(data, true); return; } catch {}
+        invoke("pty_write", { id, data });
+      };
       const commit = () => { liveLen = 0; };
       ta.addEventListener("beforeinput", (e) => {
         const it = e.inputType;
         const d = e.data || "";
         const isReplace = it === "insertReplacementText";
         const isImeInsert = it === "insertText" && !!d && /[^\x00-\x7F]/.test(d) && !e.isComposing;
-        if (!isReplace && !isImeInsert) { commit(); return; } // ASCII/other → let xterm handle
+        if (!isReplace && !isImeInsert) { commit(); return; } // ASCII/special → xterm handles it
         e.preventDefault();
         e.stopImmediatePropagation();
-        const erase = isReplace ? "\x7f".repeat(liveLen) : "";
-        invoke("pty_write", { id, data: erase + d });
+        if (isImeInsert) {
+          // Seed the first jamo into the textarea; the following composition
+          // absorbs it and xterm emits the finished syllable.
+          try { ta.value = d; if (ta.setSelectionRange) ta.setSelectionRange(d.length, d.length); } catch {}
+          liveLen = 0;
+          return;
+        }
+        // insertReplacementText (rare once composition engages): erase our partial
+        // and send the refined syllable through xterm's pipeline.
+        feed("\x7f".repeat(liveLen) + d);
         liveLen = [...d].length;
         try { ta.value = ""; } catch {}
       }, true);
@@ -2064,7 +2949,7 @@ async function createPane(parentEl, shell, args, cwd) {
     }
   }
   paneEl.addEventListener("mousedown", () => { if (focusedPaneId !== id) setFocusedPane(id); }, true);
-  paneEl.addEventListener("click", () => setFocusedPane(id));
+  paneEl.addEventListener("click", () => { setFocusedPane(id); showExplorerForSession(id); });
   termWrap.addEventListener("click", () => { setFocusedPane(id); term.focus(); });
   // A plain mouse drag should select text. dragDropEnabled:false re-enables the
   // webview's native HTML5 drag, which would otherwise hijack a drag that begins
@@ -2078,7 +2963,7 @@ async function createPane(parentEl, shell, args, cwd) {
     clearTimeout(selCopyTimer);
     selCopyTimer = setTimeout(() => {
       const sel = term.getSelection();
-      if (sel) clipboardWrite(sel);
+      if (sel) { clipboardWrite(sel); appendPaneMemo(id, sel); }
     }, 120);
   });
   // Right-click: copy the selection if any, otherwise paste the clipboard (PuTTY-style).
@@ -2137,6 +3022,10 @@ function setFocusedPane(ptyId) {
     }
   }
   updateSessionActive();
+  showExplorerForSession(ptyId);
+  if (t && t.type !== "ssh" && (t.codexDetected || t.ctxSource === "codex")) {
+    loadCodexLimits();
+  }
 }
 
 // Safety net for terminal focus. The WebView can drop the active terminal's
@@ -2213,9 +3102,27 @@ function startFocusKeeper() {
     // intermittent "위아래로 튕김" bounce. Save scrollTop and put it back.
     const vp = el.querySelector(".xterm-viewport");
     const savedTop = vp ? vp.scrollTop : null;
-    try { if (ta) ta.blur(); } catch {}
-    try { t.term.focus(); } catch {}
-    try { if (ta && document.activeElement !== ta) ta.focus({ preventScroll: true }); } catch {}
+    if (ta && document.activeElement === ta) {
+      // Common post-Alt-Tab case with this WebView2 build: DOM focus never
+      // actually left the textarea (activeElement is already correct) — only
+      // xterm's internal "focus" class is stale, because that class is only
+      // (re)applied by xterm's own listener on a genuine textarea "focus" DOM
+      // event, and .focus() on an already-focused element fires no such event.
+      // We used to force one via blur()+focus(), but that's a REAL OS-level
+      // blur/refocus on a field with live Hangul IME association, and it desyncs
+      // Windows' IME (IMM32/TSF): typing the very first syllable right after the
+      // window returns then splits into jamo (ㅈ+ㅏ instead of 자) or double-
+      // types, because a retry here can land in the tiny gap between the first
+      // keydown and compositionstart — before the imeComposing guard can catch
+      // it. Dispatch a synthetic focus event instead: xterm's _handleTextAreaFocus
+      // never reads the event object, so it re-applies the class / cursor / DECSET-
+      // 1004 report exactly the same, with zero OS-level focus churn to disturb
+      // the IME. (Fixes the "AI CLI 한글 첫 글자 깨짐 after window return" report.)
+      try { ta.dispatchEvent(new FocusEvent("focus")); } catch {}
+    } else {
+      try { t.term.focus(); } catch {}
+      try { if (ta && document.activeElement !== ta) ta.focus({ preventScroll: true }); } catch {}
+    }
     if (vp && savedTop != null && vp.scrollTop !== savedTop) vp.scrollTop = savedTop;
     if (focusedPaneId !== pid) { try { setFocusedPane(pid); } catch {} }
   };
@@ -2233,6 +3140,7 @@ function startFocusKeeper() {
     const now = performance.now();
     if (now - lastReturn < 600) return;
     lastReturn = now;
+    if (buddyOverlayShown) { invoke("buddy_overlay_hide").catch(() => {}); buddyOverlayShown = false; } // app is back — drop the desktop buddy
     cancelFocusReturnRetries();
     restore(true);
     forceRepaintVisiblePanes(); // wake xterm's rAF renderer so buffered echo paints now, not in a burst
@@ -2262,7 +3170,11 @@ function startFocusKeeper() {
   // return, so this is the reliable trigger.
   try {
     const ev = window.__TAURI__ && window.__TAURI__.event;
-    if (ev && ev.listen) ev.listen("mymux-refocus", () => onReturn());
+    if (ev && ev.listen) {
+      ev.listen("mymux-refocus", () => onReturn());
+      // Buddy overlay clicked → jump to that session in the main window.
+      ev.listen("buddy:goto", (e) => { buddyOverlayShown = false; const sid = e && e.payload; if (sid != null) focusSession(Number(sid)); });
+    }
   } catch {}
   // Backstop: Tauri's native window focus event (unreliable on Alt-Tab in this
   // WebView2 build, hence the Rust poll above — kept for cases where it fires).
@@ -2407,7 +3319,28 @@ function flashPaneNotify(id) {
     const tab = findTabForPane(id);
     if (tab && (tab.tabIdx !== activeTabIdx || browserTabActive || viewerActive)) markUnseen(id, t, tab);
   }
-  if (!document.hasFocus()) invoke("window_attention").catch(() => {});
+  if (!document.hasFocus()) {
+    invoke("window_attention").catch(() => {});
+    maybeShowBuddyOverlay(id, t, longTask);
+  }
+}
+// When a task finishes while the app is hidden/covered, pop a desktop buddy
+// overlay (a separate always-on-top window) at the screen's bottom-right so the
+// finished session is noticeable without the app in view. Respects the 🔔
+// character choice ("none" opts out). macOS positions it per the OS.
+let buddyOverlayShown = false;
+function maybeShowBuddyOverlay(id, t, longTask) {
+  const char = notifyFlashPrefs.character;
+  if (!char || char === "none") return;
+  try {
+    invoke("buddy_overlay_show", {
+      sessionId: id,
+      title: t ? sessionLabelFor(t) : "세션",
+      character: char === "mascot" ? "mascot" : "classic",
+      dialect: notifyFlashPrefs.dialect || "standard",
+      longTask: !!longTask,
+    }).then(() => { buddyOverlayShown = true; }).catch(() => {});
+  } catch {}
 }
 
 // Hovering a flashing pane (or its session-list row) acknowledges the
@@ -2602,7 +3535,7 @@ function initFoxDrag() {
 // ANSI color codes, so one regex covers both `ctx:67%` and `ctx:[██░░]67%`.
 const CTX_RE = /ctx:(?:\[[^\]]*\])?(?:\x1b\[[0-9;]*m)*(\d{1,3})%/;
 // `Model: Fable 5` is wrapped in cyan — capture stops at the trailing ESC.
-const CTX_MODEL_RE = /Model:\s*(?:\x1b\[[0-9;]*m)*([^\x1b\r\n]{1,24})/;
+const CTX_MODEL_RE = /Model:\s*([^|\r\n]{1,48}?)(?=\s*(?:\||ctx:|5h:|wk:|mo:|$))/i;
 // Codex has used both `97% context left` and `Context left: 97%` in its TUI.
 // Match either order (and the newer "remaining" wording) after terminal escape
 // sequences have been removed. Keeping this independent from a line ending is
@@ -2611,10 +3544,15 @@ const CODEX_CTX_RE = /(?:\bcontext(?:\s+window)?\s+(?:left|remaining)\s*:?\s*(\d
 // Codex banner/status line. Limit accepted ids to Codex/OpenAI model families
 // so Claude's own `Model: …` statusline can never populate this field.
 const CODEX_MODEL_RE = /\bmodel\s*:\s*((?:gpt|o|codex)[A-Za-z0-9._-]{0,58})/i;
+const CODEX_MODEL_ID_RE = /\b((?:gpt|o|codex)[A-Za-z0-9._-]{1,58})\b/i;
+const CODEX_EFFORT_RE = /\b(?:reasoning\s+)?effort\s*[:=]\s*(minimal|low|medium|high|xhigh)\b/i;
+const CODEX_MODEL_STATUS_RE = /\b((?:gpt|o[1-9][A-Za-z0-9._-]*|codex)[A-Za-z0-9._-]{1,58})\b/i;
 // Codex prints its product banner before it has rendered a context footer.
 // Detect that banner so the per-pane indicators can appear immediately with
 // a placeholder instead of waiting for the first completed turn.
-const CODEX_START_RE = /\b(?:openai\s+)?codex(?:\s+cli)?\b/i;
+// Require the real versioned startup banner. A bare "Codex" word can appear
+// in Claude's answer, plugin output, or a pasted log and must not change owner.
+const CODEX_START_RE = /\bOpenAI\s+Codex\b[\s\S]{0,24}\(v\d+(?:\.\d+){1,3}\)/i;
 // CSI covers styles, cursor movement and erase controls. OSC is included because
 // some terminals emit title updates in the same PTY chunk as the status footer.
 const TERMINAL_ESCAPE_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -\/]*[@-~])/g;
@@ -2622,6 +3560,84 @@ const TERMINAL_ESCAPE_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -\/]*
 function terminalPlainText(text) {
   return text.replace(TERMINAL_ESCAPE_RE, "");
 }
+function terminalVisibleTail(term, maxLines = 6) {
+  try {
+    const buf = term && term.buffer && term.buffer.active;
+    if (!buf || !buf.getLine) return "";
+    const lines = [];
+    const start = Math.max(0, buf.baseY + buf.cursorY - maxLines + 1);
+    const end = Math.min(buf.length - 1, buf.baseY + buf.cursorY);
+    for (let i = start; i <= end; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+function tailAfterLastLineBreak(text) {
+  const i = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
+  return i >= 0 ? text.slice(i + 1) : text;
+}
+function parseCodexFooter(text) {
+  const tail = text.slice(-360).trimEnd();
+  let found = null;
+  for (const m of tail.matchAll(new RegExp(CODEX_CTX_RE.source, "gi"))) {
+    const left = parseInt(m[1] || m[2], 10);
+    if (Number.isNaN(left)) continue;
+    found = {
+      pct: 100 - Math.min(100, left),
+      index: text.length - tail.length + m.index,
+      end: text.length - tail.length + m.index + m[0].length,
+    };
+  }
+  if (!found) return null;
+  const relEnd = found.end - (text.length - tail.length);
+  const sameStatusLineSuffix = tailAfterLastLineBreak(tail.slice(relEnd));
+  if (sameStatusLineSuffix.length > 96) return null;
+  const relIndex = found.index - (text.length - tail.length);
+  const lineStart = Math.max(tail.lastIndexOf("\n", relIndex), tail.lastIndexOf("\r", relIndex));
+  found.line = tail.slice(lineStart + 1, relEnd + sameStatusLineSuffix.length);
+  return found;
+}
+
+// OSC 133;D means the shell prompt has taken ownership of the pane again.
+// xterm invokes the OSC handler during term.write(), before that write's
+// scanCtxUsage callback. Drop the just-finished TUI's detector state and skip
+// that one callback so its final footer cannot immediately switch the dock
+// back to AI mode.
+function markPaneReturnedToShell(id, t) {
+  t._ctxTail = "";
+  t.skipCtxScanOnce = true;
+  const ownedByAi = t.aiMode
+    || !!t.ctxSource
+    || t.ctxPct != null
+    || t.codexDetected;
+  if (!ownedByAi) return;
+
+  t.ctxSource = null;
+  t.ctxPct = null;
+  t.ctxModel = null;
+  t.ctxEffort = null;
+  t.codexModel = null;
+  t.codexReasoningEffort = null;
+  t.codexDetected = false;
+  t.ctxAt = 0;
+  t.ctxLvl = 0;
+  setPaneAiMode(t, false);
+  clearPaneCtxUi(id, t);
+}
+
+function clearPaneCtxUi(id, t) {
+  const paneBadge = t.paneEl && t.paneEl.querySelector(".pane-ctx");
+  if (paneBadge) {
+    paneBadge.textContent = "";
+    paneBadge.classList.remove("stale");
+  }
+  document.querySelector(`.session-item[data-pty-id="${id}"] .session-ctx`)?.remove();
+}
+
 // Account-wide Claude rate limits ride the same HUD statusline:
 // `5h:45%(3h42m) wk:12%(2d5h) mo:8%(15d3h)` — value colored, reset time dimmed,
 // stale readings get a `*` after the % and a `~` before the reset time.
@@ -2635,6 +3651,7 @@ const CL_LIMIT_KEYS = [
 let claudeLimits = null;    // { fiveH, fiveHReset, wk, wkReset, mo, moReset, at } — from a pane's HUD statusline
 let claudeLimitsApi = null; // same shape (5h+wk only) — from the OAuth usage API; works without OMC/statusline
 let codexLimits = null;     // { pct, label, secondary, resetsAt, plan, at }
+let codexResetCredits = null; // { availableCount, credits }
 // Two independent sources feed the CL readout: the live pane statusline
 // (claudeLimits) and the direct OAuth usage API (claudeLimitsApi). Whichever was
 // refreshed most recently wins — a rendering Claude pane redraws its statusline
@@ -2672,63 +3689,122 @@ let codexConfiguredModel = null; // from ~/.codex/config.toml
 let codexSessionModel = null; // active session model from Codex settings events
 let codexConfiguredReasoningEffort = null; // from ~/.codex/config.toml
 let codexSessionReasoningEffort = null; // active session reasoning setting from rollout events
+let codexSessionCtxPct = null; // active session context usage from rollout token_count events
+let codexSessionCtxAt = 0;
+let codexSnapshotPaneId = null; // local pane that owns the currently-polled rollout
+let codexSnapshotRequestGeneration = 0;
 
 // Scan one pump-tick's worth of PTY output for the statusline patterns. Keeps a
 // short tail so a pattern split across ticks still matches on the next one.
 function scanCtxUsage(id, t, data) {
+  if (t.skipCtxScanOnce) {
+    t.skipCtxScanOnce = false;
+    t._ctxTail = "";
+    return;
+  }
   const rawText = (t._ctxTail || "") + data;
-  t._ctxTail = rawText.slice(-240);
-  const text = terminalPlainText(rawText);
+  t._ctxTail = rawText.slice(-360);
+  // Once a pane is back at a shell prompt, the visible terminal rows still
+  // contain the completed TUI's footer. Only fresh PTY output/tail may prove a
+  // new AI launch. Active AI panes can still inspect their repainted footer.
+  const visibleText = t.aiMode ? terminalVisibleTail(t.term) : "";
+  const text = terminalPlainText(rawText + (visibleText ? "\n" + visibleText : ""));
   let changed = false;
-  if (!t.codexDetected && CODEX_START_RE.test(text)) {
+  if (!t.codexDetected && (!t.aiMode || t.ctxSource === "codex") && CODEX_START_RE.test(text)) {
     t.codexDetected = true;
+    setPaneAiMode(t, true);
     if (t.ctxSource !== "codex") {
       t.ctxSource = "codex";
       changed = true;
     }
+    applyCodexSessionSnapshot();
+    loadCodexLimits();
   }
   // Only the LAST occurrence matters — the statuslines redraw constantly and
   // older matches in the same burst are already outdated.
   // Claude (OMC HUD): `ctx:NN%` where NN is percent USED.
-  let claudePct = null, claudeAt = -1;
+  let claudePct = null, claudeAt = -1, claudeModel = null;
   const ci = text.lastIndexOf("ctx:");
-  if (ci >= 0) {
+  if (ci >= 0 && !(t.codexDetected && t.ctxSource === "codex")) {
     const m = CTX_RE.exec(text.slice(ci, ci + 90));
-    if (m) { claudePct = Math.min(100, parseInt(m[1], 10)); claudeAt = ci; }
+    if (m) {
+      claudePct = Math.min(100, parseInt(m[1], 10));
+      claudeAt = ci;
+      // Model text is trusted only when it belongs to the same short HUD
+      // window as ctx:. Do not mine arbitrary Claude answers for "Model:".
+      const prevBreak = Math.max(text.lastIndexOf("\n", ci), text.lastIndexOf("\r", ci));
+      const nextNl = text.indexOf("\n", ci);
+      const nextCr = text.indexOf("\r", ci);
+      const nextBreak = [nextNl, nextCr].filter((n) => n >= 0).sort((a, b) => a - b)[0];
+      const statusStart = Math.max(prevBreak + 1, ci - 160, 0);
+      const statusEnd = nextBreak == null ? Math.min(text.length, ci + 160) : nextBreak;
+      const statusText = text.slice(statusStart, statusEnd);
+      const mm = CTX_MODEL_RE.exec(statusText);
+      if (mm) claudeModel = mm[1].trim();
+      const em = CODEX_EFFORT_RE.exec(statusText);
+      if (em) t.ctxEffort = em[1].toLowerCase();
+    }
   }
   // Codex: `NN% context left` where NN is percent REMAINING → invert.
   // A status footer is the final visible text in a repaint. Restrict parsing to
   // that tail so a model reply containing the same words cannot overwrite a
   // session badge. `trimEnd` retains all meaningful status text.
-  const codexFooter = text.slice(-160).trimEnd();
+  const codexFooter = t.aiMode && t.ctxSource === "claude" ? null : parseCodexFooter(text);
   let codexPct = null, codexAt = -1;
-  for (const m of codexFooter.matchAll(new RegExp(CODEX_CTX_RE.source, "gi"))) {
-    if (m.index + m[0].length !== codexFooter.length) continue;
-    const left = parseInt(m[1] || m[2], 10);
-    if (!Number.isNaN(left)) {
-      codexPct = 100 - Math.min(100, left);
-      codexAt = text.length - codexFooter.length + m.index;
+  if (codexFooter) {
+    codexPct = codexFooter.pct;
+    codexAt = codexFooter.index;
+    if (!t.codexDetected) {
+      t.codexDetected = true;
+      changed = true;
+      applyCodexSessionSnapshot();
+      loadCodexLimits();
     }
+    setPaneAiMode(t, true);
   }
   // Both tools can show up in one pane over time — the later sighting wins.
   const pct = codexAt > claudeAt ? codexPct : claudePct;
   if (pct != null) {
     const source = codexAt > claudeAt ? "codex" : "claude";
+    setPaneAiMode(t, true);
+    if (source === "claude") {
+      // A live Claude HUD is stronger evidence than stale Codex text retained
+      // in the terminal tail. Prevent global Codex rollout data from crossing.
+      t.codexDetected = false;
+      t.codexModel = null;
+      t.codexReasoningEffort = null;
+      if (claudeModel && claudeModel !== t.ctxModel) { t.ctxModel = claudeModel; changed = true; }
+    } else {
+      t.codexDetected = true;
+    }
     t.ctxAt = performance.now(); // fresh sighting even when the value is equal
     if (pct !== t.ctxPct || source !== t.ctxSource) { t.ctxPct = pct; t.ctxSource = source; changed = true; }
     maybeAnnounceCtx(id, t);
   }
-  const mi = text.lastIndexOf("Model:");
-  if (mi >= 0) {
-    const m = CTX_MODEL_RE.exec(text.slice(mi, mi + 60));
-    if (m) {
-      const name = m[1].trim();
-      if (name && name !== t.ctxModel) { t.ctxModel = name; changed = true; }
+  let codexModel = null;
+  let codexEffort = null;
+  if (t.codexDetected || t.ctxSource === "codex" || codexFooter) {
+    for (const m of text.matchAll(new RegExp(CODEX_MODEL_RE.source, "gi"))) codexModel = m[1];
+    const em = CODEX_EFFORT_RE.exec(text);
+    if (em) codexEffort = em[1].toLowerCase();
+    if (!codexModel && codexFooter && codexFooter.line) {
+      const m = CODEX_MODEL_ID_RE.exec(codexFooter.line);
+      if (m) codexModel = m[1];
+    }
+    if (!codexModel) {
+      const m = CODEX_MODEL_STATUS_RE.exec(text);
+      if (m && !/^codex$/i.test(m[1])) codexModel = m[1];
     }
   }
-  let codexModel = null;
-  for (const m of text.matchAll(new RegExp(CODEX_MODEL_RE.source, "gi"))) codexModel = m[1];
-  if (codexModel && codexModel !== t.codexModel) { t.codexModel = codexModel; changed = true; }
+  if (codexModel && codexModel !== t.codexModel) {
+    t.codexModel = codexModel;
+    changed = true;
+    if (t.ctxSource === "codex" || t.codexDetected) loadCodexLimits();
+  }
+  if (codexEffort && codexEffort !== t.codexReasoningEffort) {
+    t.codexReasoningEffort = codexEffort;
+    changed = true;
+  }
   // Account-wide Claude rate limits (5h:34% wk:12% …) — global, not per-pane.
   let limitsChanged = false;
   for (const [key, re, field, rfield] of CL_LIMIT_KEYS) {
@@ -2757,20 +3833,23 @@ function ctxBadgeText(t) {
   if (t.ctxSource === "codex") {
     // Codex's status footer has no reasoning setting, so prefer the active
     // rollout value and fall back to config.toml. ctxPct is converted from "left".
-    parts.push(codexSessionModel || t.codexModel || codexConfiguredModel || "Codex");
-    const effort = codexSessionReasoningEffort || codexConfiguredReasoningEffort;
+    const localFallback = t.type !== "ssh";
+    parts.push(t.codexModel || t.codexSnapshotModel ||
+      (localFallback ? codexConfiguredModel : null) || "Codex");
+    const effort = t.codexReasoningEffort || t.codexSnapshotEffort ||
+      (localFallback ? codexConfiguredReasoningEffort : null);
     if (effort) parts.push(effort);
   } else {
     if (t.ctxModel) parts.push(t.ctxModel);
-    if (claudeEffort) parts.push(claudeEffort);
+    if (t.ctxEffort || claudeEffort) parts.push(t.ctxEffort || claudeEffort);
   }
-  parts.push(t.ctxPct == null ? "—" : t.ctxPct + "%");
+  parts.push(t.ctxPct == null ? "?" : t.ctxPct + "%");
   return parts.join(" | ");
 }
 
 // Refresh both badges (pane overlay + session-list pill) for one session.
 function updateCtxUi(id, t) {
-  if (t.ctxPct == null && !t.codexDetected) return;
+  if (t.ctxPct == null && !t.codexDetected && !t.aiMode) return;
   const show = notifyFlashPrefs.ctxBadge;
   const color = t.ctxPct == null ? "var(--text-muted, #8b93a7)" : ctxColor(t.ctxPct);
   const stale = t.ctxPct != null && performance.now() - (t.ctxAt || 0) > CTX_STALE_MS;
@@ -2791,8 +3870,11 @@ function updateCtxUi(id, t) {
       const nameEl = li.querySelector(".session-name");
       if (nameEl) nameEl.after(se); else li.appendChild(se);
     }
+    // Session-list pill shows JUST the percentage (em dash while unknown) to
+    // keep the sidebar compact; the full "model | effort | ctx" stays on hover.
+    // The pane's top-right badge keeps the complete text.
     se.textContent = t.ctxPct == null ? "—" : t.ctxPct + "%";
-    se.title = ctxBadgeText(t); // full "model | effort | ctx" on hover
+    se.title = ctxBadgeText(t);
     se.style.color = color;
     se.style.borderColor = color;
     se.classList.toggle("stale", stale);
@@ -2809,7 +3891,9 @@ function maybeAnnounceCtx(id, t) {
     t.ctxLvl = lvl;
     if (notifyFlashPrefs.ctxVoice && notifyFlashPrefs.character && notifyFlashPrefs.character !== "none") {
       const dialect = CTX_PHRASES[notifyFlashPrefs.dialect] ? notifyFlashPrefs.dialect : "standard";
-      showFoxAt(t.paneEl, id, false, CTX_PHRASES[dialect][lvl - 1]);
+      // Swap the phrase's hardcoded level % (50/70/85) for the real current %
+      // so the buddy speaks the same number the badge shows.
+      showFoxAt(t.paneEl, id, false, CTX_PHRASES[dialect][lvl - 1].replace(/\d+%/, pct + "%"));
     }
   } else if (lvl < cur && pct <= CTX_LEVELS[cur - 1] - CTX_REARM_DROP) {
     t.ctxLvl = lvl;
@@ -2829,6 +3913,101 @@ function usageSeg(label, pct, stale) {
   s.appendChild(b);
   return s;
 }
+// A usage "reset" is a large drop in a rate-limit percentage — a fresh window
+// opened and the budget is free again. When detected, flash an "N" beside CL/CX
+// for RESET_N_MS so it's noticeable at a glance. Tracked per source (CL 5h, CX).
+const RESET_N_MS = 60000;
+const RESET_DROP = 40; // ≥40%p fall from ≥50% counts as a reset
+const CODEX_RESET_STATE_KEY = "mymux.codexUsageResetState.v1";
+let codexResetCount = 0;
+let codexResetLastAt = null;
+let codexResetLastPct = null;
+try {
+  const saved = JSON.parse(localStorage.getItem(CODEX_RESET_STATE_KEY) || "{}");
+  codexResetCount = Math.max(0, Number(saved.count) || 0);
+  codexResetLastAt = Number.isFinite(Number(saved.lastAt)) ? Number(saved.lastAt) : null;
+  codexResetLastPct = Number.isFinite(Number(saved.lastPct)) ? Number(saved.lastPct) : null;
+} catch (_) {}
+let prevCL5h = null, prevCXpct = codexResetLastPct;
+let clResetAt = 0, cxResetAt = 0;
+function saveCodexResetState() {
+  try {
+    localStorage.setItem(CODEX_RESET_STATE_KEY, JSON.stringify({
+      count: codexResetCount,
+      lastAt: codexResetLastAt,
+      lastPct: codexResetLastPct,
+    }));
+  } catch (_) {}
+}
+function detectUsageReset(now) {
+  const cl = activeClaudeLimits();
+  const cur5h = cl && cl.fiveH != null ? cl.fiveH : null;
+  if (prevCL5h != null && cur5h != null && prevCL5h >= 50 && cur5h <= prevCL5h - RESET_DROP) {
+    clResetAt = now; setTimeout(updateGlobalUsageUi, RESET_N_MS + 200); // clear the N later
+  }
+  if (cur5h != null) prevCL5h = cur5h;
+  const curCX = codexLimits && codexLimits.pct != null ? codexLimits.pct : null;
+  if (prevCXpct != null && curCX != null && prevCXpct >= 50 && curCX <= prevCXpct - RESET_DROP) {
+    cxResetAt = now; setTimeout(updateGlobalUsageUi, RESET_N_MS + 200);
+    codexResetCount += 1;
+    codexResetLastAt = Date.now();
+    saveCodexResetState();
+  }
+  if (curCX != null) {
+    prevCXpct = curCX;
+    codexResetLastPct = curCX;
+    saveCodexResetState();
+  }
+}
+function resetNBadge() {
+  const n = document.createElement("span");
+  n.className = "usage-reset-n";
+  n.textContent = "N";
+  n.title = "방금 사용량이 리셋됨 (New)";
+  return n;
+}
+function codexResetBadge() {
+  const count = Number(codexResetCredits?.availableCount || 0);
+  if (count <= 0) return null;
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "usage-reset-count";
+  b.textContent = `R-${count}`;
+  b.title = "사용 가능한 Codex 리셋권입니다. 클릭하면 리셋권을 사용합니다.";
+  b.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (!window.confirm(`Codex 리셋권 1개를 사용하시겠습니까?\n남은 리셋권: ${count}개`)) return;
+    b.disabled = true;
+    try {
+      const outcome = await invoke("codex_consume_reset_credit", {
+        creditId: codexResetCredits?.credits?.[0]?.id || null,
+      });
+      if (outcome === "reset" || outcome === "alreadyRedeemed") {
+        toast("Codex 리셋권을 사용했습니다.");
+        await loadCodexLimits();
+      } else if (outcome === "noCredit") {
+        toast("사용 가능한 Codex 리셋권이 없습니다.", true);
+      } else if (outcome === "nothingToReset") {
+        toast("현재 리셋할 사용량 제한이 없습니다.", true);
+      } else {
+        toast(`Codex 리셋 결과: ${outcome}`, true);
+      }
+    } catch (e) { toast(`Codex 리셋 실패: ${e}`, true); }
+    await loadCodexResetCredits();
+  });
+  return b;
+}
+async function loadCodexResetCredits() {
+  try { codexResetCredits = await invoke("codex_reset_credits"); }
+  catch { codexResetCredits = null; }
+  updateGlobalUsageUi();
+}
+async function refreshCodexUsageFromBadge(event) {
+  event.stopPropagation();
+  await loadCodexLimits();
+  await loadCodexResetCredits();
+  toast("CX 사용량을 새로고침했습니다.");
+}
 function updateGlobalUsageUi() {
   const el = document.getElementById("usage-global");
   if (!el) return;
@@ -2836,6 +4015,7 @@ function updateGlobalUsageUi() {
   el.title = "";
   if (!notifyFlashPrefs.ctxBadge) return;
   const now = performance.now();
+  detectUsageReset(now);
   const tips = [];
   const cl = activeClaudeLimits();
   if (cl && (cl.fiveH != null || cl.wk != null || cl.mo != null)) {
@@ -2844,6 +4024,7 @@ function updateGlobalUsageUi() {
     tool.className = "usage-tool";
     tool.textContent = "CL";
     el.appendChild(tool);
+    if (clResetAt && now - clResetAt < RESET_N_MS) el.appendChild(resetNBadge());
     if (cl.fiveH != null) el.appendChild(usageSeg("5h", cl.fiveH, stale));
     if (cl.wk != null) el.appendChild(usageSeg("wk", cl.wk, stale));
     if (cl.mo != null) el.appendChild(usageSeg("mo", cl.mo, stale));
@@ -2858,13 +4039,29 @@ function updateGlobalUsageUi() {
       div.textContent = "│";
       el.appendChild(div);
     }
-    const tool = document.createElement("span");
-    tool.className = "usage-tool";
+    const tool = document.createElement("button");
+    tool.type = "button";
+    tool.className = "usage-tool usage-clickable";
     tool.textContent = "CX";
+    tool.title = "클릭하면 CX 사용량을 새로고침합니다.";
+    tool.addEventListener("click", refreshCodexUsageFromBadge);
     el.appendChild(tool);
-    el.appendChild(usageSeg(codexLimits.label || "usage", codexLimits.pct, false));
-    if (codexLimits.secondary) el.appendChild(usageSeg(codexLimits.secondary.label || "wk", codexLimits.secondary.pct, false));
+    if (cxResetAt && now - cxResetAt < RESET_N_MS) el.appendChild(resetNBadge());
+    const resetBadge = codexResetBadge();
+    if (resetBadge) el.appendChild(resetBadge);
+    // Age of the underlying snapshot (real wall-clock), not the poll time.
+    const cxAgeMs = codexLimits.snapshotAt != null ? Date.now() - codexLimits.snapshotAt : null;
+    const cxStale = cxAgeMs != null && cxAgeMs > CODEX_STALE_MS;
+    el.appendChild(usageSeg(codexLimits.label || "usage", codexLimits.pct, cxStale));
+    if (codexLimits.secondary) el.appendChild(usageSeg(codexLimits.secondary.label || "wk", codexLimits.secondary.pct, cxStale));
+    if (cxStale) {
+      const age = document.createElement("span");
+      age.className = "usage-age";
+      age.textContent = fmtAgo(cxAgeMs);
+      el.appendChild(age);
+    }
     tips.push(`Codex 전체 사용량 (plan: ${codexLimits.plan || "?"})`
+      + (cxAgeMs != null ? ` · ${fmtAgo(cxAgeMs)} 기록${cxStale ? " (오래됨 — 현재값 아닐 수 있음)" : ""}` : "")
       + (codexLimits.resetsAt ? ` · 리셋까지 ${fmtEpochRemain(codexLimits.resetsAt)}` : ""));
   }
   el.title = tips.join("\n");
@@ -2877,17 +4074,44 @@ function fmtEpochRemain(epochSec) {
   if (h > 0) return `${h}h${m % 60}m`;
   return `${m}m`;
 }
+// Codex rate-limit snapshots older than this read as stale (dimmed + age shown),
+// because they only refresh when Codex actually replies.
+const CODEX_STALE_MS = 10 * 60 * 1000;
+function fmtAgo(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "";
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d > 0) return `${d}일 전`;
+  if (h > 0) return `${h}시간 전`;
+  if (m > 0) return `${m}분 전`;
+  return "방금";
+}
 // Codex writes a rate_limits snapshot into its session rollout on every reply;
 // mine the newest rollout's tail for the last one. Works no matter where the
 // codex session runs (a Mymux pane, VS Code, a plain terminal).
 function findKeyDeep(obj, key) {
   if (!obj || typeof obj !== "object") return null;
-  if (obj[key]) return obj[key];
+  if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
   for (const v of Object.values(obj)) {
     const r = findKeyDeep(v, key);
-    if (r) return r;
+    if (r != null) return r;
   }
   return null;
+}
+function firstValueDeep(obj, keys) {
+  if (!obj || typeof obj !== "object") return null;
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] != null && obj[key] !== "") return obj[key];
+  }
+  for (const v of Object.values(obj)) {
+    const r = firstValueDeep(v, keys);
+    if (r != null && r !== "") return r;
+  }
+  return null;
+}
+function numberValueDeep(obj, keys) {
+  const value = firstValueDeep(obj, keys);
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 function codexWindowLabel(min) {
   if (min == null) return "";
@@ -2895,49 +4119,135 @@ function codexWindowLabel(min) {
   if (min % 60 === 0 && min >= 60) return (min / 60) + "h";
   return min + "m";
 }
+function parseCodexTokenCountEvent(ev) {
+  const payload = ev && ev.payload ? ev.payload : {};
+  if (ev.type !== "token_count" && payload.type !== "token_count") return null;
+
+  const info = payload.info || ev.info || {};
+  // `total_token_usage` is cumulative for the rollout and can reach the
+  // context-window size even when the current turn is still small. The badge
+  // is a current-context indicator, so prefer the per-event last usage.
+  const usage = info.last_token_usage || payload.last_token_usage || ev.last_token_usage
+    || info.total_token_usage || payload.total_token_usage || ev.total_token_usage || {};
+  const inputTokens = numberValueDeep({ usage, info, payload, ev }, ["input_tokens", "inputTokens"]);
+  const totalTokens = numberValueDeep({ usage, info, payload, ev }, ["total_tokens", "totalTokens"]);
+  const windowTokens = numberValueDeep({ info, payload, ev }, ["model_context_window", "modelContextWindow", "context_window", "contextWindow"]);
+  if (!windowTokens || windowTokens <= 0) return null;
+
+  // Cached input is billed differently but still occupies the prompt context.
+  const used = inputTokens != null ? inputTokens : totalTokens;
+  if (used == null) return null;
+  return Math.max(0, Math.min(100, Math.round((used / windowTokens) * 100)));
+}
+function applyCodexSessionSnapshot() {
+  for (const [pid, tt] of terminals) {
+    if (tt.type === "ssh" || pid !== codexSnapshotPaneId) continue;
+    if (!tt.codexDetected || tt.ctxSource !== "codex") continue;
+    let changed = false;
+    const stalePanePct = tt.ctxPct == null || performance.now() - (tt.ctxAt || 0) > 10_000;
+    if (codexSessionCtxPct != null && stalePanePct) {
+      tt.ctxPct = codexSessionCtxPct;
+      tt.ctxAt = codexSessionCtxAt || performance.now();
+      tt.ctxSource = "codex";
+      maybeAnnounceCtx(pid, tt);
+      changed = true;
+    }
+    if (codexSessionModel && codexSessionModel !== tt.codexSnapshotModel) {
+      tt.codexSnapshotModel = codexSessionModel;
+      changed = true;
+    }
+    if (codexSessionReasoningEffort &&
+        codexSessionReasoningEffort !== tt.codexSnapshotEffort) {
+      tt.codexSnapshotEffort = codexSessionReasoningEffort;
+      changed = true;
+    }
+    if (changed || tt.ctxSource === "codex") updateCtxUi(pid, tt);
+  }
+}
 async function loadCodexLimits() {
   try {
-    const tail = await invoke("codex_rollout_tail", { maxBytes: 65536 });
+    const requestGeneration = ++codexSnapshotRequestGeneration;
+    const ownerId = focusedPaneId;
+    const owner = ownerId == null ? null : terminals.get(ownerId);
+    const localCodexOwner = owner && owner.type !== "ssh" &&
+      (owner.codexDetected || owner.ctxSource === "codex");
+    const snapshotPaneId = localCodexOwner ? ownerId : null;
+    const cwd = localCodexOwner ? (owner.cwd || owner.session?.cwd || null) : null;
+    // A real rollout can grow past 400 KB; 64 KB commonly contains only the
+    // newest token/rate events and misses turn_context model/effort settings.
+    const tail = await invoke("codex_rollout_tail", { maxBytes: 1_000_000, cwd });
+    if (requestGeneration !== codexSnapshotRequestGeneration) return;
+    codexSnapshotPaneId = snapshotPaneId;
     const lines = tail.split("\n");
+    let foundSessionSettings = false;
+    let foundSessionCtx = false;
+    let foundRateLimits = false;
     for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].indexOf('"turn_context"') >= 0 || lines[i].indexOf('"thread_settings_applied"') >= 0) {
+      if (!foundSessionSettings && (lines[i].indexOf('"turn_context"') >= 0 || lines[i].indexOf('"thread_settings_applied"') >= 0 || lines[i].indexOf('"session_meta"') >= 0)) {
         try {
           const ev = JSON.parse(lines[i]);
           const tc = ev.payload || {};
           const ts = tc.thread_settings || ev.thread_settings || {};
-          const nextModel = (tc.model || tc.settings?.model || tc.collaboration_mode?.settings?.model
-            || ts.model || ts.collaboration_mode?.settings?.model || null);
-          const nextReasoningEffort = (tc.model_reasoning_effort || tc.reasoning_effort
-            || tc.settings?.model_reasoning_effort || tc.settings?.reasoning_effort
-            || tc.collaboration_mode?.settings?.model_reasoning_effort || tc.collaboration_mode?.settings?.reasoning_effort
-            || ts.model_reasoning_effort || ts.reasoning_effort
-            || ts.collaboration_mode?.settings?.model_reasoning_effort || ts.collaboration_mode?.settings?.reasoning_effort || null);
+          const nextModel = firstValueDeep({ tc, ts }, ["model", "model_id"]);
+          const nextReasoningEffort = firstValueDeep({ tc, ts }, ["effort", "model_reasoning_effort", "reasoning_effort", "reasoningEffort"]);
           if ((nextModel && nextModel !== codexSessionModel)
             || (nextReasoningEffort && nextReasoningEffort !== codexSessionReasoningEffort)) {
             if (nextModel) codexSessionModel = nextModel;
             if (nextReasoningEffort) codexSessionReasoningEffort = nextReasoningEffort;
-            for (const [pid, tt] of terminals) if ((tt.ctxPct != null || tt.codexDetected) && tt.ctxSource === "codex") updateCtxUi(pid, tt);
+            applyCodexSessionSnapshot();
+          }
+          foundSessionSettings = Boolean(nextModel || nextReasoningEffort);
+        } catch {}
+      }
+      if (!foundSessionCtx && lines[i].indexOf('"type":"token_count"') >= 0) {
+        try {
+          const ev = JSON.parse(lines[i]);
+          const nextPct = parseCodexTokenCountEvent(ev);
+          if (nextPct != null) {
+            codexSessionCtxPct = nextPct;
+            // Even the same rounded percentage is a fresh live token_count.
+            codexSessionCtxAt = performance.now();
+            applyCodexSessionSnapshot();
+            foundSessionCtx = true;
           }
         } catch {}
       }
-      if (lines[i].indexOf('"rate_limits"') < 0) continue;
+      if (foundRateLimits || lines[i].indexOf('"rate_limits"') < 0) {
+        if (foundSessionSettings && foundSessionCtx && foundRateLimits) break;
+        continue;
+      }
       try {
-        const rl = findKeyDeep(JSON.parse(lines[i]), "rate_limits");
+        const ev = JSON.parse(lines[i]);
+        const rl = findKeyDeep(ev, "rate_limits");
         const p = rl && rl.primary;
         if (!p || p.used_percent == null) continue;
+        // A window whose resets_at has already passed has rolled over: its old
+        // used_percent no longer applies, so read it as 0% until a fresh
+        // snapshot arrives (Codex only writes one when it next replies).
+        const win = (w) => {
+          if (!w || w.used_percent == null) return null;
+          const rolled = w.resets_at != null && w.resets_at * 1000 < Date.now();
+          return { pct: rolled ? 0 : Math.min(100, Math.round(w.used_percent)), label: codexWindowLabel(w.window_minutes) };
+        };
+        const prim = win(p);
+        const sec = win(rl.secondary);
+        // Freshness must come from the snapshot's OWN wall-clock timestamp, not
+        // from when we read the file: a rollout is written only on a Codex
+        // reply, so a days-old file has to read as stale — not "just now".
+        const snapMs = ev && ev.timestamp ? Date.parse(ev.timestamp) : NaN;
         codexLimits = {
-          pct: Math.min(100, Math.round(p.used_percent)),
-          label: codexWindowLabel(p.window_minutes),
-          secondary: rl.secondary && rl.secondary.used_percent != null
-            ? { pct: Math.min(100, Math.round(rl.secondary.used_percent)), label: codexWindowLabel(rl.secondary.window_minutes) }
-            : null,
+          pct: prim.pct,
+          label: prim.label,
+          secondary: sec,
           resetsAt: p.resets_at || null,
           plan: rl.plan_type || null,
           at: performance.now(),
+          snapshotAt: Number.isFinite(snapMs) ? snapMs : null,
         };
         updateGlobalUsageUi();
-        return;
+        foundRateLimits = true;
       } catch { /* line cut at the tail boundary — try the previous one */ }
+      if (foundSessionSettings && foundSessionCtx && foundRateLimits) break;
     }
   } catch { /* codex not installed / no rollouts — segment stays hidden */ }
 }
@@ -3006,6 +4316,8 @@ function initCtxUsage() {
   setInterval(loadCodexModelSetting, 60_000);
   loadCodexLimits();
   setInterval(loadCodexLimits, 5_000);
+  loadCodexResetCredits();
+  setInterval(loadCodexResetCredits, 60_000);
   loadClaudeUsageApi();
   setInterval(loadClaudeUsageApi, 60_000);
   // Staleness sweep: dim badges whose statusline stopped redrawing (Claude
@@ -3141,18 +4453,73 @@ function closeTermSearch() {
 }
 
 // ── Terminal URL opening (web-links addon) ───────────────────────────────
+// Claude Code and Codex use browser-based OAuth/device login. Keep this
+// deliberately narrow: ordinary documentation URLs should retain the normal
+// Ctrl+Click behavior, while an auth link should always stay inside Mymux so
+// the login callback returns to the CLI session without switching apps.
+function isAiLoginUrl(uri) {
+  if (!/^https?:\/\//i.test(uri)) return false;
+  try {
+    const u = new URL(uri);
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.toLowerCase();
+    const authPath = /(^|\/)(oauth|authorize|device-login|device\/login|login|signin|sign-in)(\/|$)/.test(path);
+    const authQuery = /(?:login|oauth|authorize|redirect|return_to|callback|code)=/i.test(u.search);
+    return (
+      host === "auth.openai.com" ||
+      host === "accounts.openai.com" ||
+      host === "claude.com" ||
+      host === "claude.ai" && (authPath || authQuery) ||
+      /(^|\.)anthropic\.com$/.test(host) && (authPath || authQuery) ||
+      authPath && authQuery
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Ctrl+Click routes into the in-app browser tab when the Browser feature is
-// enabled; otherwise falls back to the OS default browser.
-function openLinkFromTerminal(uri) {
+// enabled; authentication links force the in-app route even if the optional
+// browser tab was hidden. Non-auth links retain the user's OS-browser fallback.
+function openLinkFromTerminal(uri, forceInApp = false) {
   if (!/^https?:\/\//i.test(uri)) return;
-  if (browserEnabled()) {
+  // Authentication must stay in Mymux. Never hand the login URL to the
+  // imported-profile/Playwright launcher because that can start Chrome.
+  if (forceInApp) {
+    openInNativeBrowser(uri);
+    toast("로그인 링크를 Mymux 내부 브라우저에서 엽니다.");
+    return;
+  }
+  if (forceInApp || browserEnabled()) {
     if (browserMode !== "native") setBrowserMode("native");
     setBrowserView(true);
     const nav = document.getElementById("nav-url");
     if (nav) nav.value = uri;
     nativeNavigate(uri);
+    if (forceInApp) toast("로그인 링크를 Mymux 브라우저에서 엽니다.");
   } else {
     invoke("open_external", { path: uri }).catch((e) => toast(String(e), true));
+  }
+}
+
+function browserProfileImported() {
+  try { return localStorage.getItem("mymux.browserProfileImported.v1") === String(browserPort()); } catch { return false; }
+}
+function browserLaunchPreference() {
+  try { return localStorage.getItem("mymux.browserImportedBrowser.v1") || null; } catch { return null; }
+}
+
+async function openLoginInImportedBrowser(uri) {
+  if (browserMode !== "ai") setBrowserMode("ai");
+  const url = document.getElementById("browser-url");
+  if (url) url.value = uri;
+  setBrowserView(true);
+  try {
+    const st = await invoke("browser_launch", { port: browserPort(), url: uri, headless: true, browser: browserLaunchPreference() });
+    applyBrowserStatus(st);
+    toast("가져온 브라우저 로그인 세션으로 엽니다.");
+  } catch (e) {
+    toast(String(e), true);
   }
 }
 let linkHintShown = false;
@@ -3252,6 +4619,20 @@ function cutCurrentInput(id) {
   return true;
 }
 
+// Clear only the unsent AI composer draft. This is deliberately gated to a
+// detected AI pane so the shortcut cannot erase a normal shell command line.
+function clearAiComposer(id) {
+  const t = terminals.get(id);
+  if (!t || !t.aiMode) return false;
+  try { t.term.clearSelection(); } catch {}
+  hideAutocomplete();
+  const isCodex = t.codexDetected || t.ctxSource === "codex";
+  const data = isCodex ? "\x05" + "\x15".repeat(512) : "\x15";
+  invoke("pty_write", { id, data });
+  toast("AI 입력 전체를 지웠습니다.");
+  return true;
+}
+
 function promptLines(t) {
   return t.marks
     .filter((m) => m.marker && !m.marker.isDisposed)
@@ -3313,11 +4694,13 @@ function commandPaletteActions() {
     { name: "Copy current command line / 현재 명령줄 복사", hint: "", run: () => copyCurrentInput() },
     { name: "Cut current command line / 현재 명령줄 잘라내기", hint: "Ctrl+X", run: () => cutCurrentInput(focusedPaneId) },
     { name: "Select current command line / 현재 명령줄 전체 선택", hint: "Ctrl+A", run: () => selectCurrentInput(focusedPaneId) },
+    { name: "Clear AI draft / AI 입력 전체 지우기", hint: "Ctrl+Shift+Backspace", run: () => clearAiComposer(focusedPaneId) },
     { name: "New SSH connection / SSH 연결", hint: "", run: () => openSshModal() },
     { name: "Toggle browser panel / 브라우저 패널", hint: "", run: () => toggleBrowserEnabled() },
     { name: "Toggle light / dark theme / 테마 전환", hint: "", run: () => setTheme(currentThemeMode() === "dark" ? "light" : "dark") },
     { name: "Increase font size / 글자 크게", hint: "Ctrl +", run: () => adjustTerminalFontSize(1) },
     { name: "Decrease font size / 글자 작게", hint: "Ctrl -", run: () => adjustTerminalFontSize(-1) },
+    { name: "Flip split orientation / 분할 방향 전환 (상하 ↔ 좌우)", hint: "Ctrl+Shift+O", run: () => flipSplitDirection() },
   ];
 }
 
@@ -3419,6 +4802,7 @@ const SHORTCUTS = [
     ["Ctrl+A", "Select the current input line / 입력줄 전체 선택"],
     ["Ctrl+C", "Copy selection (else interrupt) / 선택 복사 (없으면 중단)"],
     ["Ctrl+X", "Cut the current input line / 입력줄 잘라내기"],
+    ["Ctrl+Shift+Backspace", "Clear Claude/Codex draft / AI 입력 전체 지우기"],
     ["Ctrl+V  ·  Shift+Insert", "Paste / 붙여넣기"],
     ["Home", "Beginning of line / 줄 맨 앞으로"],
   ]],
@@ -3588,11 +4972,13 @@ function setupDividerDrag(divider, container, direction) {
 
     const rect = container.getBoundingClientRect();
     const children = Array.from(container.children).filter((c) => !c.classList.contains("pane-divider"));
+    // Read orientation live from the container so flip-direction keeps drag correct.
+    const horizontal = container.classList.contains("horizontal");
 
     const onMove = (e) => {
       if (!dragging) return;
       let ratio;
-      if (direction === "horizontal") {
+      if (horizontal) {
         ratio = (e.clientX - rect.left) / rect.width;
       } else {
         ratio = (e.clientY - rect.top) / rect.height;
@@ -3616,9 +5002,100 @@ function setupDividerDrag(divider, container, direction) {
   });
 }
 
+// Flip the focused pane's split between side-by-side (horizontal) and stacked
+// (vertical) — a quick "상하 ↔ 좌우" toggle without drag-retiling. The divider
+// reads its orientation live from the container, so no re-wiring is needed.
+function flipSplitDirection() {
+  const t = terminals.get(focusedPaneId);
+  if (!t || !t.paneEl) return;
+  const c = t.paneEl.parentElement;
+  if (!c || !c.classList || !c.classList.contains("pane-container")) return;
+  const kids = [...c.children].filter((x) => !x.classList.contains("pane-divider"));
+  if (kids.length < 2) { toast("이 패인은 분할되어 있지 않아요 — 먼저 분할하세요"); return; }
+  const toVertical = c.classList.contains("horizontal");
+  c.classList.toggle("horizontal", !toVertical);
+  c.classList.toggle("vertical", toVertical);
+  refitAllPanes();
+  saveSessionNow();
+}
+
+// Make every matching split container in the active tab evenly sized. Splits
+// are a nested binary tree ([A, [B, C]] for three columns), so a plain
+// flex:1 per child would give A half and B/C a quarter each. Instead each
+// child is weighted by how many leaf pane "tracks" it spans along the
+// equalized axis, which makes every track come out the same size while
+// perpendicular splits (each column's own stack) stay independent.
+function equalizeActiveTabSplits(direction) {
+  const tab = activeTabIdx == null ? null : tabs.get(activeTabIdx);
+  const root = tab && tab.rootEl;
+  if (!root || !root.classList) {
+    toast("No active session tab / 활성 세션 탭이 없습니다.", true);
+    return 0;
+  }
+
+  const wantedDirection = direction === "vertical" ? "column" : "row";
+
+  // Leaf tracks an element spans along the equalized axis: same-direction
+  // containers add their children up, perpendicular containers are as wide
+  // (tall) as their widest child, and a leaf pane is a single track.
+  const countTracks = (el) => {
+    if (!el.classList || !el.classList.contains("pane-container")) return 1;
+    const kids = [...el.children].filter((c) => !c.classList.contains("pane-divider"));
+    if (!kids.length) return 1;
+    const counts = kids.map(countTracks);
+    return getComputedStyle(el).flexDirection === wantedDirection
+      ? counts.reduce((a, b) => a + b, 0)
+      : Math.max(...counts);
+  };
+
+  const containers = [];
+  const allContainers = [root, ...root.querySelectorAll(".pane-container")];
+  for (const container of allContainers) {
+    if (getComputedStyle(container).flexDirection === wantedDirection) containers.push(container);
+  }
+
+  let changed = 0;
+  const row = wantedDirection === "row";
+  for (const container of containers) {
+    const children = [...container.children].filter((child) => !child.classList.contains("pane-divider"));
+    if (children.length < 2) continue;
+    children.forEach((child) => {
+      // Zero-basis flex so intrinsic terminal/content size cannot push the
+      // split off its target ratio; grow by spanned track count (see above).
+      child.style.flex = `${countTracks(child)} 1 0px`;
+      if (row) {
+        child.style.minWidth = "0";
+        child.style.width = "0";
+        child.style.maxWidth = "none";
+      } else {
+        child.style.minHeight = "0";
+        child.style.height = "0";
+        child.style.maxHeight = "none";
+      }
+    });
+    changed++;
+  }
+
+  if (!changed) {
+    const label = direction === "vertical" ? "vertical split / 세로 분할" : "horizontal split / 가로 분할";
+    toast(`No matching ${label} found / 일치하는 분할이 없습니다.`, true);
+    return 0;
+  }
+
+  clearPaneZoom();
+  refitAllPanes();
+  requestAnimationFrame(() => refitAllPanes());
+  saveSessionNow();
+  toast(direction === "vertical"
+    ? "Vertical split heights equalized / 세로 분할 높이를 동일하게 맞췄습니다."
+    : "Horizontal split widths equalized / 가로 분할 너비를 동일하게 맞췄습니다.");
+  return changed;
+}
+
 function closePane(ptyId) {
   const tInfo = terminals.get(ptyId);
   if (!tInfo) return;
+  if (memoPopover && Number(memoPopover.dataset.ptyId) === ptyId) closeMemoPopover();
   clearPaneZoom(); // layout is about to change — drop any zoom overlay first
 
   const tab = findTabForPane(ptyId);
@@ -3634,6 +5111,7 @@ function closePane(ptyId) {
   const paneEl = tInfo.paneEl;
   const splitContainer = paneEl.parentElement;
 
+  detachPaneSftp(ptyId);
   invoke("pty_close", { id: ptyId });
   tInfo.term.dispose();
   paneEl.remove();
@@ -3822,6 +5300,21 @@ function setTerminalFontSize(size) {
 }
 function adjustTerminalFontSize(delta) {
   setTerminalFontSize(terminalFontSize + delta);
+}
+function setTerminalFontFamily(key) {
+  if (!Object.prototype.hasOwnProperty.call(TERMINAL_FONT_FAMILIES, key)) return;
+  terminalFontKey = key;
+  try { localStorage.setItem(TERMINAL_FONT_KEY, terminalFontKey); } catch {}
+  for (const [, t] of terminals) {
+    try { t.term.options.fontFamily = terminalFontFamily(); } catch {}
+  }
+  // A family change alters cell width even though every pane keeps the same
+  // pixel bounds. Force xterm to measure again, clear its glyph atlas, and refit
+  // both existing panes and their backend PTY grids immediately.
+  remeasureFontCells();
+  const select = document.getElementById("terminal-font");
+  const label = select?.selectedOptions?.[0]?.textContent || key;
+  toast("터미널 글꼴: " + label);
 }
 // Letter spacing (자간) — persisted ratio of font size, applied to every pane.
 // Mirrors setTerminalFontSize; a wider cell means fewer cols, so re-grid + refit.
@@ -4249,6 +5742,98 @@ function quickConnectTmux(c) {
 
 // Parameterized SSH connect (used by the form and by session restore).
 // auth: 'key' (keyfile/agent → auto-reconnect) | 'password' (prompted on restore).
+function showSftpUnsupportedModal() {
+  const modal = document.getElementById("sftp-unsupported-modal");
+  if (!modal) return;
+  const close = () => modal.classList.add("hidden");
+  const ok = document.getElementById("sftp-unsupported-ok");
+  if (ok && !ok._sftpBound) {
+    ok._sftpBound = true;
+    ok.addEventListener("click", close);
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+    modal.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  }
+  modal.classList.remove("hidden");
+  ok?.focus();
+}
+
+function isSftpUnsupportedError(error) {
+  return String(error || "").includes("SFTP_UNSUPPORTED:");
+}
+
+function detachPaneSftp(ptyId) {
+  const t = terminals.get(ptyId);
+  if (!t) return;
+  const uploadCard = document.getElementById("explorer-upload-progress");
+  if (uploadCard && t.paneEl?.contains(uploadCard)) resetUploadProgressPlacement();
+  t.sftpConnectToken = (t.sftpConnectToken || 0) + 1;
+  const oldId = t.sftpId;
+  t.sftpId = null;
+  if (oldId != null) {
+    removeSftpOption(oldId);
+    invoke("sftp_disconnect", { sessionId: oldId }).catch(() => {});
+  }
+}
+
+async function attachSftpToPane(ptyId, credentials, announce = true) {
+  const t = terminals.get(ptyId);
+  if (!t || t.type !== "ssh") return null;
+  detachPaneSftp(ptyId);
+  const token = t.sftpConnectToken;
+  t.sftpStatus = "connecting";
+  if (focusedPaneId === ptyId) showExplorerBlockedForSession(ptyId, t);
+  if (announce) toast("Connecting SFTP...");
+  let sftpId = null;
+  try {
+    sftpId = await invoke("sftp_connect", credentials);
+    const live = terminals.get(ptyId);
+    if (!live || live.sftpConnectToken !== token) {
+      await invoke("sftp_disconnect", { sessionId: sftpId }).catch(() => {});
+      return null;
+    }
+    live.sftpId = sftpId;
+    live.sftpStatus = "connected";
+    live.sftpError = null;
+    let initialPath = live.remotePath || live.session?.remotePath ||
+      live.cwd || live.session?.cwd || null;
+    if (initialPath) {
+      try {
+        initialPath = await invoke("sftp_resolve_dir", { sessionId: sftpId, path: initialPath });
+      } catch {
+        initialPath = null;
+      }
+    }
+    if (!initialPath) {
+      initialPath = await invoke("sftp_home_dir", { sessionId: sftpId }).catch(() => "/");
+    }
+    const current = terminals.get(ptyId);
+    if (!current || current.sftpConnectToken !== token || current.sftpId !== sftpId) {
+      await invoke("sftp_disconnect", { sessionId: sftpId }).catch(() => {});
+      return null;
+    }
+    current.remotePath = initialPath;
+    if (!current.cwd) current.cwd = current.session?.cwd || initialPath;
+    if (current.session) {
+      current.session.remotePath = initialPath;
+      if (!current.session.cwd) current.session.cwd = current.cwd;
+    }
+    addSftpOption(sftpId, `SSH: ${current.sshTarget || credentials.host}`, focusedPaneId === ptyId);
+    if (announce) toast("SFTP connected");
+    saveSessionNow();
+    return sftpId;
+  } catch (error) {
+    if (sftpId != null) await invoke("sftp_disconnect", { sessionId: sftpId }).catch(() => {});
+    const live = terminals.get(ptyId);
+    if (!live || live.sftpConnectToken !== token) return null;
+    live.sftpStatus = isSftpUnsupportedError(error) ? "unsupported" : "error";
+    live.sftpError = String(error);
+    if (focusedPaneId === ptyId) showExplorerBlockedForSession(ptyId, live);
+    if (live.sftpStatus === "unsupported") showSftpUnsupportedModal();
+    else if (announce) toast("SSH opened. SFTP: " + error, true);
+    return null;
+  }
+}
+
 async function doSshConnect(opts) {
   const { target, username, host, port, password, keyPath } = opts;
   const auth = opts.auth || (password && !keyPath ? "password" : "key");
@@ -4266,13 +5851,16 @@ async function doSshConnect(opts) {
 
   const sshArgs = ["-p", String(port)];
   if (keyPath) sshArgs.push("-i", keyPath); // use the specified key for the terminal too
-  sshArgs.push(target);
   // tmux on connect: a name → create/attach that session; empty → attach to an
   // existing session (or start one if none).
+  let tmuxCommand = null;
   if (opts.tmux) {
     const nm = (opts.tmuxName || "").trim().replace(/[^A-Za-z0-9_.-]/g, "");
-    sshArgs.push("-t", nm ? `tmux new-session -A -s ${nm}` : "tmux attach || tmux new-session");
+    sshArgs.push("-t");
+    tmuxCommand = nm ? `tmux new-session -A -s ${nm}` : "tmux attach || tmux new-session";
   }
+  sshArgs.push(target);
+  if (tmuxCommand) sshArgs.push(tmuxCommand);
 
   try {
     // No password is ever persisted — only the auth *kind*. tmux settings ride
@@ -4282,10 +5870,12 @@ async function doSshConnect(opts) {
       keyPath: keyPath || null, auth,
       tmux: !!opts.tmux, tmuxName: (opts.tmuxName || "").trim() || null,
       lastCmd: opts.lastCmd || null, // carried through restore so re-run works over SSH
+      memo: opts.memo || null,       // scratch memo rides restore too
     };
     const ptyId = await createPane(rootContainer, "ssh", sshArgs);
     terminals.get(ptyId).sshTarget = target;
     terminals.get(ptyId).session = sessionMeta;
+    markMemoIndicator(ptyId);
 
     tabs.set(tabIdx, {
       el: tabEl,
@@ -4298,16 +5888,11 @@ async function doSshConnect(opts) {
     switchToTab(tabIdx);
     refreshSessionList();
 
-    // Establish SFTP connection for explorer
-    toast("Connecting SFTP...");
-    try {
-      const sftpId = await invoke("sftp_connect", { host, port, username, password, keyPath });
-      terminals.get(ptyId).sftpId = sftpId;
-      addSftpOption(sftpId, `SSH: ${target}`);
-      toast("SFTP connected");
-    } catch (sftpErr) {
-      toast("SSH opened. SFTP: " + sftpErr, true);
-    }
+    await attachSftpToPane(
+      ptyId,
+      { host, port, username, password, keyPath },
+      true,
+    );
   } catch (err) {
     toast("SSH failed: " + err, true);
     tabEl.remove();
@@ -4354,7 +5939,11 @@ function initBrowserPanel() {
   document.getElementById("btn-browser-launch").addEventListener("click", launchBrowser);
   document.getElementById("btn-browser-stop").addEventListener("click", stopBrowser);
   document.getElementById("btn-browser-refresh").addEventListener("click", refreshBrowserStatus);
+  document.getElementById("btn-browser-new-page").addEventListener("click", newBrowserPage);
+  document.getElementById("btn-browser-info").addEventListener("click", toggleBrowserInfo);
   document.getElementById("browser-port").addEventListener("input", () => updateBrowserInfo());
+  document.getElementById("btn-browser-profile-scan").addEventListener("click", scanBrowserProfiles);
+  document.getElementById("btn-browser-profile-import").addEventListener("click", importBrowserProfile);
   document.querySelectorAll("#browser-panel .copy-btn").forEach((btn) => {
     btn.addEventListener("click", () => copyBrowserField(btn.dataset.copy));
   });
@@ -4393,6 +5982,9 @@ function initBrowserPanel() {
 
   setBrowserMode("native");
   updateBrowserInfo();
+  setInterval(() => {
+    if (browserTabActive && browserMode === "ai") refreshBrowserPages();
+  }, 1500);
 }
 
 function setBrowserView(on) {
@@ -4439,6 +6031,84 @@ function updateBrowserInfo(endpointOverride) {
     `claude mcp add playwright -- npx @playwright/mcp@latest --cdp-endpoint ${ep}`;
 }
 
+function toggleBrowserInfo() {
+  browserInfoOpen = !browserInfoOpen;
+  const conn = document.getElementById("browser-conn");
+  if (conn) conn.classList.toggle("browser-info-open", browserInfoOpen);
+}
+
+function renderBrowserPages() {
+  const wrap = document.getElementById("browser-page-tabs");
+  if (!wrap) return;
+  wrap.querySelectorAll(".browser-page-tab").forEach((el) => el.remove());
+  const add = document.getElementById("btn-browser-new-page");
+  for (const page of browserPages) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "browser-page-tab" + (page.targetId === activeBrowserPageId ? " active" : "");
+    tab.dataset.targetId = page.targetId;
+    tab.title = page.url || "about:blank";
+    const label = page.url && page.url !== "about:blank" ? page.url.replace(/^https?:\/\//, "").split(/[/?#]/)[0] : "New page";
+    tab.innerHTML = `<span class="browser-page-label"></span><span class="browser-page-close" title="Close">×</span>`;
+    tab.querySelector(".browser-page-label").textContent = label || "New page";
+    tab.addEventListener("click", (e) => {
+      if (e.target.closest(".browser-page-close")) { closeBrowserPage(page.targetId); return; }
+      selectBrowserPage(page);
+    });
+    wrap.insertBefore(tab, add);
+  }
+  wrap.style.display = browserMode === "ai" && browserPages.length ? "flex" : "none";
+}
+
+async function refreshBrowserPages() {
+  try {
+    const pages = await invoke("browser_page_targets", { port: browserPort() });
+    browserPages = Array.isArray(pages) ? pages : [];
+    if (!browserPages.some((p) => p.targetId === activeBrowserPageId)) {
+      activeBrowserPageId = browserPages[0]?.targetId || null;
+    }
+    renderBrowserPages();
+    if (browserTabActive && browserMode === "ai" && activeBrowserPageId && !cdpWs) attachScreencast();
+  } catch {
+    browserPages = [];
+    activeBrowserPageId = null;
+    renderBrowserPages();
+  }
+}
+
+function selectBrowserPage(page) {
+  if (!page || page.targetId === activeBrowserPageId) return;
+  activeBrowserPageId = page.targetId;
+  detachScreencast();
+  renderBrowserPages();
+  if (browserTabActive && browserMode === "ai") openCdp(page.wsUrl);
+}
+
+async function newBrowserPage() {
+  try {
+    const page = await invoke("browser_new_tab", { port: browserPort(), url: "about:blank" });
+    await refreshBrowserPages();
+    const found = browserPages.find((p) => p.targetId === page.targetId) || page;
+    activeBrowserPageId = found.targetId;
+    detachScreencast();
+    renderBrowserPages();
+    if (browserTabActive && browserMode === "ai") openCdp(found.wsUrl);
+  } catch (e) { toast(String(e), true); }
+}
+
+async function closeBrowserPage(targetId) {
+  if (browserPages.length <= 1) { toast("Keep at least one browser page open.", true); return; }
+  try {
+    await invoke("browser_close_tab", { port: browserPort(), targetId });
+    if (targetId === activeBrowserPageId) {
+      detachScreencast();
+      activeBrowserPageId = null;
+    }
+    await refreshBrowserPages();
+    if (browserTabActive && browserMode === "ai" && activeBrowserPageId) attachScreencast();
+  } catch (e) { toast(String(e), true); }
+}
+
 function applyBrowserStatus(st) {
   const statusEl = document.getElementById("browser-status");
   if (st && st.running) {
@@ -4447,6 +6117,7 @@ function applyBrowserStatus(st) {
     statusEl.classList.add("running");
     if (st.port) document.getElementById("browser-port").value = st.port;
     updateBrowserInfo(st.endpoint);
+    refreshBrowserPages();
     if (browserTabActive) attachScreencast();
   } else {
     statusEl.textContent = "○ Stopped";
@@ -4454,6 +6125,9 @@ function applyBrowserStatus(st) {
     statusEl.classList.add("stopped");
     updateBrowserInfo();
     detachScreencast();
+    browserPages = [];
+    activeBrowserPageId = null;
+    renderBrowserPages();
   }
 }
 
@@ -4470,7 +6144,7 @@ async function launchBrowser() {
   const port = browserPort();
   const url = document.getElementById("browser-url").value.trim() || null;
   try {
-    const st = await invoke("browser_launch", { port, url, headless: true });
+    const st = await invoke("browser_launch", { port, url, headless: true, browser: browserLaunchPreference() });
     applyBrowserStatus(st);
     toast(`Browser launched (${st.browser}, ${st.endpoint})`);
   } catch (e) {
@@ -4483,6 +6157,59 @@ async function stopBrowser() {
     await invoke("browser_close");
     applyBrowserStatus({ running: false });
     toast("Browser stopped");
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+
+let browserImportProfiles = [];
+
+async function scanBrowserProfiles() {
+  const select = document.getElementById("browser-import-profile");
+  const importBtn = document.getElementById("btn-browser-profile-import");
+  try {
+    browserImportProfiles = await invoke("browser_profiles");
+    select.replaceChildren();
+    if (!browserImportProfiles.length) {
+      select.add(new Option("No Chrome/Edge profiles found", ""));
+      select.disabled = true;
+      importBtn.disabled = true;
+      toast("Chrome/Edge 프로필을 찾지 못했습니다.", true);
+      return;
+    }
+    for (const p of browserImportProfiles) {
+      select.add(new Option(`${p.browser} · ${p.name} (${p.profile})`, p.id));
+    }
+    select.disabled = false;
+    importBtn.disabled = false;
+    toast(`${browserImportProfiles.length}개 브라우저 프로필을 찾았습니다.`);
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+
+async function importBrowserProfile() {
+  const select = document.getElementById("browser-import-profile");
+  const selected = browserImportProfiles.find((p) => p.id === select.value);
+  if (!selected) return;
+  const consent = window.confirm(
+    `${selected.browser}의 “${selected.name}” 프로필을 Mymux AI 브라우저로 복사할까요?\n\n` +
+    "쿠키와 로그인 세션이 포함될 수 있습니다. 원본 프로필은 수정하지 않습니다."
+  );
+  if (!consent) return;
+  try {
+    const status = await invoke("browser_status");
+    if (status?.running) await stopBrowser();
+    const result = await invoke("browser_import_profile", {
+      browser: selected.browser,
+      profile: selected.profile,
+      port: browserPort(),
+      consent: true,
+    });
+    toast(String(result));
+    try { localStorage.setItem("mymux.browserProfileImported.v1", String(browserPort())); } catch {}
+    try { localStorage.setItem("mymux.browserImportedBrowser.v1", selected.browser); } catch {}
+    if (browserMode !== "ai") setBrowserMode("ai");
   } catch (e) {
     toast(String(e), true);
   }
@@ -4509,10 +6236,16 @@ async function attachScreencast() {
   if (cdpWs) return; // already attached
   const port = browserPort();
   // The debugging port + page target take a moment after launch; retry briefly.
-  let target = null;
+  let target = browserPages.find((p) => p.targetId === activeBrowserPageId) || null;
   for (let i = 0; i < 24 && !target && browserTabActive; i++) {
     try {
-      target = await invoke("browser_page_target", { port });
+      const pages = await invoke("browser_page_targets", { port });
+      browserPages = Array.isArray(pages) ? pages : [];
+      target = browserPages.find((p) => p.targetId === activeBrowserPageId) || browserPages[0] || null;
+      if (target) {
+        activeBrowserPageId = target.targetId;
+        renderBrowserPages();
+      }
     } catch {
       await sleep(250);
     }
@@ -4666,6 +6399,10 @@ function setBrowserMode(mode) {
   document.getElementById("browser-nav").style.display = mode === "native" ? "" : "none";
   document.getElementById("browser-ai-controls").style.display = mode === "ai" ? "" : "none";
   document.getElementById("browser-conn").style.display = mode === "ai" ? "" : "none";
+  const pageTabs = document.getElementById("browser-page-tabs");
+  if (pageTabs) pageTabs.style.display = mode === "ai" && browserPages.length ? "flex" : "none";
+  const conn = document.getElementById("browser-conn");
+  if (conn) conn.classList.toggle("browser-info-open", browserInfoOpen && mode === "ai");
 
   if (mode === "native") {
     // AI → Native: stop the screencast, hide its image, show the native pane.
@@ -4680,6 +6417,9 @@ function setBrowserMode(mode) {
 }
 
 async function openNativePane() {
+  // A native child WebView always floats above the HTML session sidebar.
+  // Do not let another browser-state callback cover an open memo popover.
+  if (memoNativePaneHidden) return;
   const vp = document.getElementById("browser-viewport");
   const r = vp.getBoundingClientRect();
   try {
@@ -4758,7 +6498,8 @@ function collectSession() {
       // isn't updated as the user types).
       const t0 = tab.panes && terminals.get(tab.panes[0]);
       const lastCmd = (t0 && t0.session && t0.session.lastCmd) || tab.session.lastCmd || null;
-      arr.push({ ...tab.session, lastCmd, label: tab.label });
+      const memo = (t0 && t0.session && t0.session.memo) || tab.session.memo || null;
+      arr.push({ ...tab.session, lastCmd, memo, label: tab.label });
     }
   }
   return { version: 2, tabs: arr };
@@ -4769,13 +6510,47 @@ async function buildPaneNode(parentEl, node) {
   if (node && node.leaf) {
     const s = node.leaf;
     if (s.kind === "ssh") {
-      const id = await createPane(parentEl, "ssh", ["-p", String(s.port || 22), s.target]);
+      const sshArgs = ["-p", String(s.port || 22)];
+      if (s.keyPath) sshArgs.push("-i", s.keyPath);
+      let tmuxCommand = null;
+      if (s.tmux) {
+        const name = (s.tmuxName || "").trim().replace(/[^A-Za-z0-9_.-]/g, "");
+        sshArgs.push("-t");
+        tmuxCommand = name ? `tmux new-session -A -s ${name}` : "tmux attach || tmux new-session";
+      }
+      sshArgs.push(s.target);
+      if (tmuxCommand) sshArgs.push(tmuxCommand);
+      const id = await createPane(parentEl, "ssh", sshArgs);
       const t = terminals.get(id);
-      if (t) { t.sshTarget = s.target; t.session = { ...s }; }
+      if (t) {
+        t.sshTarget = s.target;
+        t.session = { ...s };
+        t.remotePath = s.remotePath || s.cwd || null;
+        t.cwd = s.cwd || null;
+        markMemoIndicator(id);
+      }
+      // A restored key/agent-auth pane has enough non-secret information to
+      // reopen its SFTP channel. Password-auth panes intentionally do not.
+      if (s.auth === "key" && s.host && s.username) {
+        await attachSftpToPane(
+          id,
+          {
+            host: s.host,
+            port: s.port || 22,
+            username: s.username,
+            password: null,
+            keyPath: s.keyPath || null,
+          },
+          false,
+        );
+      }
     } else {
       const id = await createPane(parentEl, s.shell || getDefaultShellId(), null, s.cwd || undefined);
       const t = terminals.get(id);
-      if (t) t.session = { kind: "local", shell: s.shell || null, cwd: s.cwd || null, lastCmd: s.lastCmd || null };
+      if (t) {
+        t.session = { kind: "local", shell: s.shell || null, cwd: s.cwd || null, lastCmd: s.lastCmd || null, memo: s.memo || "" };
+        markMemoIndicator(id);
+      }
     }
     return;
   }
@@ -4863,6 +6638,7 @@ async function restoreSession() {
             tmux: !!s.tmux,
             tmuxName: s.tmuxName || null,
             lastCmd: s.lastCmd || null,
+            memo: s.memo || null,
           });
         } else {
           pwSessions.push(s); // password auth → prompt below
@@ -4871,6 +6647,10 @@ async function restoreSession() {
         const pid = await spawnTerminal(s.shell || undefined, s.cwd || undefined);
         const t = pid != null ? terminals.get(pid) : null;
         if (t && t.session && s.lastCmd) t.session.lastCmd = s.lastCmd;
+        if (t && t.session && s.memo) {
+          t.session.memo = s.memo;
+          markMemoIndicator(pid);
+        }
       }
     } catch (e) {
       console.error("restore tab failed", e);
@@ -5013,6 +6793,7 @@ function promptSshPasswordRestore(s) {
         tmux: !!s.tmux,
         tmuxName: s.tmuxName || null,
         lastCmd: s.lastCmd || null,
+        memo: s.memo || null,
       });
       resolve();
     }
@@ -5106,12 +6887,9 @@ function createXterm() {
     // Ctrl +/- zoom. Default ≈0.1 (~20% of a monospace cell) because Korean/CJK
     // glyphs look cramped at 0; adjustable from the toolbar (자−/자+).
     letterSpacing: effectiveLetterSpacing(),
-    // macOS: prefer the native terminal monospace (SF Mono/Menlo) so spacing
-    // matches the system Terminal. D2Coding's wider glyphs made the letters
-    // look too spaced out on Mac. Windows keeps its original chain.
-    fontFamily: IS_MAC
-      ? '"SF Mono", "SFMono-Regular", "Menlo", "Monaco", "D2Coding", monospace'
-      : '"D2Coding", "Cascadia Code", "Consolas", "Noto Sans KR", monospace',
+    // The toolbar selector persists this safe font-stack key. Missing fonts
+    // automatically fall through to another installed monospace family.
+    fontFamily: terminalFontFamily(),
     fontWeight: 300,
     fontWeightBold: 500,
     theme: terminalTheme(),
@@ -5129,7 +6907,7 @@ function addTab(tabIdx, label) {
   `;
   tab.addEventListener("click", (e) => {
     if (e.target.classList.contains("tab-close")) {
-      closeTab(tabIdx);
+      requestCloseTab(tabIdx);
     } else if (e.target.classList.contains("tab-rename")) {
       e.stopPropagation();
       startRenameTabInBar(tabIdx, tab);
@@ -5143,7 +6921,110 @@ function addTab(tabIdx, label) {
     startRenameTabInBar(tabIdx, tab);
   });
   tab.title = "Double-click to rename";
-  terminalTabs.appendChild(tab);
+  const newTabButton = document.getElementById("btn-tab-new");
+  if (newTabButton) terminalTabs.insertBefore(tab, newTabButton);
+  else terminalTabs.appendChild(tab);
+}
+
+// Ask before reconnecting saved sessions so an update/restart never silently
+// reopens terminals the user no longer wants. The saved data remains intact
+// when the user chooses a fresh start and can be offered again next launch.
+async function promptRestorePreviousSession() {
+  let saved = null;
+  try { saved = await invoke("session_load"); } catch (e) { console.error("session_load failed", e); }
+  if (!saved || !Array.isArray(saved.tabs) || saved.tabs.length === 0) return false;
+
+  const modal = document.getElementById("restore-session-modal");
+  const yes = document.getElementById("restore-session-yes");
+  const no = document.getElementById("restore-session-no");
+  const close = document.getElementById("restore-session-close");
+  if (!modal || !yes || !no) return true;
+  return new Promise((resolve) => {
+    const finish = (restore) => {
+      modal.classList.add("hidden");
+      yes.removeEventListener("click", onYes);
+      no.removeEventListener("click", onNo);
+      close?.removeEventListener("click", onNo);
+      modal.removeEventListener("click", onBackdrop);
+      modal.removeEventListener("keydown", onKey);
+      resolve(restore);
+    };
+    const onYes = () => finish(true);
+    const onNo = () => finish(false);
+    const onBackdrop = (e) => { if (e.target === modal) onNo(); };
+    const onKey = (e) => { if (e.key === "Escape") onNo(); };
+    yes.addEventListener("click", onYes);
+    no.addEventListener("click", onNo);
+    close?.addEventListener("click", onNo);
+    modal.addEventListener("click", onBackdrop);
+    modal.addEventListener("keydown", onKey);
+    modal.classList.remove("hidden");
+    yes.focus();
+  }).then((restore) => restore ? restoreSession() : false);
+}
+
+// Post-update changelog: on the first launch of a new version, show what
+// changed. The notes are stashed in localStorage by the update button right
+// before installing (the updater manifest is no longer queryable once we ARE
+// the latest version). A fresh install — no last-run version and an empty
+// localStorage — stays silent.
+async function maybeShowWhatsNew() {
+  let current = null;
+  try { current = await window.__TAURI__.app.getVersion(); } catch {}
+  if (!current) return;
+
+  const LAST_KEY = "mymuxLastRunVersion";
+  const NOTES_KEY = "mymuxPendingUpdateNotes";
+  let last = null, pending = null, storeCount = 0;
+  try {
+    last = localStorage.getItem(LAST_KEY);
+    storeCount = localStorage.length;
+    pending = JSON.parse(localStorage.getItem(NOTES_KEY) || "null");
+    localStorage.setItem(LAST_KEY, current);
+    localStorage.removeItem(NOTES_KEY);
+  } catch {}
+
+  if (last === current) return; // same version as last run
+  // No recorded version yet: an existing profile (any stored state) means we
+  // just updated from a build that predates this tracking — still announce.
+  if (!last && storeCount === 0) return;
+
+  const modal = document.getElementById("whatsnew-modal");
+  if (!modal) return;
+  const versionEl = document.getElementById("whatsnew-version");
+  const notesEl = document.getElementById("whatsnew-notes");
+  if (versionEl) versionEl.textContent = `v${current} 업데이트가 완료되었습니다.`;
+  if (notesEl) {
+    notesEl.textContent = pending && pending.version === current && pending.body
+      ? String(pending.body)
+      : "세션 레이아웃과 안정성 개선, 사용성 업데이트가 포함되어 있습니다.";
+  }
+
+  const ok = document.getElementById("whatsnew-ok");
+  const close = document.getElementById("whatsnew-close");
+  const hide = () => modal.classList.add("hidden");
+  ok?.addEventListener("click", hide);
+  close?.addEventListener("click", hide);
+  modal.addEventListener("click", (e) => { if (e.target === modal) hide(); });
+  modal.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+  modal.classList.remove("hidden");
+  ok?.focus();
+}
+
+function requestCloseTab(tabIdx) {
+  const tabInfo = tabs.get(tabIdx);
+  if (!tabInfo) return;
+  pendingTabCloseId = tabIdx;
+  const modal = document.getElementById("tab-close-modal");
+  const message = document.getElementById("tab-close-message");
+  if (message) {
+    const label = terminalTabs.querySelector(`.tab[data-id="${tabIdx}"] span:not(.tab-close):not(.tab-rename)`)?.textContent || "this terminal";
+    message.textContent = `Close “${label}” and all panes in this terminal tab?`;
+  }
+  if (modal) {
+    modal.classList.remove("hidden");
+    document.getElementById("tab-close-cancel")?.focus();
+  }
 }
 
 function switchToAdjacentTab(dir) {
@@ -5182,10 +7063,7 @@ function closeTab(tabIdx) {
   for (const ptyId of [...tabInfo.panes]) {
     const tInfo = terminals.get(ptyId);
     if (tInfo) {
-      if (tInfo.sftpId) {
-        invoke("sftp_disconnect", { sessionId: tInfo.sftpId });
-        removeSftpOption(tInfo.sftpId);
-      }
+      detachPaneSftp(ptyId);
       invoke("pty_close", { id: ptyId });
       tInfo.term.dispose();
       terminals.delete(ptyId);
@@ -5241,26 +7119,76 @@ function commandComboLine(cmd, kind) {
   return `cd '${dir.replace(/'/g, "'\\''")}' && ${cmd.command}`;
 }
 
+const AI_CLI_COMMAND_RE = /(?:^|[;&|]\s*)(claude|codex)(?:\.exe)?(?:\s|$)/i;
+
+// A command entered at a shell prompt is the strongest pane-owner signal. It
+// prevents words printed by one AI from being mistaken for the other AI.
+function presetCtxSourceFromCmd(ptyId, t, command) {
+  if (!t || t.aiMode) return false;
+  const m = AI_CLI_COMMAND_RE.exec(command || "");
+  if (!m) return false;
+  const source = m[1].toLowerCase();
+  t.ctxSource = source;
+  t.ctxPct = null;
+  t.ctxAt = performance.now();
+  t.codexDetected = source === "codex";
+  if (source === "claude") t.codexModel = null;
+  if (source === "claude") t.codexReasoningEffort = null;
+  if (source === "codex") t.ctxEffort = null;
+  setPaneAiMode(t, true);
+  updateCtxUi(ptyId, t);
+  if (source === "codex") {
+    applyCodexSessionSnapshot();
+    loadCodexLimits();
+  }
+  return true;
+}
+
 function runCommandCombo(cmd, ptyId = activeTermId) {
   if (ptyId == null || !terminals.has(ptyId)) {
     toast("No active terminal.", true);
     return;
   }
-  const line = commandComboLine(cmd, paneShellKind(terminals.get(ptyId)));
+  const t = terminals.get(ptyId);
+  // In an AI coding session a shortcut is prompt text, so never prepend a
+  // shell-only cwd change. Shell panes keep the directory-bound combo.
+  const line = t.aiMode ? cmd.command : commandComboLine(cmd, paneShellKind(t));
+  if (!t.aiMode) presetCtxSourceFromCmd(ptyId, t, cmd.command);
   armNotifyCycle(ptyId); // user-launched command — its completion should notify
   invoke("pty_write", { id: ptyId, data: line + "\r" });
-  terminals.get(ptyId)?.term.focus();
+  t.term.focus();
 }
 
 // Write a command line once the new pane's shell is ready: wait for the first
 // OSC 133;A prompt mark (bash rcfile / PS prompt emit it), with a timeout
 // fallback for shells without integration (ConPTY queues the input anyway).
-function sendCommandWhenReady(ptyId, line) {
+function prepareSavedCommandLaunch(ptyId, cmd) {
+  const t = terminals.get(ptyId);
+  if (!t || !cmd) return;
+  // AI-targeted favorites enter the same pane state immediately, before the
+  // CLI has printed its first status line. The output scanner will fill in the
+  // concrete model/context details moments later.
+  const target = favoriteTarget(cmd);
+  if (target === "ai" || target === "both") {
+    const source = AI_CLI_COMMAND_RE.exec(cmd.command || "")?.[1]?.toLowerCase();
+    if (source) {
+      presetCtxSourceFromCmd(ptyId, t, cmd.command);
+    } else {
+      setPaneAiMode(t, true);
+      updateCtxUi(ptyId, t);
+    }
+  } else {
+    presetCtxSourceFromCmd(ptyId, t, cmd.command);
+  }
+}
+
+function sendCommandWhenReady(ptyId, line, cmd = null) {
   const t0 = performance.now();
   const tick = () => {
     const t = terminals.get(ptyId);
     if (!t) return; // pane closed before the shell came up
     if ((t.marks && t.marks.length > 0) || performance.now() - t0 > 2500) {
+      if (cmd) prepareSavedCommandLaunch(ptyId, cmd);
       armNotifyCycle(ptyId); // user-launched command — its completion should notify
       invoke("pty_write", { id: ptyId, data: line + "\r" });
       return;
@@ -5272,30 +7200,45 @@ function sendCommandWhenReady(ptyId, line) {
 
 // cd-button context menu: open a session AT the folder and run a saved command.
 async function openSessionWithCommand(path, cmd) {
-  if (currentSftpId) {
-    // Remote: reuse the cd routing (owning SSH pane), as one guarded line.
-    let targetId = null;
-    for (const [id, t] of terminals) {
-      if (t.sftpId === currentSftpId) { targetId = id; break; }
+  if (currentSftpId != null) {
+    const sftpId = currentSftpId;
+    const targetId = sftpOwnerPaneId(sftpId);
+    if (targetId == null || !terminals.has(targetId)) {
+      toast("The SSH session for this server is no longer available.", true);
+      return;
     }
-    if (targetId == null) targetId = activeTermId;
-    if (targetId == null || !terminals.has(targetId)) { toast("이 서버의 SSH 세션을 찾을 수 없습니다.", true); return; }
-    const safe = String(path).replace(/'/g, "'\\''");
-    armNotifyCycle(targetId); // user-launched command — its completion should notify
-    invoke("pty_write", { id: targetId, data: `cd '${safe}' && ${cmd.command}\r` });
+    let resolved;
+    try {
+      resolved = await invoke("sftp_resolve_dir", { sessionId: sftpId, path: String(path) });
+    } catch (error) {
+      toast("Remote directory is unavailable: " + error, true);
+      return;
+    }
+    const owner = terminals.get(targetId);
+    if (!owner || owner.sftpId !== sftpId) return;
+    const safe = resolved.replace(/'/g, "'\\''");
+    armNotifyCycle(targetId);
+    await invoke("pty_write", { id: targetId, data: `cd '${safe}' && ${cmd.command}\r` });
+    owner.remotePath = resolved;
+    owner.cwd = resolved;
+    if (owner.session) {
+      owner.session.remotePath = resolved;
+      owner.session.cwd = resolved;
+    }
+    explorerGo(resolved, sftpId);
+    saveSessionNow();
     const tab = findTabForPane(targetId);
     if (tab && tab.tabIdx !== activeTabIdx) switchToTab(tab.tabIdx);
     setFocusedPane(targetId);
     return;
   }
-  // Local: new pane already starts in the folder — just run the command there.
   let ptyId = null;
   if (!browserTabActive && activeTabIdx != null && focusedPaneId != null && terminals.has(focusedPaneId)) {
     ptyId = await splitPane("horizontal", path);
   } else {
     ptyId = await spawnTerminal(undefined, path);
   }
-  if (ptyId != null) sendCommandWhenReady(ptyId, cmd.command);
+  if (ptyId != null) sendCommandWhenReady(ptyId, cmd.command, cmd);
 }
 
 function showCdCommandMenu(e, dirPath) {
@@ -5341,6 +7284,7 @@ function setPaneCwd(ptyId, path) {
   const t = terminals.get(ptyId);
   if (!t) return;
   t.cwd = path || null;
+  if (t.session) t.session.cwd = path || null;
   const el = t.paneEl && t.paneEl.querySelector(".pane-cwd");
   if (el) {
     const lbl = t.paneEl.querySelector(".pane-label");
@@ -5350,6 +7294,7 @@ function setPaneCwd(ptyId, path) {
     el.textContent = cwdLabel === labelText ? "" : cwdLabel;
     el.title = path || "";
   }
+  saveSessionNow();
 }
 
 // Reorder a session within its own tab's panes — changes the session-list order
@@ -5364,6 +7309,367 @@ function reorderSessionWithin(tab, dragId, targetId, after) {
   if (to < 0) arr.push(dragId);
   else arr.splice(after ? to + 1 : to, 0, dragId);
   refreshSessionList();
+}
+
+// ── Session scratch memo 🗒 ───────────────────────────────────────────────────
+// A per-session temporary notepad. Drag-selecting in the terminal auto-appends
+// to it (on top of the usual clipboard copy); the text is freely editable, can
+// be copied in one click, and can be sent to the pane's command line — typed for
+// review, or run outright. It lives on t.session.memo so it rides the existing
+// session_save/session_load pipeline: it survives a restart and is dropped when
+// the pane is closed.
+function paneMemo(id) {
+  const t = terminals.get(id);
+  return t && t.session && typeof t.session.memo === "string" ? t.session.memo : "";
+}
+function setPaneMemo(id, text) {
+  const t = terminals.get(id);
+  if (!t) return;
+  if (!t.session) t.session = { kind: "local", shell: null, cwd: null };
+  // Cap runaway growth (drag-collect can append large log chunks) by keeping the
+  // most recent tail; session.json is persisted and reloaded on every restart.
+  const MAX_MEMO = 64 * 1024;
+  t.session.memo = text.length > MAX_MEMO ? text.slice(text.length - MAX_MEMO) : text;
+  markMemoIndicator(id);
+  scheduleMemoSave();
+}
+// Drag-select auto-collect: append the selection as its own line, skipping an
+// exact repeat (onSelectionChange settles more than once per drag).
+function appendPaneMemo(id, sel) {
+  const add = (sel || "").replace(/\s+$/, "");
+  if (!add) return;
+  const cur = paneMemo(id);
+  if (cur === add || cur.endsWith("\n" + add)) return;
+  setPaneMemo(id, cur ? cur.replace(/\n+$/, "") + "\n" + add : add);
+  if (memoPopover && Number(memoPopover.dataset.ptyId) === id) {
+    const ta = memoPopover.querySelector(".memo-text");
+    if (ta && document.activeElement !== ta) { ta.value = paneMemo(id); ta.scrollTop = ta.scrollHeight; }
+  }
+}
+let memoSaveTimer = null;
+function scheduleMemoSave() {
+  clearTimeout(memoSaveTimer);
+  memoSaveTimer = setTimeout(saveSessionNow, 800);
+}
+function markMemoIndicator(id) {
+  const t = terminals.get(id);
+  const btn = t && t.commandShortcutsEl
+    ? t.commandShortcutsEl.querySelector(".pane-command-memo")
+    : null;
+  if (btn) btn.classList.toggle("has-memo", !!paneMemo(id));
+}
+function makeIconButton(className, icon, label, visibleText = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = icon;
+  if (visibleText) {
+    const text = document.createElement("span");
+    text.textContent = visibleText;
+    button.appendChild(text);
+  }
+  return button;
+}
+const memoCopyFeedback = new WeakMap();
+async function copyPaneMemo(id, feedbackButton = null) {
+  const body = paneMemo(id);
+  if (!body) {
+    toast("복사할 메모가 없습니다.");
+    return false;
+  }
+  const copied = await clipboardWrite(body);
+  if (!copied) {
+    toast("메모 복사에 실패했습니다.");
+    return false;
+  }
+  toast("메모를 복사했습니다.");
+  if (feedbackButton) {
+    const previous = memoCopyFeedback.get(feedbackButton);
+    if (previous) clearTimeout(previous.timer);
+    const state = previous || {
+      html: feedbackButton.innerHTML,
+      title: feedbackButton.title,
+      label: feedbackButton.getAttribute("aria-label"),
+      timer: null,
+    };
+    feedbackButton.innerHTML = ICON.check;
+    feedbackButton.title = "메모 복사 완료";
+    feedbackButton.setAttribute("aria-label", "메모 복사 완료");
+    feedbackButton.classList.add("copy-success");
+    state.timer = setTimeout(() => {
+      memoCopyFeedback.delete(feedbackButton);
+      if (!feedbackButton.isConnected) return;
+      feedbackButton.innerHTML = state.html;
+      feedbackButton.title = state.title;
+      feedbackButton.setAttribute("aria-label", state.label);
+      feedbackButton.classList.remove("copy-success");
+    }, 1000);
+    memoCopyFeedback.set(feedbackButton, state);
+  }
+  return true;
+}
+// Type the memo into the pane's command line. run=false pastes it for review
+// (bracketed-paste safe, no Enter); run=true writes it raw and presses Enter.
+async function sendMemoToPane(id, text, run) {
+  const t = terminals.get(id);
+  if (!t || !t.term) return;
+  const body = text || "";
+  if (!body) return;
+  armNotifyCycle(id);
+  focusSession(id);
+  if (run) {
+    const normalizedBody = body.replace(/\r?\n/g, "\r").replace(/\r+$/, "");
+    await invoke("pty_write", { id, data: normalizedBody });
+    // Let TUIs consume the pasted text before receiving Enter as a distinct key.
+    await sleep(32);
+    await invoke("pty_write", { id, data: "\r" });
+  } else {
+    t.term.paste(body);
+  }
+}
+let memoPopover = null;
+let memoPopoverAnchor = null;
+let memoPopoverResizeObserver = null;
+let memoPopoverAnchorOffset = { x: 0, y: 0 };
+let memoPopoverDrag = null;
+let memoNativePaneHidden = false;
+let memoNativePaneTransitions = Promise.resolve();
+const MEMO_POPOVER_SIZE_KEY = "mymux.memoPopoverSize.v1";
+function savedMemoPopoverSize() {
+  try {
+    const value = JSON.parse(localStorage.getItem(MEMO_POPOVER_SIZE_KEY) || "null");
+    if (value && Number.isFinite(value.width) && Number.isFinite(value.height)) return value;
+  } catch {}
+  return { width: 300, height: 250 };
+}
+function clampMemoPopoverSize(size) {
+  const maxWidth = Math.max(120, window.innerWidth - 16);
+  const maxHeight = Math.max(120, window.innerHeight - 16);
+  return {
+    width: Math.max(Math.min(260, maxWidth), Math.min(maxWidth, Math.round(size.width))),
+    height: Math.max(Math.min(180, maxHeight), Math.min(maxHeight, Math.round(size.height))),
+  };
+}
+function memoPopoverAnchorPosition(pop = memoPopover, anchor = memoPopoverAnchor) {
+  if (!pop || !anchor || !anchor.isConnected) return null;
+  const anchorRect = anchor.getBoundingClientRect();
+  const width = pop.offsetWidth;
+  const height = pop.offsetHeight;
+  const dock = anchor.closest(".pane-command-shortcuts");
+  const opensRight = dock?.classList.contains("dock-side-left");
+  let left = opensRight ? anchorRect.right + 8 : anchorRect.left - width - 8;
+  if (left < 8 || left + width > window.innerWidth - 8) {
+    const alternate = opensRight
+      ? anchorRect.left - width - 8
+      : anchorRect.right + 8;
+    if (alternate >= 8 && alternate + width <= window.innerWidth - 8) left = alternate;
+  }
+  let top = anchorRect.top;
+  return {
+    left: Math.max(8, Math.min(window.innerWidth - width - 8, left)),
+    top: Math.max(8, Math.min(window.innerHeight - height - 8, top)),
+  };
+}
+function positionMemoPopover() {
+  const base = memoPopoverAnchorPosition();
+  if (!base || !memoPopover) return null;
+  const width = memoPopover.offsetWidth;
+  const height = memoPopover.offsetHeight;
+  const left = Math.max(
+    8,
+    Math.min(window.innerWidth - width - 8, base.left + memoPopoverAnchorOffset.x)
+  );
+  const top = Math.max(
+    8,
+    Math.min(window.innerHeight - height - 8, base.top + memoPopoverAnchorOffset.y)
+  );
+  memoPopover.style.left = `${left}px`;
+  memoPopover.style.top = `${top}px`;
+  return { base, left, top };
+}
+function normalizeMemoPopoverAnchorOffset(position = positionMemoPopover()) {
+  if (!position) return;
+  memoPopoverAnchorOffset = {
+    x: position.left - position.base.left,
+    y: position.top - position.base.top,
+  };
+}
+function cleanupMemoPopoverDrag() {
+  if (!memoPopoverDrag) return;
+  document.removeEventListener("pointermove", memoPopoverDrag.onMove);
+  document.removeEventListener("pointerup", memoPopoverDrag.onUp);
+  document.removeEventListener("pointercancel", memoPopoverDrag.onCancel);
+  window.removeEventListener("blur", memoPopoverDrag.onBlur);
+  memoPopoverDrag.pop.classList.remove("memo-dragging");
+  memoPopoverDrag = null;
+}
+function onMemoViewportResize() {
+  normalizeMemoPopoverAnchorOffset();
+}
+function hideNativePaneForMemo() {
+  if (memoNativePaneHidden || !browserTabActive || browserMode !== "native") return;
+  memoNativePaneHidden = true;
+  // Serialize hide/restore operations so a rapid open-close-open cannot leave
+  // a late hide request winning after the final restore.
+  memoNativePaneTransitions = memoNativePaneTransitions.then(
+    () => invoke("browser_pane_hide").catch(() => {})
+  );
+}
+function restoreNativePaneAfterMemo() {
+  if (!memoNativePaneHidden) return;
+  memoNativePaneHidden = false;
+  memoNativePaneTransitions = memoNativePaneTransitions.then(async () => {
+    // A newer memo may have opened while this restore was queued.
+    if (memoNativePaneHidden) return;
+    if (browserTabActive && browserMode === "native") await openNativePane();
+  });
+}
+function closeMemoPopover(restoreFocus = true, restoreNativePane = true) {
+  const anchor = memoPopoverAnchor;
+  cleanupMemoPopoverDrag();
+  if (memoPopoverResizeObserver) {
+    memoPopoverResizeObserver.disconnect();
+    memoPopoverResizeObserver = null;
+  }
+  if (memoPopover) { memoPopover.remove(); memoPopover = null; }
+  memoPopoverAnchor = null;
+  memoPopoverAnchorOffset = { x: 0, y: 0 };
+  document.removeEventListener("mousedown", onMemoOutside, true);
+  document.removeEventListener("keydown", onMemoKey, true);
+  window.removeEventListener("resize", onMemoViewportResize);
+  if (restoreNativePane) restoreNativePaneAfterMemo();
+  if (restoreFocus && anchor) {
+    requestAnimationFrame(() => {
+      if (anchor.isConnected) anchor.focus();
+    });
+  }
+}
+function onMemoOutside(e) {
+  if (!memoPopover) return;
+  if (memoPopover.contains(e.target)) return;
+  if (memoPopoverAnchor && memoPopoverAnchor.contains(e.target)) return;
+  closeMemoPopover(false);
+}
+function onMemoKey(e) {
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  e.stopPropagation();
+  closeMemoPopover();
+}
+// Open (or toggle) the memo popover for a session, anchored to its memo button.
+function openMemoPopover(id, anchorEl) {
+  const wasOpen = memoPopover && Number(memoPopover.dataset.ptyId) === id;
+  const replacingOpenMemo = memoPopover && !wasOpen;
+  closeMemoPopover(false, !replacingOpenMemo);
+  if (wasOpen) return; // clicking the same button again just closes it
+  const t = terminals.get(id);
+  if (!t) {
+    if (replacingOpenMemo) restoreNativePaneAfterMemo();
+    return;
+  }
+  // The native browser is a child WebView, not an HTML element, so z-index
+  // cannot lift this popover over it. Hide the pane before mounting the memo.
+  hideNativePaneForMemo();
+  const pop = document.createElement("div");
+  pop.className = "memo-popover";
+  pop.dataset.ptyId = String(id);
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", "세션 메모: " + sessionLabelFor(t));
+  const head = document.createElement("div");
+  head.className = "memo-head";
+  const title = document.createElement("span");
+  title.className = "memo-title";
+  title.innerHTML = ICON.memo;
+  const titleText = document.createElement("span");
+  titleText.textContent = sessionLabelFor(t);
+  title.appendChild(titleText);
+  const xBtn = makeIconButton("memo-x", ICON.close, "메모 닫기");
+  head.append(title, xBtn);
+  const ta = document.createElement("textarea");
+  ta.className = "memo-text";
+  ta.setAttribute("aria-label", "세션 메모 내용");
+  ta.placeholder = "붙여넣기(Ctrl+V) 하거나, 터미널에서 드래그하면 자동으로 쌓입니다.";
+  ta.value = paneMemo(id);
+  const tools = document.createElement("div");
+  tools.className = "memo-tools";
+  const copyBtn = makeIconButton("memo-btn memo-copy", ICON.copy, "전체 메모 복사", "복사");
+  const typeBtn = makeIconButton("memo-btn memo-type", ICON.keyboard, "명령줄에 입력 (검토 후 직접 실행)", "입력");
+  const runBtn = makeIconButton("memo-btn memo-run", ICON.play, "명령줄에 입력하고 바로 실행", "실행");
+  const clearBtn = makeIconButton("memo-btn memo-clear", ICON.trash, "메모 비우기", "비우기");
+  tools.append(copyBtn, typeBtn, runBtn, clearBtn);
+  pop.append(head, ta, tools);
+  document.body.appendChild(pop);
+  // Restore the user's last resize before positioning. The whole editor is
+  // resizable; the textarea flexes to fill the remaining space.
+  const size = clampMemoPopoverSize(savedMemoPopoverSize());
+  pop.style.width = size.width + "px";
+  pop.style.height = size.height + "px";
+  memoPopover = pop;
+  memoPopoverAnchor = anchorEl;
+  memoPopoverAnchorOffset = { x: 0, y: 0 };
+  positionMemoPopover();
+  memoPopoverResizeObserver = new ResizeObserver(() => {
+    if (!memoPopover || memoPopover !== pop) return;
+    const next = clampMemoPopoverSize({ width: pop.offsetWidth, height: pop.offsetHeight });
+    normalizeMemoPopoverAnchorOffset();
+    try { localStorage.setItem(MEMO_POPOVER_SIZE_KEY, JSON.stringify(next)); } catch {}
+  });
+  memoPopoverResizeObserver.observe(pop);
+  head.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest(".memo-x")) return;
+    event.preventDefault();
+    cleanupMemoPopoverDrag();
+    const rect = pop.getBoundingClientRect();
+    const grabX = event.clientX - rect.left;
+    const grabY = event.clientY - rect.top;
+    const pointerId = event.pointerId;
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId || memoPopover !== pop) return;
+      const base = memoPopoverAnchorPosition(pop, anchorEl);
+      if (!base) return;
+      memoPopoverAnchorOffset = {
+        x: moveEvent.clientX - grabX - base.left,
+        y: moveEvent.clientY - grabY - base.top,
+      };
+      normalizeMemoPopoverAnchorOffset(positionMemoPopover());
+    };
+    const finish = (finishEvent) => {
+      if (finishEvent.pointerId !== pointerId) return;
+      cleanupMemoPopoverDrag();
+    };
+    const onBlur = () => cleanupMemoPopoverDrag();
+    memoPopoverDrag = {
+      pop,
+      onMove,
+      onUp: finish,
+      onCancel: finish,
+      onBlur,
+    };
+    pop.classList.add("memo-dragging");
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", finish);
+    document.addEventListener("pointercancel", finish);
+    window.addEventListener("blur", onBlur);
+  });
+  ta.addEventListener("input", () => setPaneMemo(id, ta.value));
+  xBtn.addEventListener("click", () => closeMemoPopover());
+  copyBtn.addEventListener("click", () => copyPaneMemo(id, copyBtn));
+  typeBtn.addEventListener("click", () => { sendMemoToPane(id, ta.value, false); closeMemoPopover(false); });
+  runBtn.addEventListener("click", async () => {
+    try {
+      await sendMemoToPane(id, ta.value, true);
+    } catch (e) {
+      toast("메모 실행 실패: " + String(e), true);
+    }
+    closeMemoPopover(false);
+  });
+  clearBtn.addEventListener("click", () => { ta.value = ""; setPaneMemo(id, ""); ta.focus(); });
+  setTimeout(() => ta.focus(), 0);
+  document.addEventListener("mousedown", onMemoOutside, true);
+  document.addEventListener("keydown", onMemoKey, true);
+  window.addEventListener("resize", onMemoViewportResize);
 }
 
 // Rebuild the full session list, grouped by tab.
@@ -5413,36 +7719,55 @@ function refreshSessionList() {
       nameEl.textContent = sessionLabelFor(t);
       nameEl.title = "Double-click to rename";
 
-      const renameBtn = document.createElement("button");
-      renameBtn.className = "session-rename";
-      renameBtn.textContent = "✎"; // ✎
-      renameBtn.title = "Rename";
+      const renameBtn = makeIconButton("session-action session-rename", ICON.edit, "세션 이름 변경");
 
       const paneNo = document.createElement("span");
       paneNo.className = "session-pane";
       paneNo.textContent = `#${i + 1}`;
 
-      const closeBtn = document.createElement("button");
-      closeBtn.className = "session-close";
-      closeBtn.textContent = "×";
-      closeBtn.title = "Close session";
+      const closeBtn = makeIconButton("session-action session-close", ICON.close, "세션 닫기");
+
+      const actionsEl = document.createElement("span");
+      actionsEl.className = "session-actions";
+      actionsEl.draggable = false;
+      actionsEl.setAttribute("role", "group");
+      actionsEl.setAttribute("aria-label", "세션 작업 버튼");
+      actionsEl.append(renameBtn);
+      // A draggable parent can suppress a button click after even a tiny mouse
+      // movement. Suspend row dragging for the full action-button press.
+      actionsEl.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        li.draggable = false;
+        const restoreRowDrag = () => {
+          li.draggable = true;
+          document.removeEventListener("pointerup", restoreRowDrag, true);
+          document.removeEventListener("pointercancel", restoreRowDrag, true);
+        };
+        document.addEventListener("pointerup", restoreRowDrag, true);
+        document.addEventListener("pointercancel", restoreRowDrag, true);
+      });
 
       // SSH panes: star saves this connection as a one-click favorite.
       if (t.type === "ssh" && t.session && t.session.kind === "ssh") {
-        const favBtn = document.createElement("button");
-        favBtn.className = "session-fav";
-        favBtn.textContent = "★";
-        favBtn.title = "Save as SSH favorite (one-click reconnect)";
+        const favBtn = makeIconButton(
+          "session-action session-fav",
+          ICON.star,
+          "SSH 즐겨찾기에 저장 (한 번 클릭으로 다시 연결)"
+        );
         favBtn.addEventListener("click", (e) => { e.stopPropagation(); addSshFavFromSession(t.session); });
-        li.append(dotEl, nameEl, renameBtn, favBtn, paneNo, closeBtn);
-      } else {
-        li.append(dotEl, nameEl, renameBtn, paneNo, closeBtn);
+        actionsEl.append(favBtn);
       }
+      actionsEl.append(closeBtn);
+      li.append(dotEl, nameEl, paneNo, actionsEl);
 
       // Drag a session: reorder it within its own tab, or drop it onto another
       // tab's session (or that tab's group header) to move it to that tab.
       li.draggable = true;
       li.addEventListener("dragstart", (e) => {
+        if (e.target.closest(".session-actions")) {
+          e.preventDefault();
+          return;
+        }
         e.dataTransfer.setData("text/plain", String(ptyId));
         e.dataTransfer.effectAllowed = "move";
       });
@@ -5453,7 +7778,10 @@ function refreshSessionList() {
         li.classList.toggle("drop-below", after);
         li.classList.toggle("drop-above", !after);
       });
-      li.addEventListener("dragleave", () => li.classList.remove("drop-above", "drop-below"));
+      li.addEventListener("dragleave", (e) => {
+        if (li.contains(e.relatedTarget)) return;
+        li.classList.remove("drop-above", "drop-below");
+      });
       li.addEventListener("drop", (e) => {
         e.preventDefault();
         li.classList.remove("drop-above", "drop-below");
@@ -5481,7 +7809,9 @@ function refreshSessionList() {
   }
 
   // Rebuilding dropped the ctx pills — re-attach them for sessions that have one.
-  for (const [pid, tt] of terminals) if (tt.ctxPct != null || tt.codexDetected) updateCtxUi(pid, tt);
+  for (const [pid, tt] of terminals) {
+    if (tt.ctxPct != null || tt.codexDetected || tt.aiMode) updateCtxUi(pid, tt);
+  }
 }
 
 // Lightweight: just move the active highlight without rebuilding.
@@ -5503,6 +7833,83 @@ function focusSession(ptyId) {
     setFocusedPane(ptyId);
   }
   terminals.get(ptyId)?.term.focus();
+  showExplorerForSession(ptyId);
+}
+
+function showExplorerForSession(ptyId) {
+  const t = terminals.get(ptyId);
+  if (!t) return;
+  const generation = ++explorerFocusGeneration;
+  if (t.type === "ssh") {
+    if (t.sftpId == null) {
+      showExplorerBlockedForSession(ptyId, t);
+      if (t.sftpStatus === "unsupported") showSftpUnsupportedModal();
+      return;
+    }
+    if (currentSftpId === t.sftpId) {
+      t.remotePath = currentExplorerPath;
+      if (t.session) t.session.remotePath = currentExplorerPath;
+      return;
+    }
+    const rememberedPath = t.remotePath || t.session?.remotePath ||
+      t.cwd || t.session?.cwd;
+    if (rememberedPath) {
+      explorerGo(rememberedPath, t.sftpId);
+      return;
+    }
+    const expectedSftpId = t.sftpId;
+    invoke("sftp_home_dir", { sessionId: expectedSftpId })
+      .then((home) => {
+        const live = terminals.get(ptyId);
+        if (generation === explorerFocusGeneration && focusedPaneId === ptyId &&
+            live && live.sftpId === expectedSftpId) explorerGo(home, expectedSftpId);
+      })
+      .catch(() => {
+        const live = terminals.get(ptyId);
+        if (generation === explorerFocusGeneration && focusedPaneId === ptyId &&
+            live && live.sftpId === expectedSftpId) explorerGo("/", expectedSftpId);
+      });
+    return;
+  }
+  if (!t.cwd) return;
+  if (currentSftpId == null && currentExplorerPath === t.cwd) return;
+  explorerGo(t.cwd, null);
+}
+
+function showExplorerBlockedForSession(ptyId, terminal) {
+  explorerBlockedPaneId = ptyId;
+  explorerFocusGeneration++;
+  explorerLoadGeneration++;
+  currentSftpId = null;
+  currentExplorerPath = "";
+  const status = terminal?.sftpStatus === "connecting"
+    ? "SFTP 연결 중…"
+    : terminal?.sftpStatus === "unsupported"
+      ? "SFTP 미지원"
+      : "SFTP 연결 안 됨";
+  if (explorerPath) {
+    explorerPath.textContent = status;
+    explorerPath.title = "이 SSH 세션에는 현재 업로드할 수 없습니다.";
+  }
+  if (fileListEl) {
+    fileListEl.innerHTML = "";
+    const item = document.createElement("li");
+    item.className = "explorer-blocked-message";
+    item.textContent = terminal?.sftpStatus === "connecting"
+      ? "SFTP 연결이 완료되면 이 세션의 원격 파일이 표시됩니다."
+      : "이 SSH 세션의 SFTP 연결을 사용할 수 없어 업로드가 차단되었습니다.";
+    fileListEl.appendChild(item);
+  }
+  if (explorerMode) {
+    explorerMode.querySelectorAll("option[data-sftp-blocked]").forEach((option) => option.remove());
+    const option = document.createElement("option");
+    option.value = `blocked:${ptyId}`;
+    option.dataset.sftpBlocked = "true";
+    option.textContent = `SSH: ${status}`;
+    explorerMode.appendChild(option);
+    explorerMode.value = option.value;
+  }
+  syncExplorerNav();
 }
 
 // Inline-rename a session (pane). WebView2 has no window.prompt, so edit in place.
@@ -5785,9 +8192,248 @@ async function loadCommands() {
     const cmds = await invoke("list_commands");
     savedCmds = cmds;
     renderCmdList(cmds);
+    renderAllPaneCommandShortcuts();
   } catch (err) {
     toast("Error: " + err, true);
   }
+}
+
+function commandShortcutLabel(cmd) {
+  const alias = String(cmd.alias || "").trim();
+  if (alias) return alias;
+  const words = String(cmd.command || "").match(/[A-Za-z0-9]+/g) || [];
+  const initials = words.slice(0, 3).map((word) => word[0]).join("");
+  if (initials) return initials.toUpperCase();
+  return Array.from(String(cmd.name || "CMD").trim()).slice(0, 3).join("") || "CMD";
+}
+
+function favoriteTarget(cmd) {
+  const target = cmd.favoriteTarget || cmd.favorite_target;
+  return target === "ai" || target === "both" ? target : "shell";
+}
+
+function favoriteIncludesMode(cmd, mode) {
+  if (!cmd || !cmd.favorite) return false;
+  const target = favoriteTarget(cmd);
+  return target === "both" || target === mode;
+}
+
+function favoriteTargetForModes(shell, ai) {
+  if (shell && ai) return "both";
+  return ai ? "ai" : "shell";
+}
+
+function paneShortcutCommands(mode) {
+  return [...savedCmds]
+    .filter((cmd) => cmd && cmd.command && cmd.favorite)
+    .filter((cmd) => favoriteIncludesMode(cmd, mode))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+
+const AI_COMMAND_DOCK_Y_KEY = "mymux.aiCommandDockY.v1";
+const PANE_COMMAND_DOCK_SIDE_KEY = "mymux.paneCommandDockSide.v1";
+let paneCommandDockSide = (() => {
+  try { return localStorage.getItem(PANE_COMMAND_DOCK_SIDE_KEY) === "left" ? "left" : "right"; }
+  catch { return "right"; }
+})();
+
+function savedAiCommandDockY() {
+  try {
+    const value = Number(localStorage.getItem(AI_COMMAND_DOCK_Y_KEY));
+    return Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function positionPaneCommandDock(t) {
+  const host = t && t.commandShortcutsEl;
+  if (!host || t.commandDockY == null) return;
+  const paneHeight = t.paneEl.clientHeight;
+  const dockHeight = host.offsetHeight;
+  if (!paneHeight || !dockHeight) return;
+  const minTop = 28;
+  const maxTop = Math.max(minTop, paneHeight - dockHeight - 54);
+  const top = Math.max(minTop, Math.min(maxTop, Math.round(t.commandDockY * paneHeight)));
+  host.style.top = `${top}px`;
+  host.style.bottom = "auto";
+  if (memoPopoverAnchor && host.contains(memoPopoverAnchor)) positionMemoPopover();
+}
+
+function applyPaneCommandDockSide(host, side) {
+  host.classList.toggle("dock-side-left", side === "left");
+  host.classList.toggle("dock-side-right", side === "right");
+  if (memoPopoverAnchor && host.contains(memoPopoverAnchor)) positionMemoPopover();
+}
+
+function setPaneCommandDockSide(side, focusPtyId = null) {
+  if (side !== "left" && side !== "right") return;
+  paneCommandDockSide = side;
+  try { localStorage.setItem(PANE_COMMAND_DOCK_SIDE_KEY, side); } catch {}
+  for (const [, t] of terminals) {
+    if (!t.commandShortcutsEl) continue;
+    applyPaneCommandDockSide(t.commandShortcutsEl, side);
+    t.commandShortcutsEl.classList.remove("dock-side-preview-left", "dock-side-preview-right");
+    const grip = t.commandShortcutsEl.querySelector(".pane-command-dock-grip");
+    if (grip) {
+      const sideLabel = side === "left" ? "왼쪽" : "오른쪽";
+      const label = `명령 버튼 위치 변경 (현재 ${sideLabel}) — 드래그하거나 방향키/Enter/Space 사용`;
+      grip.title = label;
+      grip.setAttribute("aria-label", label);
+    }
+  }
+  if (focusPtyId != null) {
+    requestAnimationFrame(() => {
+      terminals.get(focusPtyId)?.commandShortcutsEl
+        ?.querySelector(".pane-command-dock-grip")?.focus();
+    });
+  }
+}
+
+function bindPaneCommandDockDrag(ptyId, handle) {
+  handle.setAttribute("aria-keyshortcuts", "ArrowLeft ArrowRight Enter Space");
+  handle.addEventListener("keydown", (event) => {
+    let side = null;
+    if (event.key === "ArrowLeft") side = "left";
+    else if (event.key === "ArrowRight") side = "right";
+    else if (event.key === "Enter" || event.key === " ") {
+      side = paneCommandDockSide === "left" ? "right" : "left";
+    }
+    if (!side) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setPaneCommandDockSide(side, ptyId);
+  });
+  handle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const t = terminals.get(ptyId);
+    if (!t || !t.commandShortcutsEl) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setFocusedPane(ptyId);
+
+    const dock = t.commandShortcutsEl;
+    const paneRect = t.paneEl.getBoundingClientRect();
+    const dockRect = dock.getBoundingClientRect();
+    const grabOffset = event.clientY - dockRect.top;
+    let previewSide = paneCommandDockSide;
+    const onMove = (moveEvent) => {
+      const minTop = 28;
+      const maxTop = Math.max(minTop, paneRect.height - dock.offsetHeight - 54);
+      const top = Math.max(minTop, Math.min(maxTop, moveEvent.clientY - paneRect.top - grabOffset));
+      t.commandDockY = top / Math.max(paneRect.height, 1);
+      dock.style.top = `${Math.round(top)}px`;
+      dock.style.bottom = "auto";
+      previewSide = moveEvent.clientX - paneRect.left < paneRect.width / 2 ? "left" : "right";
+      applyPaneCommandDockSide(dock, previewSide);
+      dock.classList.toggle("dock-side-preview-left", previewSide === "left");
+      dock.classList.toggle("dock-side-preview-right", previewSide === "right");
+    };
+    const finish = (cancelled = false) => {
+      if (t.commandDockY != null) {
+        try { localStorage.setItem(AI_COMMAND_DOCK_Y_KEY, String(t.commandDockY)); } catch {}
+      }
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+      if (cancelled) {
+        applyPaneCommandDockSide(dock, paneCommandDockSide);
+        dock.classList.remove("dock-side-preview-left", "dock-side-preview-right");
+      } else {
+        setPaneCommandDockSide(previewSide, ptyId);
+      }
+    };
+    const onUp = () => finish(false);
+    const onCancel = () => finish(true);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+  });
+}
+
+function renderPaneCommandShortcuts(ptyId) {
+  const t = terminals.get(ptyId);
+  const host = t && t.commandShortcutsEl;
+  if (!host) return;
+  const mode = t.aiMode ? "ai" : "shell";
+  if (memoPopoverAnchor && host.contains(memoPopoverAnchor)) closeMemoPopover(false);
+  host.replaceChildren();
+  host.classList.toggle("shell-mode", mode === "shell");
+  host.classList.toggle("ai-mode", mode === "ai");
+  applyPaneCommandDockSide(host, paneCommandDockSide);
+  const sideLabel = paneCommandDockSide === "left" ? "왼쪽" : "오른쪽";
+  const handle = makeIconButton(
+    "pane-command-dock-grip",
+    ICON.drag,
+    `명령 버튼 위치 변경 (현재 ${sideLabel}) — 드래그하거나 방향키/Enter/Space 사용`
+  );
+  bindPaneCommandDockDrag(ptyId, handle);
+  host.appendChild(handle);
+  const memoBtn = makeIconButton(
+    "pane-command-tool pane-command-memo" + (paneMemo(ptyId) ? " has-memo" : ""),
+    ICON.memo,
+    "이 세션의 메모 열기 및 편집"
+  );
+  memoBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setFocusedPane(ptyId);
+    openMemoPopover(ptyId, memoBtn);
+  });
+  host.appendChild(memoBtn);
+  const shortcuts = paneShortcutCommands(mode);
+  const pageSize = 6;
+  const pageCount = Math.max(1, Math.ceil(shortcuts.length / pageSize));
+  const page = Math.min(t.commandShortcutPage || 0, pageCount - 1);
+  t.commandShortcutPage = page;
+  const pageStart = page * pageSize;
+  for (const cmd of shortcuts.slice(pageStart, pageStart + pageSize)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "pane-command-shortcut";
+    button.textContent = commandShortcutLabel(cmd);
+    button.title = [cmd.name, cmd.description, cmd.command].filter(Boolean).join("\n");
+    button.setAttribute("aria-label", `Run ${cmd.name || cmd.command}`);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setFocusedPane(ptyId);
+      runCommandCombo(cmd, ptyId);
+    });
+    host.appendChild(button);
+  }
+  if (shortcuts.length > pageSize) {
+    const nextPage = (page + 1) % pageCount;
+    const remaining = shortcuts.length - Math.min(shortcuts.length, pageStart + pageSize);
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "pane-command-shortcut pane-command-more";
+    more.textContent = page === 0 ? `+${remaining}` : `${page + 1}/${pageCount}`;
+    more.title = nextPage === 0
+      ? "바로가기 첫 페이지로 이동"
+      : `바로가기 다음 페이지 보기 (${nextPage + 1}/${pageCount})`;
+    more.setAttribute("aria-label", more.title);
+    more.addEventListener("click", (event) => {
+      event.stopPropagation();
+      t.commandShortcutPage = nextPage;
+      renderPaneCommandShortcuts(ptyId);
+    });
+    host.appendChild(more);
+  }
+  if (t.commandDockY == null) t.commandDockY = savedAiCommandDockY();
+  requestAnimationFrame(() => positionPaneCommandDock(t));
+}
+
+function renderAllPaneCommandShortcuts() {
+  for (const ptyId of terminals.keys()) renderPaneCommandShortcuts(ptyId);
+}
+
+function setPaneAiMode(t, active) {
+  if (!t || t.aiMode === active) return;
+  t.aiMode = active;
+  renderPaneCommandShortcuts(t.id);
 }
 
 function renderCmdList(cmds) {
@@ -5815,9 +8461,12 @@ function renderCmdList(cmds) {
       <button class="cmd-x" title="Delete (no confirm)">&times;</button>
       <div class="cmd-name">${esc(cmd.name)}</div>
       <div class="cmd-row">
-        <span class="cmd-text" title="${esc(cmd.cwd ? "in " + cmd.cwd : "")}">${cmd.alias ? `<span class="cmd-alias">${esc(cmd.alias)}</span>` : ""}${cmd.cwd ? `<span class="cmd-cwd" title="${esc(cmd.cwd)}">📁</span>` : ""}${esc(cmd.command)}</span>
+        <span class="cmd-text">${cmd.alias ? `<span class="cmd-alias">${esc(cmd.alias)}</span>` : ""}${cmd.cwd ? `<span class="cmd-cwd">📁</span>` : ""}${esc(cmd.command)}</span>
         <span class="cmd-actions">
-          <button class="fav-btn${cmd.favorite ? " on" : ""}" title="Favorite">${cmd.favorite ? "★" : "☆"}</button>
+          <span class="favorite-mode-toggles" role="group" aria-label="바로가기 표시 모드">
+            <button class="favorite-mode-toggle shell" type="button">쉘</button>
+            <button class="favorite-mode-toggle ai" type="button">AI</button>
+          </span>
           <button class="copy-btn" title="Copy">Copy</button>
           <button class="edit-btn" title="Edit">Edit</button>
           <button class="send-btn" title="Send to terminal">Send</button>
@@ -5825,8 +8474,29 @@ function renderCmdList(cmds) {
       </div>
       ${cmd.description ? `<div class="cmd-desc">${esc(cmd.description)}</div>` : ""}
     `;
+    li.querySelector(".cmd-text").title = cmd.cwd ? "in " + cmd.cwd : "";
+    const cwdIcon = li.querySelector(".cmd-cwd");
+    if (cwdIcon) cwdIcon.title = cmd.cwd;
     li.querySelector(".send-btn").addEventListener("click", (e) => { e.stopPropagation(); runCommandCombo(cmd); });
-    li.querySelector(".fav-btn").addEventListener("click", (e) => { e.stopPropagation(); toggleFavorite(cmd); });
+    const shellToggle = li.querySelector(".favorite-mode-toggle.shell");
+    const aiToggle = li.querySelector(".favorite-mode-toggle.ai");
+    const setModeButtonState = (button, mode, title) => {
+      const active = favoriteIncludesMode(cmd, mode);
+      button.classList.toggle("on", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.title = title;
+      button.setAttribute("aria-label", title);
+    };
+    setModeButtonState(shellToggle, "shell", "모든 쉘 세션에 표시");
+    setModeButtonState(aiToggle, "ai", "모든 AI 코딩 세션에 표시");
+    shellToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleFavoriteMode(cmd, "shell");
+    });
+    aiToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleFavoriteMode(cmd, "ai");
+    });
     li.querySelector(".copy-btn").addEventListener("click", (e) => { e.stopPropagation(); copyCmd(cmd); });
     li.querySelector(".edit-btn").addEventListener("click", (e) => { e.stopPropagation(); openModal(cmd); });
     li.querySelector(".cmd-x").addEventListener("click", (e) => { e.stopPropagation(); quickDeleteCmd(cmd); });
@@ -5835,9 +8505,17 @@ function renderCmdList(cmds) {
   }
 }
 
-async function toggleFavorite(cmd) {
+async function toggleFavoriteMode(cmd, mode) {
   try {
-    await invoke("set_favorite", { id: cmd.id, favorite: !cmd.favorite });
+    const shell = mode === "shell"
+      ? !favoriteIncludesMode(cmd, "shell")
+      : favoriteIncludesMode(cmd, "shell");
+    const ai = mode === "ai"
+      ? !favoriteIncludesMode(cmd, "ai")
+      : favoriteIncludesMode(cmd, "ai");
+    const favorite = shell || ai;
+    const target = favoriteTargetForModes(shell, ai);
+    await invoke("set_favorite", { id: cmd.id, favorite, favoriteTarget: target });
     await loadCommands();
   } catch (e) {
     toast("Error: " + e, true);
@@ -5883,8 +8561,8 @@ function closeModal() {
   form.reset();
   editingId = null;
   if (browserTabActive && browserMode === "native") {
-    invoke("browser_pane_show").catch(() => {});
-    scheduleSync();
+    // openNativePane honors the memo-owned hide guard.
+    openNativePane();
   }
 }
 
@@ -5956,14 +8634,65 @@ function baseName(p) {
 // AUTOCOMPLETE
 // ═══════════════════════════════════════════════
 
+function loadCommandHistory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COMMAND_HISTORY_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((entry) => entry && typeof entry.command === "string" && entry.command.trim())
+      .map((entry) => ({
+        command: entry.command.trim(),
+        count: Math.max(1, Number(entry.count) || 1),
+        lastUsed: Number(entry.lastUsed) || 0,
+      }))
+      .slice(0, COMMAND_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function saveCommandHistory() {
+  try {
+    localStorage.setItem(COMMAND_HISTORY_KEY, JSON.stringify(commandHistory.slice(0, COMMAND_HISTORY_LIMIT)));
+  } catch {}
+}
+
+function rememberCommand(command) {
+  if (!commandHistoryEnabled) return;
+  const normalized = String(command || "").trim();
+  if (!normalized || normalized.length < 2) return;
+  if (/^(cls|clear|exit)$/i.test(normalized)) return;
+  if (normalized.startsWith("\x1b")) return;
+
+  const now = Date.now();
+  const existing = commandHistory.find((entry) => entry.command === normalized);
+  if (existing) {
+    existing.count = (existing.count || 1) + 1;
+    existing.lastUsed = now;
+  } else {
+    commandHistory.push({ command: normalized, count: 1, lastUsed: now });
+  }
+  commandHistory.sort((a, b) => (b.count || 1) - (a.count || 1) || (b.lastUsed || 0) - (a.lastUsed || 0));
+  commandHistory = commandHistory.slice(0, COMMAND_HISTORY_LIMIT);
+  saveCommandHistory();
+}
+
 function handleTerminalInput(data, ptyId) {
+  const tInfo = terminals.get(ptyId);
+  if (tInfo && typeof tInfo.acInput !== "string") tInfo.acInput = "";
+  const getInput = () => (tInfo ? tInfo.acInput : currentInput);
+  const setInput = (value) => {
+    currentInput = value;
+    if (tInfo) tInfo.acInput = value;
+  };
   // Track what user types to build current input line
   if (data === "\r" || data === "\n") {
     // Enter pressed — detect cd command and sync explorer
-    const typedRaw = currentInput;
-    const typed = currentInput.trim();
+    const typedRaw = getInput();
+    const typed = typedRaw.trim();
+    presetCtxSourceFromCmd(ptyId, tInfo, typed);
     syncExplorerOnCd(typed, ptyId);
-    currentInput = "";
+    setInput("");
     hideAutocomplete();
     // Alias typed at the prompt: erase it and run the full combo instead
     // (cd into the saved directory, then the command — one Enter).
@@ -5973,6 +8702,7 @@ function handleTerminalInput(data, ptyId) {
       runCommandCombo(aliasCmd, ptyId);
       return "consumed";
     }
+    rememberCommand(typed);
     return;
   }
 
@@ -5987,16 +8717,17 @@ function handleTerminalInput(data, ptyId) {
     if (!acPopup.classList.contains("hidden") && acSelectedIdx >= 0) {
       const items = acList.querySelectorAll(".ac-item");
       if (items[acSelectedIdx]) {
-        const saved = savedCmds.find((c) => c.id === items[acSelectedIdx].dataset.cmdId);
+        const item = items[acSelectedIdx];
+        const saved = savedCmds.find((c) => c.id === item.dataset.cmdId);
         // cwd-bound commands expand to the full "cd … then run" line.
         const cmd = saved
           ? commandComboLine(saved, paneShellKind(terminals.get(ptyId)))
-          : items[acSelectedIdx].dataset.command;
+          : item.dataset.command;
         // Clear current input and type the command
-        const backspaces = "\x7f".repeat(currentInput.length);
+        const backspaces = "\x7f".repeat(getInput().length);
         invoke("pty_write", { id: ptyId, data: backspaces });
         invoke("pty_write", { id: ptyId, data: cmd });
-        currentInput = cmd;
+        setInput(cmd);
         hideAutocomplete();
         // Prevent default tab from being sent
         return "consumed";
@@ -6021,18 +8752,19 @@ function handleTerminalInput(data, ptyId) {
 
   if (data === "\x7f" || data === "\b") {
     // Backspace
-    currentInput = currentInput.slice(0, -1);
+    setInput(getInput().slice(0, -1));
   } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
     // Printable character
-    currentInput += data;
+    setInput(getInput() + data);
   } else {
     // Control sequences — ignore for autocomplete tracking
     return;
   }
 
   // Show/update autocomplete
-  if (currentInput.length >= 2) {
-    showAutocomplete(currentInput, ptyId);
+  const input = getInput();
+  if (input.length >= 1) {
+    showAutocomplete(input, ptyId);
   } else {
     hideAutocomplete();
   }
@@ -6040,7 +8772,7 @@ function handleTerminalInput(data, ptyId) {
 
 function showAutocomplete(input, ptyId) {
   const lower = input.toLowerCase();
-  const matches = savedCmds.filter(
+  let matches = savedCmds.filter(
     (c) =>
       (c.alias && c.alias.toLowerCase().startsWith(lower)) ||
       c.name.toLowerCase().includes(lower) ||
@@ -6050,6 +8782,27 @@ function showAutocomplete(input, ptyId) {
   matches.sort((a, b) =>
     ((b.alias && b.alias.toLowerCase().startsWith(lower)) ? 1 : 0) -
     ((a.alias && a.alias.toLowerCase().startsWith(lower)) ? 1 : 0));
+  const existingCommands = new Set(matches.map((c) => commandComboLine(c, paneShellKind(terminals.get(ptyId)))));
+  const historyMatches = (commandHistoryEnabled ? commandHistory : [])
+    .filter((h) => h.command.toLowerCase().includes(lower) && !existingCommands.has(h.command))
+    .sort((a, b) => {
+      const aPrefix = a.command.toLowerCase().startsWith(lower) ? 1 : 0;
+      const bPrefix = b.command.toLowerCase().startsWith(lower) ? 1 : 0;
+      if (aPrefix !== bPrefix) return bPrefix - aPrefix;
+      if ((a.count || 1) !== (b.count || 1)) return (b.count || 1) - (a.count || 1);
+      return (b.lastUsed || 0) - (a.lastUsed || 0);
+    })
+    .map((h) => ({
+      id: `history:${h.command}`,
+      name: "History",
+      command: h.command,
+      description: `${h.count || 1}x`,
+      alias: "",
+      cwd: "",
+      isHistory: true,
+      historyCount: h.count || 1,
+    }));
+  matches = [...matches, ...historyMatches];
 
   if (matches.length === 0) {
     hideAutocomplete();
@@ -6068,15 +8821,20 @@ function showAutocomplete(input, ptyId) {
     // Show what will ACTUALLY run — for cwd-bound commands that's the full
     // "cd <dir> then command" line, not just the bare command.
     const preview = commandComboLine(cmd, shellKind);
+    const meta = cmd.isHistory ? ` <span class="ac-meta">${cmd.historyCount}x</span>` : "";
     li.innerHTML = `
-      <span class="ac-name">${cmd.alias ? `<span class="cmd-alias">${esc(cmd.alias)}</span>` : ""}${esc(cmd.name)}</span>
-      <span class="ac-cmd" title="${esc(preview)}">${esc(preview)}</span>
+      <span class="ac-name">${cmd.alias ? `<span class="cmd-alias">${esc(cmd.alias)}</span>` : ""}${esc(cmd.name)}${meta}</span>
+      <span class="ac-cmd">${esc(preview)}</span>
     `;
+    li.querySelector(".ac-cmd").title = preview;
     li.addEventListener("click", () => {
       const line = commandComboLine(cmd, paneShellKind(terminals.get(ptyId)));
-      const backspaces = "\x7f".repeat(currentInput.length);
+      const current = terminals.get(ptyId)?.acInput ?? currentInput;
+      const backspaces = "\x7f".repeat(current.length);
       invoke("pty_write", { id: ptyId, data: backspaces + line });
       currentInput = line;
+      const pane = terminals.get(ptyId);
+      if (pane) pane.acInput = line;
       hideAutocomplete();
       terminals.get(ptyId)?.term.focus();
     });
@@ -6100,7 +8858,9 @@ function showAutocomplete(input, ptyId) {
     let left = r.left + curX * cw - 16; // tail aligns near the cursor
     const lineTop = r.top + curY * ch;
     const lineBottom = r.top + (curY + 1) * ch;
-    const gap = 12;
+    // Keep the history/autocomplete bubble 5px farther from the input row so
+    // its border and pointer never cover the text being typed.
+    const gap = 17;
     acPopup.style.left = left + "px";
     // Reveal first so offsetHeight/Width are measurable (no repaint until JS yields).
     acPopup.classList.remove("hidden");
@@ -6133,16 +8893,63 @@ function hideAutocomplete() {
 // EXPLORER SYNC — follow terminal cd
 // ═══════════════════════════════════════════════
 
-function syncExplorerOnCd(input, ptyId) {
-  // Only sync if local terminal and local explorer mode
-  if (currentSftpId) return;
-  const tInfo = terminals.get(ptyId);
-  if (!tInfo || tInfo.type === "ssh") return;
+async function resolveRemotePaneDir(ptyId, rawPath) {
+  const t = terminals.get(ptyId);
+  if (!t || t.type !== "ssh" || t.sftpId == null) return null;
+  const sftpId = t.sftpId;
+  let path = String(rawPath == null ? "" : rawPath).trim();
+  path = path.replace(/^["']|["']$/g, "").trim();
+  if (path === "-") return null;
 
-  // Only sync when there's a single pane in the active tab
-  if (activeTabIdx == null) return;
-  const tab = tabs.get(activeTabIdx);
-  if (!tab || tab.panes.length !== 1) return;
+  let candidate;
+  if (!path || path === "~" || path === "$HOME") {
+    candidate = await invoke("sftp_home_dir", { sessionId: sftpId });
+  } else if (path.startsWith("~/")) {
+    const home = await invoke("sftp_home_dir", { sessionId: sftpId });
+    candidate = `${home.replace(/\/+$/, "")}/${path.slice(2)}`;
+  } else if (path.startsWith("/")) {
+    candidate = path;
+  } else {
+    const base = t.remotePath || t.cwd ||
+      await invoke("sftp_home_dir", { sessionId: sftpId });
+    candidate = `${String(base).replace(/\/+$/, "")}/${path}`;
+  }
+
+  const resolved = await invoke("sftp_resolve_dir", { sessionId: sftpId, path: candidate });
+  const live = terminals.get(ptyId);
+  if (!live || live.sftpId !== sftpId) return null;
+  live.remotePath = resolved;
+  live.cwd = resolved;
+  if (live.session) {
+    live.session.remotePath = resolved;
+    live.session.cwd = resolved;
+  }
+  if (focusedPaneId === ptyId) explorerGo(resolved, sftpId);
+  saveSessionNow();
+  return resolved;
+}
+
+function syncExplorerOnCd(input, ptyId) {
+  const t = terminals.get(ptyId);
+  if (t && t.type === "ssh") {
+    if (t.sftpId == null) return;
+    const match = String(input || "").match(/^cd(?:\s+--)?(?:\s+(.+))?$/i);
+    if (!match) return;
+    setTimeout(() => {
+      resolveRemotePaneDir(ptyId, match[1] || "").catch(() => {
+        // The shell remains authoritative. A failed SFTP validation means the
+        // Explorer/persisted cwd is left at its last known-good directory.
+      });
+    }, 300);
+    return;
+  }
+  syncLocalExplorerOnCd(input, ptyId);
+}
+
+function syncLocalExplorerOnCd(input, ptyId) {
+  const tInfo = terminals.get(ptyId);
+  if (!tInfo) return;
+  const baseCwd = tInfo.cwd || currentExplorerPath;
 
   let targetPath = null;
 
@@ -6160,7 +8967,7 @@ function syncExplorerOnCd(input, ptyId) {
 
   // Detect: cd .. or cd .
   if (input === "cd ..") {
-    const parent = currentExplorerPath.replace(/[\\/]+$/, "");
+    const parent = baseCwd.replace(/[\\/]+$/, "");
     const idx = Math.max(parent.lastIndexOf("\\"), parent.lastIndexOf("/"));
     if (idx > 0) targetPath = parent.substring(0, idx);
     else if (idx === 0) targetPath = "/";
@@ -6170,7 +8977,7 @@ function syncExplorerOnCd(input, ptyId) {
   if (input === "cd" || input === "cd ~" || input === "cd $HOME" || input === "cd %USERPROFILE%") {
     // Go home
     invoke("explorer_home_dir").then((home) => {
-      explorerGo(home);
+      explorerGo(home, null);
       setPaneCwd(ptyId, home);
     });
     return;
@@ -6181,7 +8988,7 @@ function syncExplorerOnCd(input, ptyId) {
   // Resolve relative paths
   if (!targetPath.match(/^[a-zA-Z]:/) && !targetPath.startsWith("/") && !targetPath.startsWith("\\")) {
     // Relative path — join with current explorer path
-    targetPath = currentExplorerPath.replace(/[\\/]+$/, "") + "\\" + targetPath;
+    targetPath = baseCwd.replace(/[\\/]+$/, "") + "\\" + targetPath;
   }
 
   // Normalize
@@ -6215,15 +9022,26 @@ window.addEventListener("DOMContentLoaded", () => {
     const btn = document.getElementById("btn-update");
     if (!btn) return;
 
-    let newVersion = null;
+    let updateInfo = null;
     try {
-      newVersion = await inv("update_check");
+      updateInfo = await inv("update_check");
     } catch (err) {
       // Network/endpoint errors are non-fatal — just stay hidden.
       console.warn("update_check failed:", err);
       return;
     }
-    if (!newVersion) return; // already up to date
+    if (!updateInfo) return; // already up to date
+
+    // Older backends return only a version string; newer ones may also return
+    // release notes from the updater manifest.
+    const newVersion = typeof updateInfo === "string" ? updateInfo : updateInfo.version;
+    const releaseNotes = typeof updateInfo === "object" && updateInfo.body
+      ? String(updateInfo.body)
+      : "세션 레이아웃과 안정성 개선, 사용성 업데이트가 포함되어 있습니다.";
+    const versionEl = document.getElementById("update-modal-version");
+    const notesEl = document.getElementById("update-modal-notes");
+    if (versionEl) versionEl.textContent = `새 버전: v${newVersion}`;
+    if (notesEl) notesEl.textContent = releaseNotes;
 
     btn.title = `New version ${newVersion} — click to update`;
     btn.classList.remove("hidden");
@@ -6234,6 +9052,12 @@ window.addEventListener("DOMContentLoaded", () => {
       const original = btn.textContent;
       btn.textContent = "Updating…";
       try {
+        // Remember what this update ships so the relaunched (new) version can
+        // show the release notes in the post-update "수정사항" modal.
+        try {
+          localStorage.setItem("mymuxPendingUpdateNotes",
+            JSON.stringify({ version: newVersion, body: releaseNotes }));
+        } catch {}
         // Downloads, installs, and relaunches into the new version.
         await inv("update_install");
       } catch (err) {
@@ -6247,6 +9071,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const modal = document.getElementById("update-modal");
     const modalOk = document.getElementById("update-modal-ok");
     const modalCancel = document.getElementById("update-modal-cancel");
+    const modalClose = document.getElementById("update-modal-close");
     const closeUpdateModal = () => {
       if (modal) modal.classList.add("hidden");
       // Restore the native browser overlay only if we're still on the browser view.
@@ -6254,6 +9079,7 @@ window.addEventListener("DOMContentLoaded", () => {
     };
     if (modalOk) modalOk.addEventListener("click", () => { closeUpdateModal(); runInstall(); });
     if (modalCancel) modalCancel.addEventListener("click", closeUpdateModal);
+    if (modalClose) modalClose.addEventListener("click", closeUpdateModal);
     if (modal) {
       modal.addEventListener("click", (e) => { if (e.target === modal) closeUpdateModal(); });
       modal.addEventListener("keydown", (e) => { if (e.key === "Escape") closeUpdateModal(); });
@@ -6262,7 +9088,13 @@ window.addEventListener("DOMContentLoaded", () => {
     btn.addEventListener("click", () => {
       if (btn.disabled) return;
       // With open sessions, confirm first — updating closes every session.
-      if (terminals.size > 0 && modal) {
+      if (modal) {
+        const warning = modal.querySelector(".update-session-warning");
+        if (warning) {
+          warning.textContent = terminals.size > 0
+            ? "업데이트를 진행하면 열려 있는 모든 세션(창)이 닫히고 앱이 재시작됩니다. 계속하시겠습니까?"
+            : "업데이트를 진행하면 앱이 재시작됩니다. 계속하시겠습니까?";
+        }
         // The native browser overlay floats above all HTML; hide it so the modal shows.
         if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
         modal.classList.remove("hidden");

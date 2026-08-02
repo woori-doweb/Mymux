@@ -79,6 +79,318 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
   적용됐고, 배포 후에도 며칠 묵은 `app.js`가 계속 서빙되어 수정이 "여전히
   안 되는" 것처럼 보였습니다. 이제 정적 파일과 API 응답에
   `Cache-Control: no-cache`(재사용 전 재검증, 304로 저렴)를 붙입니다.
+## v0.1.50 — 2026-08-02
+
+### Security
+- **Emergency Tauri IPC hardening.** Updated Tauri to 2.11.5, which includes
+  the remote-origin custom-command ACL fix introduced in 2.11.1. Mymux now
+  declares every custom command in an AppManifest and grants those commands
+  only to the trusted local `main` and `buddy-overlay` webviews; the remote
+  Native Browser pane has no privileged IPC capability.
+- **Removed the unused arbitrary command IPC.** The unreferenced
+  `execute_command` endpoint is no longer compiled or registered.
+- **Stored-XSS hardening.** User-controlled command, history, and working
+  directory values are assigned to tooltip DOM properties instead of being
+  interpolated into HTML attributes.
+
+---
+
+## v0.1.49 — 2026-07-30
+
+### Fixed
+- **Session-list usage shows the percentage only.** The sidebar session pill
+  again shows just the context usage percentage; the full "model | reasoning |
+  usage" readout stays in the hover tooltip and the pane's top-right badge.
+- **세션 목록 사용량은 퍼센트만 표시.** 사이드바 세션 pill이 다시 컨텍스트 사용량
+  퍼센트만 보여줍니다. 전체 "모델 | 추론 | 사용량"은 hover 툴팁과 패인 우상단
+  배지에만 나옵니다.
+
+### Added / Changed
+- **Command-history toggle in the Commands panel.** A new switch turns
+  command-history suggestions on or off — when off, typed commands are no longer
+  recorded and history entries stop appearing in autocomplete (saved history is
+  kept). Also enlarged the voice-input microphone button for readability.
+- **Commands 패널에 명령 히스토리 토글 추가.** 명령 히스토리 제안을 껐다 켤 수
+  있습니다 — 끄면 입력한 명령을 기록하지 않고 자동완성에도 히스토리를 제안하지
+  않습니다(저장된 기록은 유지). 음성 입력 마이크 버튼도 더 크게 키웠습니다.
+
+---
+
+## v0.1.48 — 2026-07-30
+
+### Fixed
+- **Clearer Deepgram voice-token errors.** When requesting a temporary Deepgram
+  token fails, voice input now explains the cause instead of showing a bare
+  status code: a 403 means the API key lacks the required "Member" permission,
+  and a 401 means the key is invalid or expired.
+- **음성 입력 Deepgram 토큰 오류 안내 개선.** Deepgram 임시 토큰 발급이 실패하면
+  상태 코드만 보여주지 않고 원인을 안내합니다 — 403은 API 키에 "Member" 권한이
+  없다는 뜻이고, 401은 키가 유효하지 않거나 만료됐다는 뜻입니다.
+
+---
+
+## v0.1.46 — 2026-07-30
+
+### Fixed
+- **Hidden Codex background checks on Windows.** The periodic Codex app-server
+  usage check no longer opens a console window or steals terminal input.
+- **SFTP upload verification.** The release includes the loopback SFTP E2E
+  coverage for password authentication, exact content, no-overwrite publishing,
+  and cleanup after failed uploads.
+
+---
+
+## v0.1.45 — 2026-07-30
+
+### Added
+- **Secure SFTP upload batches.** Remote uploads now show aggregate progress,
+  support cancellation, keep the selected SSH session and destination fixed for
+  the whole batch, and publish through temporary sibling paths without
+  overwriting an existing remote file.
+- **Upload-to-AI handoff.** After uploading into an SSH session running an AI
+  CLI, Mymux can place the uploaded file names into that pane's input for review
+  without submitting them.
+- **SSH/SFTP session-aware Explorer.** Remote `cd` commands and pane focus keep
+  each session's Explorer path in sync, while servers without SFTP show a clear
+  blocked state without disrupting their SSH terminals.
+
+### Fixed
+- **Hardened upload source validation and cleanup.** Uploads reject symlinks and
+  unsafe names, detect local file or directory replacement while streaming,
+  clean partial remote trees in reverse creation order, and serialize
+  cross-process known-host updates.
+- **Pane-specific Codex usage lookup.** Codex rollout snapshots now prefer the
+  session matching each pane's working directory instead of always reading the
+  globally newest rollout.
+
+---
+
+## v0.1.44 — 2026-07-29
+
+### Added / 새 기능
+- **Equalize split sizes.** Two new toolbar buttons make every column the same
+  width and every pane in each column the same height. Nested splits are
+  weighted by pane count, so three or more columns come out truly even, and
+  each column's stack is equalized independently.
+- **분할 크기 균등화.** 툴바의 새 버튼 두 개로 모든 세로줄(컬럼)의 너비를
+  똑같이, 그리고 각 세로줄 안의 패인 높이를 똑같이 맞춥니다. 중첩 분할도
+  패인 수 기준으로 가중치를 줘서 3열 이상도 정확히 균등해지고, 세로줄마다
+  독립적으로 높이가 정리됩니다.
+- **Post-update changelog modal.** After an update, the first launch of the new
+  version shows a "What's new / 수정사항" modal with the release notes. The
+  pre-update confirmation now also shows the incoming version and notes.
+- **업데이트 후 수정사항 모달.** 업데이트가 끝나고 새 버전을 처음 실행하면
+  수정사항 모달로 변경 내용을 보여줍니다. 업데이트 전 확인 창에도 새 버전과
+  릴리즈 노트가 표시됩니다.
+- **Session restore prompt.** On launch, Mymux now asks whether to reopen the
+  previous session layout ("복원하기") or start fresh ("새로 시작") instead of
+  silently reconnecting everything.
+- **이전 세션 복원 선택.** 시작 시 이전 세션 구성을 복원할지 새로 시작할지
+  물어봅니다. 조용히 전부 다시 여는 대신 선택할 수 있습니다.
+- **Codex reset credits.** The CX badge's `R-n` counter now shows your actual
+  available Codex rate-limit reset credits (read via `codex app-server`), and
+  clicking it consumes one credit after confirmation.
+- **Codex 리셋권.** CX 배지의 `R-n`이 실제 사용 가능한 Codex 리셋권 개수를
+  표시하고, 클릭하면 확인 후 리셋권 1개를 사용합니다.
+- **Explorer follows the focused session.** Clicking a session focuses the
+  explorer on that pane's working directory (SSH sessions jump to their SFTP
+  path), and `cd` sync now works with multiple panes open.
+- **탐색기가 포커스된 세션을 따라갑니다.** 세션을 클릭하면 그 패인의 작업
+  디렉토리(SSH는 SFTP 경로)로 탐색기가 이동하고, 패인이 여러 개여도 `cd`
+  동기화가 동작합니다.
+- **SFTP drop-upload confirmation.** Dropping files onto a remote explorer now
+  confirms the target and file list before uploading, and unsafe file names are
+  rejected server-side.
+- **SFTP 드롭 업로드 확인.** 원격 탐색기에 파일을 끌어다 놓으면 업로드 전에
+  대상과 파일 목록을 확인하며, 위험한 파일 이름은 업로드하지 않습니다.
+
+### Fixed / 버그 수정
+- **Uniform toolbar icon heights.** The bell (notification settings) and other
+  icon buttons now share one fixed height with the text buttons.
+- **툴바 아이콘 높이 통일.** 알림 설정(종) 아이콘 등 툴바 버튼들의 높이가
+  텍스트 버튼과 똑같이 맞춰졌습니다.
+
+---
+
+## v0.1.43 — 2026-07-29
+
+### Added
+- Explorer local drag-and-drop copy and SFTP upload.
+- Terminal tab creation with a closing confirmation modal.
+- Browser page tabs, page management, and browser information controls.
+- CX usage refresh and persistent locally detected reset-count badge (`R-n`).
+
+### Fixed
+- CDP browser requests no longer wait indefinitely when an AI-control URL fails.
+- SSH sessions now recover model, effort, and usage badges from remote CLI status output.
+
+---
+
+## v0.1.42 — 2026-07-26
+
+### Fixed
+- **Windows Korean first-syllable split after switching back to the window.**
+  When you Alt-Tabbed away (to a browser, docs, another app) and came straight
+  back to type Korean into an AI CLI (Claude Code, Codex), the very first
+  syllable could split into separate jamo ("자" → "ㅈ ㅏ") — so it looked like a
+  typo and you'd Backspace and retype. Cause: on window return the focus keeper
+  did a real OS-level `blur()`+`focus()` on the terminal's input field to revive
+  focus, and one of its retries could land in the gap between your first keydown
+  and the IME's `compositionstart`, desyncing Windows' IME mid-syllable. The
+  keeper now re-syncs xterm's focus state with a synthetic focus event when the
+  field already has focus, so the live IME composition is never disturbed. This
+  is the Windows counterpart to the macOS first-syllable fix in v0.1.41.
+- **Windows 한글 첫 음절 깨짐(창 복귀 직후).** 다른 창(브라우저·문서·다른 앱)에
+  갔다가 Mymux로 돌아와 곧바로 AI CLI(Claude Code, Codex)에 한글을 치면 첫 음절이
+  자모로 쪼개지곤 했습니다("자" → "ㅈ ㅏ") — 오타처럼 보여 백스페이스로 지우고 다시
+  치게 되던 문제입니다. 원인은 창 복귀 시 포커스를 되살리려고 터미널 입력 필드를
+  실제로 `blur()`+`focus()` 하던 코드로, 그 재시도가 첫 키 입력과 IME
+  `compositionstart` 사이 틈에 끼어들며 조합 중인 IME를 흐트러뜨렸습니다. 이제
+  입력 필드에 이미 포커스가 있으면 합성 focus 이벤트로 xterm 상태만 갱신해, 진행
+  중인 IME 조합을 전혀 건드리지 않습니다. v0.1.41의 macOS 첫 음절 수정에 대응하는
+  Windows판입니다.
+
+---
+
+## v0.1.41 — 2026-07-24
+
+### Fixed
+- **macOS Korean/CJK input.** Typing Korean in the shell, Claude Code, and Codex
+  now composes correctly — including the first syllable, which previously split
+  into separate jamo ("ㅈ ㅏ 도행전"). On macOS WebKit the first character of a
+  run arrives as a committed `insertText` before composition starts; that jamo is
+  now seeded into the input so the following composition builds the whole
+  syllable. The old v0.1.34 shim (which broke Backspace and the shortcut
+  autocomplete in the shell) is removed. See `docs/macos-webkit-gotchas.md`.
+- **macOS Backspace and shortcut autocomplete.** No longer corrupted by the IME
+  path — IME bytes are routed through the terminal's normal input pipeline
+  instead of straight to the PTY, keeping command tracking and autocomplete in
+  sync.
+
+---
+
+## v0.1.40 — 2026-07-23
+
+### Added / New features
+- **Clear unsent AI input.** Press Ctrl+Shift+Backspace to clear the current
+  unsent input in Claude Code or Codex.
+- **Editable pane memos.** Every terminal pane now has a matching monochrome
+  memo button beside its command shortcuts. The resizable editor focuses
+  immediately, auto-saves per session, remembers its size, and includes
+  one-click copy, type, run, and clear actions.
+- **Terminal font selector.** Choose D2Coding, Cascadia Code, Consolas, or the
+  system monospace stack from the toolbar. The choice persists and immediately
+  remeasures and refits every open terminal.
+- **Global mode-specific command shortcuts.** Each saved command now has
+  independent `쉘` and `AI` visibility toggles that apply to every session in
+  that mode. AI shortcuts send prompt text directly, while shell shortcuts keep
+  their configured working-directory behavior. Paged `+N` controls expose every
+  configured shortcut without making the pane-edge dock grow indefinitely.
+
+### Fixed
+- **Accurate Codex context usage.** The current-context percentage now uses
+  `last_token_usage` instead of cumulative token usage.
+- **Correct AI badge ownership.** Claude Code and Codex session badges now keep
+  the correct owner and model without leaking model data between sessions.
+- **Movable pane command dock.** The command shortcut and memo dock can be
+  dragged vertically or between the left and right pane edges. Its side persists
+  across panes and is also selectable with ArrowLeft, ArrowRight, Enter, or
+  Space on the drag handle.
+- **Compact session usage.** Session-list usage pills and tooltips now show only
+  the current percentage; full model and reasoning details remain in the pane.
+- **Right-aligned toolbar actions.** The title and global usage stay at the left
+  while every other toolbar control is grouped at the right edge, with
+  horizontal scrolling preserved in narrow windows.
+- **Visible memos over the native browser.** Opening a session memo now hides
+  the native browser child pane while the popover is active and restores it
+  exactly once when the memo closes, including rapid toggles and session closes.
+- **Clearer history popup.** The history/autocomplete popup is positioned 5px
+  farther from the input so it no longer obscures typed text.
+
+---
+
+## v0.1.39 — 2026-07-23
+
+### Added / New features
+- **Draggable session actions.** Rename, memo, favorite, and close buttons can
+  be dragged between the left and right side of each session row, with the
+  chosen position preserved across restarts.
+- **Session model and usage details.** Session rows now show the active model,
+  reasoning effort, and context usage together in the usage badge.
+
+---
+
+## v0.1.38 — 2026-07-22
+
+### Added / New features
+- **Usage-reset "N" flash.** When a CL or CX rate-limit window resets (detected
+  as a large drop in usage), an "N" briefly pulses next to the badge so a freed-up
+  budget is obvious at a glance.
+  CL·CX 사용량 한도가 리셋되면(사용률 급락으로 감지) 배지 옆에 "N"이 잠깐 깜빡여
+  여유가 생긴 걸 한눈에 알 수 있습니다.
+- **Flip split orientation.** Toggle a split between side-by-side and stacked
+  (상하 ↔ 좌우) via Ctrl+Shift+O, the pane's ↻ button, or the command palette —
+  no drag-retiling needed.
+  분할된 패인을 상하 ↔ 좌우로 즉시 전환합니다 (Ctrl+Shift+O · 패인 ↻ 버튼 ·
+  커맨드 팔레트).
+
+### Fixed
+- **Buddy speaks the real context %.** The mascot's context-usage line now shows
+  the actual current percentage (matching the badge) instead of the fixed
+  50/70/85 milestone value.
+  마스코트가 말하는 컨텍스트 사용량이 고정값(50/70/85) 대신 실제 현재 %(배지와
+  동일)로 표시됩니다.
+
+---
+
+## v0.1.37 — 2026-07-22
+
+### Added / New features
+- **Per-session scratch memo (🗒).** Each session gets a memo button that opens a
+  popover notepad. Drag-selecting text in the terminal auto-collects it line by
+  line, and the memo can be copied, typed into the command line for review, or
+  run outright. Memos persist in the session file across restarts and are dropped
+  when the pane is closed.
+  세션마다 🗒 메모 버튼이 생깁니다. 터미널에서 드래그한 텍스트가 한 줄씩 자동으로
+  쌓이고, 복사·명령줄 입력(검토용)·바로 실행이 가능하며, 재시작 후에도 유지됩니다
+  (패인을 닫으면 삭제).
+- **Desktop completion buddy overlay.** When a task finishes while Mymux is
+  minimized or covered by another window, a character pops up at the screen
+  corner with a dialect-flavored "done" bubble for 15 seconds (fade in/out).
+  Clicking it brings the app forward and jumps straight to that session.
+  작업이 끝났을 때 창이 최소화되었거나 다른 창에 가려져 있으면, 화면 모서리에
+  캐릭터가 15초간 사투리 완료 말풍선과 함께 나타납니다(페이드 인/아웃). 클릭하면
+  앱이 앞으로 오면서 그 세션으로 바로 이동합니다.
+
+---
+
+## v0.1.36 — 2026-07-22
+
+### Added / New features
+- **Mode-aware favorite command shortcuts.** A favorite selected while a shell
+  is active appears only in shell shortcuts; a favorite selected while an AI
+  session is active appears only in that session's draggable AI command dock.
+  Moving a favorite to the other active mode updates its target directly.
+- **Built-in work-record prompt.** `작업기록 남기고 마무리해줘` is seeded once as
+  the `LOG` favorite in the AI command dock. Its position stays clear of the
+  input area and can be moved vertically along the pane edge.
+
+---
+
+## v0.1.35 — 2026-07-22
+
+### Added / New features
+- **Shell command shortcuts.** Star a saved command beside `Send` to pin it as
+  a compact shortcut on each shell pane. The shortcut uses the command alias
+  when present, otherwise an automatically derived abbreviation, and runs with
+  the same directory-aware behavior as `Send`.
+- **Command history autocomplete.** Commands entered at a shell prompt are
+  remembered locally and suggested alongside saved commands, ranked by use.
+
+### Fixed / Bug fixes
+- **Codex context usage refresh.** The usage badge now reads real
+  `token_count` session events instead of matching unrelated output that merely
+  contains the same text, so the context percentage updates with the model.
 
 ---
 
@@ -936,3 +1248,8 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 See the commit history and [GitHub Releases](https://github.com/ChoiGyber/Mymux/releases)
 for v0.1.8 and earlier.
 v0.1.8 이하의 변경 내역은 커밋 기록과 GitHub Releases를 참고하세요.
+## v0.1.47 — 2026-07-30
+
+- Add selectable Deepgram and local faster-whisper voice input.
+- Store Deepgram API keys with Windows DPAPI and use short-lived tokens.
+- Add microphone icon and Ctrl+Space push-to-talk input.
