@@ -20,13 +20,34 @@ pub struct Config {
     pub agent: AgentConfig,
 }
 
-/// Claude Code hook → agent-status bridge (POST /api/agent-status).
-#[derive(Debug, Clone, Default, Deserialize)]
+/// Claude Code hook → agent-status bridge (POST /api/agent-status) plus the
+/// hook-independent process watcher.
+#[derive(Debug, Clone, Deserialize)]
 pub struct AgentConfig {
     /// Shared token the hook script presents. Empty (default) disables the
     /// endpoint entirely. Generate with e.g. `openssl rand -hex 32`.
     #[serde(default)]
     pub status_token: String,
+    /// Watch each session's process tree for running coding agents, so
+    /// badges work without Claude hooks and cover non-Claude agents.
+    /// Linux-only; a no-op elsewhere. Set false to disable /proc reads.
+    #[serde(default = "default_true")]
+    pub watch_processes: bool,
+    /// How long a transient hook state (running / tool) stays authoritative
+    /// over the watcher. Past this, a hook that stopped reporting is treated
+    /// as stale — a crashed agent never sends `Stop`.
+    #[serde(default = "d_hook_fresh")]
+    pub hook_fresh_seconds: i64,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            status_token: String::new(),
+            watch_processes: true,
+            hook_fresh_seconds: d_hook_fresh(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -145,4 +166,7 @@ fn d_max_lifetime() -> i64 {
 }
 fn d_replay() -> usize {
     262144
+}
+fn d_hook_fresh() -> i64 {
+    60
 }

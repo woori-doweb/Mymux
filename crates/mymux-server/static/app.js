@@ -708,7 +708,8 @@
         const b = document.createElement('span');
         b.className = 'agent-badge ' + st.cls;
         b.textContent = st.icon;
-        b.title = 'Claude: ' + st.label;
+        b.title = agentLabel(t) + ': ' + st.label
+          + (t.agentStatus.source === 'watch' ? ' (프로세스 감지)' : '');
         li.appendChild(b);
       }
       li.appendChild(document.createTextNode(
@@ -733,6 +734,15 @@
     return (m && m.agentStatus && m.agentStatus.state) || null;
   }
 
+  // The status can come from a Claude hook or from the process watcher, and
+  // the watcher sees gjc / codex / omx / aider too — so the agent name is
+  // reported by the server rather than assumed to be Claude.
+  function agentLabel(t) {
+    const name = t.agentStatus && t.agentStatus.agent;
+    if (!name) return 'Agent';
+    return name === 'claude' ? 'Claude' : name;
+  }
+
   function notifyAgentTransitions(list) {
     const seeded = agentSeeded;
     agentSeeded = true;
@@ -747,8 +757,9 @@
         return;
       }
       const label = AGENT_BADGE[st].label;
-      toast('Claude: ' + label + ' — ' + t.id.slice(0, 12));
-      maybeNotify('Mymux Console', 'Claude ' + label + ' (' + t.id.slice(0, 12) + ')');
+      const who = agentLabel(t);
+      toast(who + ': ' + label + ' — ' + t.id.slice(0, 12));
+      maybeNotify('Mymux Console', who + ' ' + label + ' (' + t.id.slice(0, 12) + ')');
     });
   }
 

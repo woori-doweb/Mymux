@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use time::OffsetDateTime;
@@ -44,6 +44,16 @@ pub struct TerminalSession {
     replay: Mutex<VecDeque<u8>>,
     replay_cap: usize,
     exited: AtomicBool,
+    /// Total bytes the PTY has produced. The activity watcher diffs this
+    /// between samples to tell "the agent is emitting output" from "the
+    /// shell is sitting at a prompt" — an exact counter, unlike the PTY
+    /// mtime stat() that an external tool would be stuck with.
+    output_bytes: AtomicU64,
+    /// PID of the shell we spawned, captured once at spawn time. Read
+    /// straight from the field rather than locking `child`: `kill()` holds
+    /// that mutex across a blocking `wait()`, and the watcher must never
+    /// park on it.
+    shell_pid: Option<u32>,
 }
 
 impl TerminalSession {
@@ -86,6 +96,14 @@ impl TerminalSession {
 
     pub fn last_active_rfc3339(&self) -> String {
         util::fmt_offset(*self.last_active_at.lock().unwrap())
+    }
+
+    pub fn output_bytes(&self) -> u64 {
+        self.output_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn shell_pid(&self) -> Option<u32> {
+        self.shell_pid
     }
 }
 
@@ -165,6 +183,8 @@ impl TerminalManager {
             .try_clone_reader()
             .map_err(|e| AppError::Internal(format!("clone_reader: {e}")))?;
 
+        let shell_pid = child.process_id();
+
         let (tx, _rx) = broadcast::channel::<PtyEvent>(1024);
         let id = format!("term_{}", uuid::Uuid::new_v4().simple());
         let now = OffsetDateTime::now_utc();
@@ -184,6 +204,8 @@ impl TerminalManager {
             replay: Mutex::new(VecDeque::new()),
             replay_cap: self.config.replay_buffer_bytes,
             exited: AtomicBool::new(false),
+            output_bytes: AtomicU64::new(0),
+            shell_pid,
         });
 
         // Reader thread: PTY stdout -> replay ring buffer + broadcast.
@@ -203,6 +225,7 @@ impl TerminalManager {
                                 rb.pop_front();
                             }
                         }
+                        s2.output_bytes.fetch_add(n as u64, Ordering::Relaxed);
                         // Output is activity too — otherwise the idle reaper
                         // would kill long-running output-only commands (builds,
                         // `tail -f`) that receive no keystrokes.

@@ -53,6 +53,29 @@ impl AgentStatus {
     fn sticky(&self) -> bool {
         matches!(self.state, "done" | "needs_input")
     }
+
+    /// Same rule, exposed for the hook-vs-watcher precedence in
+    /// [`crate::activity::merge_status`]: a sticky state outranks live
+    /// process observation because only the user can clear it.
+    pub fn is_sticky(&self) -> bool {
+        self.sticky()
+    }
+
+    /// Seconds since this hook event arrived. Used to decide whether a
+    /// transient hook state is still authoritative or has gone stale (a dead
+    /// Claude never sends `Stop`, so "running" can linger forever).
+    pub fn age_seconds(&self, now: OffsetDateTime) -> i64 {
+        (now - self.updated_instant).whole_seconds()
+    }
+
+    #[cfg(test)]
+    pub fn for_test(state: &'static str, updated_instant: OffsetDateTime) -> Self {
+        Self {
+            state,
+            updated_at: util::fmt_offset(updated_instant),
+            updated_instant,
+        }
+    }
 }
 
 fn event_to_state(event: &str) -> Option<&'static str> {
@@ -210,15 +233,23 @@ pub async fn ack_status(
     Json(req): Json<AckReq>,
 ) -> AppResult<Json<serde_json::Value>> {
     let is_admin = user.role.is_admin();
-    let owns = state
+    let owned: Vec<String> = state
         .terminals
         .list()
         .iter()
-        .any(|s| (is_admin || s.owner_user_id == user.id) && same_dir(&s.cwd, &req.cwd));
-    if !owns {
+        .filter(|s| (is_admin || s.owner_user_id == user.id) && same_dir(&s.cwd, &req.cwd))
+        .map(|s| s.id.clone())
+        .collect();
+    if owned.is_empty() {
         return Err(AppError::Forbidden);
     }
     state.agent_status.ack(&req.cwd, is_admin);
+    // The watcher keys by session id, not cwd, so clear every session the
+    // caller just acknowledged — otherwise a watcher-sourced `done` would
+    // outlive the hook-sourced one the user actually dismissed.
+    for id in owned {
+        state.activity.ack(&id);
+    }
     Ok(Json(json!({ "ok": true })))
 }
 

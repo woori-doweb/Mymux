@@ -42,6 +42,15 @@ replay_buffer_bytes = 262144
 # Generate: openssl rand -hex 32 · setup: mymux-server hooks print --config <this file>
 status_token = ""
 
+# Hook-independent agent watcher: samples each session's process tree for a
+# running coding agent (gjc / claude / codex / omx / gemini / aider / …) and
+# drives the same badges with no hook setup at all. Linux-only (reads /proc);
+# a no-op elsewhere. Set false to disable process inspection entirely.
+watch_processes = true
+# How long a transient hook state (running / tool) outranks the watcher.
+# Past this the hook counts as stale — a crashed agent never sends Stop.
+hook_fresh_seconds = 60
+
 [audit]
 enabled = true
 # Reserved for a follow-up PR; keep false so secrets never land in the audit log.

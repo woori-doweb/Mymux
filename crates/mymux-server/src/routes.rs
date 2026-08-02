@@ -12,6 +12,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::activity;
 use crate::agent_status;
 use crate::audit;
 use crate::auth::{self, AuthUser};
@@ -158,10 +159,31 @@ async fn list_terminals(
         .into_iter()
         .filter(|s| user.role.is_admin() || s.owner_user_id == user.id)
         .map(|s| {
-            let agent = state
-                .agent_status
-                .lookup(&s.cwd, user.role.is_admin())
-                .map(|a| json!({ "state": a.state, "updatedAt": a.updated_at }));
+            // Two independent sources: Claude hooks (semantic, opt-in) and the
+            // process watcher (universal, zero-setup). merge_status decides
+            // which one the badge should reflect.
+            let hook = state.agent_status.lookup(&s.cwd, user.role.is_admin());
+            let watch = state.activity.lookup(&s.id);
+            let agent = activity::merge_status(
+                hook.as_ref(),
+                watch.as_ref(),
+                state.config.agent.hook_fresh_seconds,
+                time::OffsetDateTime::now_utc(),
+            )
+            .map(|(st, label, source)| {
+                let updated_at = if source == "hook" {
+                    hook.as_ref().map(|h| h.updated_at.clone())
+                } else {
+                    watch.as_ref().map(|w| w.updated_at.clone())
+                }
+                .unwrap_or_default();
+                json!({
+                    "state": st,
+                    "agent": label,
+                    "source": source,
+                    "updatedAt": updated_at,
+                })
+            });
             json!({
                 "id": s.id,
                 "ownerUsername": s.owner_username,

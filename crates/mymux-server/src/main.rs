@@ -4,6 +4,7 @@
 //!   mymux-server serve       --config <path>
 //!   mymux-server user create --username <u> --role <admin|operator|viewer> --config <path>
 
+mod activity;
 mod agent_status;
 mod audit;
 mod auth;
@@ -160,11 +161,14 @@ async fn serve(config_path: &Path) -> Result<(), String> {
     db::migrate(&db).await.map_err(|e| e.to_string())?;
 
     let terminals = Arc::new(TerminalManager::new(config.terminal.clone()));
+    let activity = Arc::new(activity::ActivityRegistry::default());
+    let watch_processes = config.agent.watch_processes;
     let state = AppState {
         config: Arc::new(config),
         db,
         terminals: Arc::clone(&terminals),
         agent_status: Arc::new(agent_status::AgentStatusRegistry::default()),
+        activity: Arc::clone(&activity),
     };
 
     // Periodic reaper for exited / idle / over-lifetime terminals.
@@ -178,6 +182,28 @@ async fn serve(config_path: &Path) -> Result<(), String> {
     });
 
     let app = routes::router(state);
+    // Hook-independent agent activity watcher. Runs on the blocking pool:
+    // one pass reads a handful of small /proc files per live session, which
+    // is cheap but is still synchronous filesystem I/O.
+    if watch_processes {
+        let watcher_terms = Arc::clone(&terminals);
+        let watcher = Arc::clone(&activity);
+        tokio::spawn(async move {
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(activity::TICK_SECONDS));
+            loop {
+                tick.tick().await;
+                let t = Arc::clone(&watcher_terms);
+                let w = Arc::clone(&watcher);
+                if tokio::task::spawn_blocking(move || w.tick(&t)).await.is_err() {
+                    tracing::warn!("activity watcher pass failed");
+                }
+            }
+        });
+    } else {
+        tracing::info!("agent process watcher disabled by config");
+    }
+
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("bind {addr}: {e}"))?;

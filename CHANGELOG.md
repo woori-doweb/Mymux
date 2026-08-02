@@ -10,6 +10,27 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
 
 ## Unreleased
 
+### Added / 추가
+
+- **Hook 없이 동작하는 에이전트 활동 감지 / Agent activity without hooks.**
+  세션의 프로세스 트리를 직접 관찰해 코딩 에이전트(gjc / claude / codex /
+  omx / gemini / aider / opencode)의 실행 여부를 판정합니다. 기존
+  `agent_status`는 Claude Code hook이 발화해야만 동작해서
+  `~/.claude/settings.json`을 손으로 고치기 전까지 배지가 비어 있었고,
+  Claude 외 에이전트는 아예 보이지 않았습니다.
+  활동 신호는 두 가지입니다 — 서버가 이미 소유한 PTY 리더의 **정확한 출력
+  바이트 카운터**와, 출력 없이 CPU만 쓰는 구간을 위한 `/proc` CPU 틱 델타.
+  running → done 전이에는 12초 히스테리시스가 걸려 토큰 스트림 사이의
+  정적에 배지가 깜빡이지 않습니다.
+  Hook과 워처는 상호 배타가 아니라 **역할 분담**입니다: hook은 프로세스
+  테이블이 표현할 수 없는 의미(`Notification` = 사람 입력 대기)를,
+  워처는 hook이 보장할 수 없는 생존성을 담당합니다. 우선순위는
+  sticky hook > 신선한 hook > 워처 > 오래된 hook 순입니다.
+  `[agent] watch_processes`(기본 true)로 끌 수 있고, `/proc`을 읽으므로
+  Linux 전용입니다 — 다른 플랫폼에서는 no-op이라 Win/macOS 빌드는 그대로
+  통과합니다. 배지 라벨도 감지된 에이전트 이름을 쓰도록 바뀌어 더 이상
+  "Claude"로 하드코딩되지 않습니다.
+
 ### Fixed / 버그 수정
 - **Console: split-pane focus stuck on one side / 콘솔: 분할 패인 포커스 고착 수정.**
   In the web console (`mymux-server`), clicking the other pane after a split
