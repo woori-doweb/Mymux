@@ -9,8 +9,9 @@ release/
 /target/
 **/*.rs.bk
 
-# OMC tooling runtime state
+# Agent tooling runtime state
 .omc/
+.gjc/
 
 # Updater signing keys — NEVER commit these
 *.key
