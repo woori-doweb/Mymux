@@ -7,10 +7,14 @@
 (function () {
   'use strict';
   const $ = (s) => document.querySelector(s);
-  // Visible build tag (top bar, next to the username). Bump on every static
-  // deploy — this is how remote support tells whether a browser tab is
-  // actually running the deployed frontend or a stale cached copy.
-  const MYMUX_BUILD = '2026-07-26.5';
+  // Visible build tag (top bar, next to the username) — how remote support
+  // tells whether a browser tab runs the deployed frontend or a stale cached
+  // copy. deploy/deploy.sh stamps the placeholder in the DEPLOYED app.js with
+  // the commit it shipped (`git describe --dirty` + commit date, e.g. `v0.3.8-33-g04a239a 2026-11-13`); a hand-bumped
+  // string here went stale for months. Unstamped (serving the repo directly,
+  // e.g. the dev instance) shows "dev".
+  const MYMUX_BUILD_STAMP = '__MYMUX_BUILD__';
+  const MYMUX_BUILD = /^__/.test(MYMUX_BUILD_STAMP) ? 'dev' : MYMUX_BUILD_STAMP;
 
   let me = null;
   let tabs = [];          // { id, name, root(node), contentEl, focusedPaneId }

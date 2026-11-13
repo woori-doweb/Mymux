@@ -50,10 +50,24 @@ sync_static() {
   sudo rsync -rlt --delete --chown=root:root --chmod=D755,F644 \
     "$REPO_STATIC"/ "$DEPLOY_STATIC"/
 
+  # Stamp the build tag shown next to the username (see MYMUX_BUILD in app.js)
+  # with the commit being shipped, so the UI can never claim a stale build.
+  local build_id stamped
+  build_id="$(git -C "$REPO_ROOT" describe --always --dirty --abbrev=7) $(git -C "$REPO_ROOT" log -1 --format=%cd --date=format:%Y-%m-%d)"
+  stamped="$(mktemp)"
+  sed "s/__MYMUX_BUILD__/$build_id/" "$REPO_STATIC/app.js" > "$stamped"
+  grep -qF "'$build_id'" "$stamped" || { echo "build stamp placeholder missing in app.js" >&2; rm -f "$stamped"; exit 1; }
+  sudo install -o root -g root -m 644 "$stamped" "$DEPLOY_STATIC/app.js"
+  echo "== static: build stamp: $build_id =="
+
   echo "== static: verifying served content matches repo =="
-  for f in app.js style.css index.html login.html; do
+  cmp -s "$stamped" "$DEPLOY_STATIC/app.js" || { echo "mismatch after sync: app.js" >&2; rm -f "$stamped"; exit 1; }
+  rm -f "$stamped"
+  for f in style.css index.html login.html; do
     cmp -s "$REPO_STATIC/$f" "$DEPLOY_STATIC/$f" || { echo "mismatch after sync: $f" >&2; exit 1; }
   done
+  curl -sf "${HEALTH_URL%/health}/app.js" | grep -qF "'$build_id'" \
+    || { echo "served app.js does not carry build stamp $build_id" >&2; exit 1; }
   curl -sf "$HEALTH_URL" >/dev/null && echo "health OK ($HEALTH_URL)" || { echo "health check FAILED" >&2; exit 1; }
 }
 

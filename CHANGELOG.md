@@ -24,6 +24,15 @@
   "Claude"로 하드코딩되지 않습니다.
 
 ### Fixed / 버그 수정
+- **Console: stale build tag / 콘솔: 빌드 표기 고정값 수정.**
+  The top bar showed a hand-bumped `2026-07-26.5` that nobody bumped.
+  `deploy/deploy.sh` now stamps the deployed `app.js` with the shipped commit
+  (`git describe --dirty` + date, e.g. `v0.3.8-33-g04a239a 2026-11-13`) and checks the served file carries it; an
+  unstamped copy (the dev instance) shows `dev`.
+
+  상단 바가 수동 갱신되지 않은 `2026-07-26.5`를 표시했습니다. 이제 배포 스크립트가
+  배포한 커밋(`git describe` + 날짜, 예: `v0.3.8-33-g04a239a 2026-11-13`)을 찍고, 서빙되는 파일에 반영됐는지 확인합니다.
+
 - **Console: copy in one pane, paste in another / 콘솔: 터미널 간 복사·붙여넣기 수정.**
   xterm turned Ctrl+V into `^V` and cancelled the key, so the browser never
   pasted: text copied in one pane could not be pasted into another. Ctrl/Cmd+V
