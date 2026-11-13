@@ -166,11 +166,9 @@ impl TerminalManager {
             })
             .map_err(|e| AppError::Internal(format!("openpty: {e}")))?;
 
-        let mut cmd = CommandBuilder::new(&shell);
-        cmd.cwd(&cwd);
         let child = pair
             .slave
-            .spawn_command(cmd)
+            .spawn_command(shell_command(&shell, &cwd))
             .map_err(|e| AppError::Internal(format!("spawn shell: {e}")))?;
         drop(pair.slave);
 
@@ -324,6 +322,39 @@ impl TerminalManager {
         }
         for id in to_remove {
             self.remove(&id);
+        }
+    }
+}
+
+/// The command every console session is spawned with.
+///
+/// The browser side is always xterm.js, so on Unix the shell is told so
+/// explicitly. Under systemd the server inherits no `TERM`; zsh then cannot
+/// move the cursor, redraws from column 0 on every key, and leaves
+/// autosuggestion hints behind as plain text. Mirrors the desktop fix in
+/// `mycli-desktop/src/terminal.rs` (`declare_terminal_type`).
+fn shell_command(shell: &str, cwd: &std::path::Path) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(shell);
+    cmd.cwd(cwd);
+    #[cfg(not(windows))]
+    cmd.env("TERM", "xterm-256color");
+    cmd
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::shell_command;
+    use std::path::Path;
+
+    #[test]
+    fn every_session_declares_the_xterm_it_draws_on() {
+        for shell in ["/bin/bash", "/bin/zsh", "some-custom-shell"] {
+            let cmd = shell_command(shell, Path::new("/tmp"));
+            assert_eq!(
+                cmd.get_env("TERM").and_then(|v| v.to_str()),
+                Some("xterm-256color"),
+                "{shell}",
+            );
         }
     }
 }
