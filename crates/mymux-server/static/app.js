@@ -1157,6 +1157,27 @@
       if (focused) { try { focused.term.input('\n'); } catch (err) { sendRaw('\n'); } }
       return false;
     }
+    // Clipboard keys belong to the console, not the program. xterm turns
+    // Ctrl+V into ^V (bash quoted-insert) and cancels the keydown, so the
+    // browser never fires `paste` and copying in one pane then pasting in
+    // another delivered nothing. Ctrl/Cmd+V (Shift optional) and Shift+Insert
+    // paste the clipboard; Ctrl/Cmd+C copies the selection and only falls
+    // through to ^C (SIGINT) when nothing is selected. Match e.code too —
+    // with the Korean IME active e.key arrives as "ㅍ"/"ㅊ" or "Process".
+    // Same rules as the desktop app (mycli-desktop/frontend/app.js).
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && focused) {
+      if (e.code === 'KeyV' || e.key === 'v' || e.key === 'V') {
+        e.preventDefault(); pasteInto(focused); return false;
+      }
+      if (e.code === 'KeyC' || e.key === 'c' || e.key === 'C') {
+        const sel = focused.term.getSelection();
+        // Clear it, or the next Ctrl+C would copy again instead of interrupting.
+        if (sel) { e.preventDefault(); copyText(sel); focused.term.clearSelection(); return false; }
+      }
+    }
+    if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'Insert' && focused) {
+      e.preventDefault(); pasteInto(focused); return false;
+    }
     if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
       const k = e.key.toLowerCase();
       if (k === 'd') { e.preventDefault(); splitFocused('row'); return false; }

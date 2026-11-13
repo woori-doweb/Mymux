@@ -24,6 +24,18 @@
   "Claude"로 하드코딩되지 않습니다.
 
 ### Fixed / 버그 수정
+- **Console: copy in one pane, paste in another / 콘솔: 터미널 간 복사·붙여넣기 수정.**
+  xterm turned Ctrl+V into `^V` and cancelled the key, so the browser never
+  pasted: text copied in one pane could not be pasted into another. Ctrl/Cmd+V
+  (Shift optional) and Shift+Insert now paste the clipboard, and Ctrl/Cmd+C
+  copies the selection — falling through to `^C` only when nothing is
+  selected. Works with the Korean IME active (matched on the physical key).
+
+  xterm이 Ctrl+V를 `^V`로 바꾸고 키를 취소해 브라우저 붙여넣기가 일어나지
+  않았습니다. 이제 Ctrl/Cmd+V(Shift 무관)와 Shift+Insert는 클립보드를 붙여넣고,
+  Ctrl/Cmd+C는 선택이 있을 때 복사하며 없을 때만 `^C`를 보냅니다. 한글 IME
+  상태에서도 동작합니다.
+
 - **Console: drag-select over Claude Code answers / 콘솔: Claude Code 답변 드래그 선택·복사 수정.**
   Claude Code's fullscreen TUI turns on click mouse tracking (`?1000h`), so
   xterm handed every drag to the program: nothing was selected, the
