@@ -121,6 +121,7 @@
     // so a single click can't bounce back to the previously-focused pane.
     el.addEventListener('focusin', () => focusPane(pane));
     installDragSelectReclaim(host, term);
+    installOsc52Clipboard(term);
     // Drag-select auto-copy (PuTTY-style): finishing a selection copies it.
     el.addEventListener('mouseup', () => {
       const sel = pane.term.getSelection();
@@ -166,10 +167,11 @@
   }
 
   // A plain drag must select text even after the program turns mouse tracking
-  // ON. Claude Code's fullscreen TUI enables click tracking (?1000h); xterm then
-  // hands every button event to the program and only lets Shift (Option on
-  // macOS) force a selection, so dragging over an answer selected nothing and
-  // the auto-copy never ran. Ported from the desktop fix (upstream #45,
+  // ON in click-only mode (?1000h, as the desktop measured for older Claude
+  // Code builds); xterm then hands every button event to the program and only
+  // lets Shift (Option on macOS) force a selection, so a drag selected nothing
+  // and the auto-copy never ran. Current Claude Code (2.1.323) uses ?1003h
+  // and selects/copies by itself — see installOsc52Clipboard. Ported from the desktop fix (upstream #45,
   // mycli-desktop/frontend/app.js): only the CLICK-tracking modes (?9 x10 /
   // ?1000 vt200) are reclaimed — those programs asked for press+release, never
   // motion, so a drag carries nothing they could act on. ?1002/?1003 programs
@@ -234,6 +236,27 @@
       document.addEventListener('pointercancel', stop, true); // gesture void: no click
       window.addEventListener('blur', onBlur);
     }, true);
+  }
+
+  // OSC 52 (`ESC ] 52 ; <targets> ; <base64> BEL`) is how a terminal program
+  // puts text on the clipboard of the machine the TERMINAL runs on — here the
+  // remote user's browser, not the server. Claude Code's fullscreen TUI turns
+  // on any-motion mouse tracking (?1003h, measured on 2.1.323), selects text
+  // itself on drag and copies it ONLY this way: there is no clipboard on a
+  // headless server. xterm.js drops OSC 52 unless a handler is registered, so
+  // dragging over an answer highlighted it and copied nothing. Queries (`?`)
+  // are never answered — a program must not read the user's clipboard.
+  function installOsc52Clipboard(term) {
+    term.parser.registerOscHandler(52, (data) => {
+      const sep = data.indexOf(';');
+      if (sep < 0) return true;
+      const payload = data.slice(sep + 1);
+      if (!payload || payload === '?') return true;
+      let text;
+      try { text = new TextDecoder().decode(b64ToBytes(payload)); } catch (e) { return true; }
+      if (text) copyText(text);
+      return true;
+    });
   }
 
   function fitPane(pane) {

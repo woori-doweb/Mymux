@@ -45,18 +45,22 @@
   Ctrl/Cmd+C는 선택이 있을 때 복사하며 없을 때만 `^C`를 보냅니다. 한글 IME
   상태에서도 동작합니다.
 
-- **Console: drag-select over Claude Code answers / 콘솔: Claude Code 답변 드래그 선택·복사 수정.**
-  Claude Code's fullscreen TUI turns on click mouse tracking (`?1000h`), so
-  xterm handed every drag to the program: nothing was selected, the
-  auto-copy never ran, and the program received a stray click. A plain drag
-  in click-only tracking modes is now reclaimed as a selection (ported from
-  the upstream desktop fix #45); a click that does not move still reaches the
-  program. `?1002`/`?1003` programs (vim, htop) are left alone.
+- **Console: copying Claude Code answers to the browser / 콘솔: Claude Code 답변 복사가 원격 브라우저 클립보드로.**
+  Claude Code's fullscreen TUI (2.1.323) turns on any-motion mouse tracking
+  (`?1003h`), selects text itself on drag and copies it only with OSC 52 —
+  a headless server has no clipboard of its own. xterm.js drops OSC 52
+  without a handler, so the answer was highlighted but nothing reached the
+  remote user's clipboard. The console now writes OSC 52 payloads to the
+  browser clipboard (clipboard queries are never answered). Programs that
+  use click-only tracking (`?1000h`) additionally get a plain drag reclaimed
+  as an xterm selection (ported from the upstream desktop fix #45).
 
-  Claude Code fullscreen 모드가 클릭 마우스 추적(`?1000h`)을 켜서 드래그가
-  프로그램에 넘어가고 선택·자동 복사가 되지 않았습니다. 클릭 전용 추적
-  모드에서는 드래그를 선택으로 되찾고(원본 데스크톱 #45 이식), 움직이지
-  않은 클릭은 그대로 프로그램에 전달합니다.
+  Claude Code fullscreen(2.1.323)은 모든 마우스 움직임을 추적(`?1003h`)하며
+  드래그한 글자를 스스로 선택하고 OSC 52로만 복사합니다. xterm.js가 OSC 52를
+  버려서 강조 표시만 되고 원격 브라우저 클립보드에는 아무것도 가지 않았습니다.
+  이제 콘솔이 OSC 52 내용을 브라우저 클립보드에 씁니다(클립보드 읽기 요청에는
+  응답하지 않음). 클릭 전용 추적(`?1000h`) 프로그램에서는 드래그를 xterm
+  선택으로 되찾습니다(원본 데스크톱 #45 이식).
 
 - **Console: scattered zsh input line under systemd / 콘솔: systemd 실행 시 zsh 입력줄 흩어짐 수정.**
   The server inherits no `TERM` under systemd, so zsh could not move the
