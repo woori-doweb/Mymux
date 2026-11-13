@@ -26,13 +26,15 @@
 ### Fixed / 버그 수정
 - **Console: scattered zsh input line under systemd / 콘솔: systemd 실행 시 zsh 입력줄 흩어짐 수정.**
   The server inherits no `TERM` under systemd, so zsh could not move the
-  cursor and left autosuggestion hints behind as text. Every console session
-  on Unix now starts with `TERM=xterm-256color`, matching the desktop fix
-  merged from upstream v0.3.8.
+  cursor and left autosuggestion hints behind as text, and Claude Code
+  rendered in monochrome (color depth 1). Every console session on Unix now
+  starts with `TERM=xterm-256color` and `COLORTERM=truecolor`, extending the
+  desktop fix merged from upstream v0.3.8.
 
   systemd 아래에서는 `TERM`이 상속되지 않아 zsh가 커서 이동을 못 하고
-  자동완성 힌트를 텍스트로 남겼습니다. 이제 Unix의 모든 콘솔 세션은
-  `TERM=xterm-256color`로 시작합니다(원본 v0.3.8 데스크톱 수정과 동일).
+  자동완성 힌트를 텍스트로 남겼고, Claude Code가 단색(색 깊이 1)으로
+  나왔습니다. 이제 Unix의 모든 콘솔 세션은 `TERM=xterm-256color`,
+  `COLORTERM=truecolor`로 시작합니다(원본 v0.3.8 데스크톱 수정 확장).
 
 - **Console: split-pane focus stuck on one side / 콘솔: 분할 패인 포커스 고착 수정.**
   In the web console (`mymux-server`), clicking the other pane after a split

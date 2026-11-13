@@ -331,13 +331,20 @@ impl TerminalManager {
 /// The browser side is always xterm.js, so on Unix the shell is told so
 /// explicitly. Under systemd the server inherits no `TERM`; zsh then cannot
 /// move the cursor, redraws from column 0 on every key, and leaves
-/// autosuggestion hints behind as plain text. Mirrors the desktop fix in
-/// `mycli-desktop/src/terminal.rs` (`declare_terminal_type`).
+/// autosuggestion hints behind as plain text, and color-detecting CLIs
+/// (Claude Code's chalk/supports-color, Node's `getColorDepth`) fall back to
+/// monochrome. `COLORTERM=truecolor` advertises the 24-bit color xterm.js
+/// renders, so they pick full color rather than the 256-color palette.
+/// Extends the desktop fix in `mycli-desktop/src/terminal.rs`
+/// (`declare_terminal_type`).
 fn shell_command(shell: &str, cwd: &std::path::Path) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(shell);
     cmd.cwd(cwd);
     #[cfg(not(windows))]
-    cmd.env("TERM", "xterm-256color");
+    {
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+    }
     cmd
 }
 
@@ -353,6 +360,11 @@ mod tests {
             assert_eq!(
                 cmd.get_env("TERM").and_then(|v| v.to_str()),
                 Some("xterm-256color"),
+                "{shell}",
+            );
+            assert_eq!(
+                cmd.get_env("COLORTERM").and_then(|v| v.to_str()),
+                Some("truecolor"),
                 "{shell}",
             );
         }
