@@ -81,6 +81,9 @@
       lineHeight: 1.2,
       customGlyphs: true,   // 박스 드로잉 문자가 lineHeight 조정에도 끊기지 않도록
       theme: { background: '#0b0e14' },
+      // Option+drag forces a selection on macOS (Shift elsewhere) — the drag
+      // reclaim below replays the press with that modifier.
+      macOptionClickForcesSelection: true,
     });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
@@ -113,6 +116,7 @@
     // focusin is authoritative: whatever gains DOM focus in this pane owns focus,
     // so a single click can't bounce back to the previously-focused pane.
     el.addEventListener('focusin', () => focusPane(pane));
+    installDragSelectReclaim(host, term);
     // Drag-select auto-copy (PuTTY-style): finishing a selection copies it.
     el.addEventListener('mouseup', () => {
       const sel = pane.term.getSelection();
@@ -155,6 +159,77 @@
     ws.onclose = () => { /* keep buffer on screen */ };
     panes.push(pane);
     return pane;
+  }
+
+  // A plain drag must select text even after the program turns mouse tracking
+  // ON. Claude Code's fullscreen TUI enables click tracking (?1000h); xterm then
+  // hands every button event to the program and only lets Shift (Option on
+  // macOS) force a selection, so dragging over an answer selected nothing and
+  // the auto-copy never ran. Ported from the desktop fix (upstream #45,
+  // mycli-desktop/frontend/app.js): only the CLICK-tracking modes (?9 x10 /
+  // ?1000 vt200) are reclaimed — those programs asked for press+release, never
+  // motion, so a drag carries nothing they could act on. ?1002/?1003 programs
+  // (vim visual-select, htop) asked for motion and keep it. A press that never
+  // moves past the slop is replayed as the click the program expected (picking
+  // a Claude Code menu option keeps working); its timing shifts to the release.
+  const CLICK_ONLY_TRACKING = new Set(['x10', 'vt200']);
+  const DRAG_SELECT_SLOP_PX = 4;
+  const FORCE_SELECT_MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform)
+    ? { altKey: true } : { shiftKey: true };
+  let pendingDragReclaim = null;
+
+  function installDragSelectReclaim(host, term) {
+    host.addEventListener('mousedown', (e) => {
+      if (e.__mymuxReplay) return; // our own replay, on its way to xterm
+      if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (!CLICK_ONLY_TRACKING.has(term.modes.mouseTrackingMode || 'none')) return;
+      if (pendingDragReclaim) pendingDragReclaim(); // a press some pane never saw end
+      // Swallow the press: a click and a drag are indistinguishable until the
+      // mouse moves (or doesn't).
+      e.preventDefault();
+      e.stopPropagation();
+      const target = e.target, startX = e.clientX, startY = e.clientY, detail = e.detail;
+      const replay = (type, x, y, extra) => {
+        const ev = new MouseEvent(type, Object.assign({
+          bubbles: true, cancelable: true, view: window, detail,
+          clientX: x, clientY: y, button: 0, buttons: type === 'mouseup' ? 0 : 1,
+        }, extra || {}));
+        ev.__mymuxReplay = true;
+        target.dispatchEvent(ev);
+      };
+      const stop = () => {
+        if (pendingDragReclaim === stop) pendingDragReclaim = null;
+        document.removeEventListener('mousemove', onMove, true);
+        document.removeEventListener('mouseup', onUp, true);
+        document.removeEventListener('pointercancel', stop, true);
+        window.removeEventListener('blur', onBlur);
+      };
+      const clickThrough = (x, y) => {
+        stop();
+        if (!host.isConnected) return;
+        replay('mousedown', startX, startY);
+        replay('mouseup', x, y);
+      };
+      const onMove = (me) => {
+        // A press can end without a mouseup (released outside the window, pane
+        // closed under it) — never replay a dead press into a later drag.
+        if (!(me.buttons & 1) || !host.isConnected) { stop(); return; }
+        if (Math.abs(me.clientX - startX) < DRAG_SELECT_SLOP_PX &&
+            Math.abs(me.clientY - startY) < DRAG_SELECT_SLOP_PX) return;
+        stop();
+        // The forcing modifier routes the press into xterm's own selection,
+        // which then owns the rest of the drag via its document listeners.
+        replay('mousedown', startX, startY, FORCE_SELECT_MODIFIER);
+        replay('mousemove', me.clientX, me.clientY);
+      };
+      const onUp = (ue) => clickThrough(ue.clientX, ue.clientY); // never moved: a click
+      const onBlur = () => clickThrough(startX, startY);
+      pendingDragReclaim = stop;
+      document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('mouseup', onUp, true);
+      document.addEventListener('pointercancel', stop, true); // gesture void: no click
+      window.addEventListener('blur', onBlur);
+    }, true);
   }
 
   function fitPane(pane) {

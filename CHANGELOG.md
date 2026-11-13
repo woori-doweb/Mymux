@@ -24,6 +24,19 @@
   "Claude"로 하드코딩되지 않습니다.
 
 ### Fixed / 버그 수정
+- **Console: drag-select over Claude Code answers / 콘솔: Claude Code 답변 드래그 선택·복사 수정.**
+  Claude Code's fullscreen TUI turns on click mouse tracking (`?1000h`), so
+  xterm handed every drag to the program: nothing was selected, the
+  auto-copy never ran, and the program received a stray click. A plain drag
+  in click-only tracking modes is now reclaimed as a selection (ported from
+  the upstream desktop fix #45); a click that does not move still reaches the
+  program. `?1002`/`?1003` programs (vim, htop) are left alone.
+
+  Claude Code fullscreen 모드가 클릭 마우스 추적(`?1000h`)을 켜서 드래그가
+  프로그램에 넘어가고 선택·자동 복사가 되지 않았습니다. 클릭 전용 추적
+  모드에서는 드래그를 선택으로 되찾고(원본 데스크톱 #45 이식), 움직이지
+  않은 클릭은 그대로 프로그램에 전달합니다.
+
 - **Console: scattered zsh input line under systemd / 콘솔: systemd 실행 시 zsh 입력줄 흩어짐 수정.**
   The server inherits no `TERM` under systemd, so zsh could not move the
   cursor and left autosuggestion hints behind as text, and Claude Code
