@@ -6,6 +6,10 @@ let invoke;
 const IS_MAC =
   /Mac/i.test(navigator.platform || "") ||
   /Mac OS X|Macintosh/i.test(navigator.userAgent || "");
+// Windows (WebView2 over ConPTY) — for workarounds only that path needs.
+const IS_WINDOWS =
+  /Win/i.test(navigator.platform || "") ||
+  /Windows/i.test(navigator.userAgent || "");
 
 // Monochrome inline-SVG icons (use currentColor → theme-aware: white in dark, black in light)
 const ICON = {
@@ -16,8 +20,12 @@ const ICON = {
   edit: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>`,
   memo: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l3 3v15H5z"/><path d="M16 3v4h4M8 11h8M8 15h8"/></svg>`,
   copy: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></svg>`,
+  eye: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`,
   star: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>`,
   close: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  search: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.4-4.4"/></svg>`,
+  plus: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`,
+  save: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11"/><path d="m8 11 4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`,
   check: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>`,
   keyboard: `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8"/></svg>`,
   play: `<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.8v14.4a1 1 0 0 0 1.5.9l11-7.2a1 1 0 0 0 0-1.8l-11-7.2A1 1 0 0 0 7 4.8z"/></svg>`,
@@ -67,11 +75,15 @@ async function pasteIntoPane(id) {
 let sidebar, btnToggleSidebar, btnNewTerminal;
 let explorerPath, btnExplorerUp, explorerMode, fileListEl;
 let cmdListEl, emptyEl, btnAdd;
+let commandsPanel, btnToggleCommands, btnDockCommands, commandsDragHandle;
 let modalOverlay, modalTitle, form, inputName, inputCommand, inputDesc, btnCancel;
 let terminalTabs, terminalContainer, terminalWelcome;
 let sshInput, sshPort, sshPassword, sshKeyfile, btnSshConnect;
 let toastEl, acPopup, acList;
-let sessionPanel, sessionListEl, btnToggleSessions, btnSplitH, btnSplitV, btnEqualWidth, btnEqualHeight;
+let sessionPanel, sessionListEl, btnToggleSessions, btnShowSessions, btnDetachSessions, btnSplitH, btnSplitV, btnEqualWidth, btnEqualHeight;
+let sessionsWindowOpen = false;
+let sessionsWindowOpening = false;
+let sessionsWindowSnapshotTimer = null;
 let btnTheme, explorerDrives;
 let pendingTabCloseId = null;
 let explorerDropUnlisten = null;
@@ -91,12 +103,13 @@ let focusedPaneId = null;
 let draggingPaneId = null;
 let tabCounter = 0;
 let browserTabActive = false;
+let browserTogglePending = false;
 let cdpWs = null;
 let cdpMsgId = 0;
 let lastFrameMeta = null;
 let screenInputBound = false;
 let browserMode = "native"; // 'native' (embedded WebView) | 'ai' (CDP screencast)
-let nativeCurrentUrl = "https://www.google.com";
+let nativeCurrentUrl = "";
 let browserPages = [];
 let activeBrowserPageId = null;
 let browserInfoOpen = false;
@@ -163,6 +176,19 @@ function setCommandHistoryEnabled(on) {
   try { localStorage.setItem(COMMAND_HISTORY_ENABLED_KEY, on ? "1" : "0"); } catch {}
   if (!on) hideAutocomplete();
 }
+const SAVED_SUGGEST_ENABLED_KEY = "mymux.savedCommandSuggestions.enabled";
+// The popup's other source: the saved commands (built-in seeds included). When
+// off they are left out of the autocomplete popup only — the Commands panel
+// still lists them, and alias+Enter still runs the full combo, because those are
+// deliberate actions rather than suggestions. With both toggles off the popup
+// has nothing to show, so showAutocomplete's empty-match branch hides it.
+// Default on. Toggle lives next to the history one in the Commands panel.
+let savedCommandSuggestionsEnabled = localStorage.getItem(SAVED_SUGGEST_ENABLED_KEY) !== "0";
+function setSavedCommandSuggestionsEnabled(on) {
+  savedCommandSuggestionsEnabled = !!on;
+  try { localStorage.setItem(SAVED_SUGGEST_ENABLED_KEY, on ? "1" : "0"); } catch {}
+  if (!on) hideAutocomplete();
+}
 let acSelectedIdx = -1;
 let currentExplorerPath = "";
 let currentSftpId = null;
@@ -179,6 +205,11 @@ let explorerEntries = []; // current dir listing (for in-folder name search)
 // Persisted; defaults to showing them so config files are reachable + editable.
 let showHiddenFiles = (() => {
   try { return localStorage.getItem("mymux.showHidden") !== "false"; } catch { return true; }
+})();
+const COMMANDS_VISIBLE_KEY = "mymux.commandsVisible.v1";
+const COMMANDS_FLOAT_KEY = "mymux.commandsFloating.v1";
+let commandsVisible = (() => {
+  try { return localStorage.getItem(COMMANDS_VISIBLE_KEY) === "true"; } catch { return false; }
 })();
 
 // ── Init: wait for both DOM and Tauri ──
@@ -205,6 +236,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   explorerMode = document.getElementById("explorer-mode");
   fileListEl = document.getElementById("file-list");
   cmdListEl = document.getElementById("command-list");
+  commandsPanel = document.getElementById("panel-commands");
+  btnToggleCommands = document.getElementById("btn-toggle-commands");
+  btnDockCommands = document.getElementById("btn-dock-commands");
+  commandsDragHandle = document.getElementById("commands-drag-handle");
   emptyEl = document.getElementById("empty-state");
   btnAdd = document.getElementById("btn-add");
   modalOverlay = document.getElementById("modal-overlay");
@@ -228,12 +263,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   sessionPanel = document.getElementById("session-panel");
   sessionListEl = document.getElementById("session-list");
   btnToggleSessions = document.getElementById("btn-toggle-sessions");
+  btnShowSessions = document.getElementById("btn-show-sessions");
+  btnDetachSessions = document.getElementById("btn-detach-sessions");
   btnSplitH = document.getElementById("btn-split-h");
   btnSplitV = document.getElementById("btn-split-v");
   btnEqualWidth = document.getElementById("btn-equal-width");
   btnEqualHeight = document.getElementById("btn-equal-height");
   btnTheme = document.getElementById("btn-theme");
   explorerDrives = document.getElementById("explorer-drives");
+  restoreCommandsPanelState();
 
   // Apply saved theme/accent before anything renders
   initTheme();
@@ -248,6 +286,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     console.error("Init error:", e);
   }
   await setupListeners();
+  await setupSessionsWindowBridge();
   restorePanelState();
   initBrowserPanel();
   applyBrowserEnabled();
@@ -290,45 +329,435 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupCloseHandler();
 });
 
-function setupVoiceInput() {
-  const pop=document.getElementById('voice-popover'), toggle=document.getElementById('btn-voice-input'), provider=document.getElementById('voice-provider'), key=document.getElementById('voice-api-key'), save=document.getElementById('voice-save-key'), cmd=document.getElementById('voice-command'), rec=document.getElementById('voice-record'), status=document.getElementById('voice-status');
-  if (!toggle || !rec) return; let media=null, chunks=[], target=null;
-  const sync=()=>{ const local=provider.value==='faster-whisper'; document.getElementById('voice-key-row').classList.toggle('hidden',local); save.classList.toggle('hidden',local); document.getElementById('voice-command-row').classList.toggle('hidden',!local); };
-  toggle.onclick=()=>pop.classList.toggle('hidden'); provider.onchange=sync; sync();
-  save.onclick=async()=>{ try { await invoke('voice_store_deepgram_key',{key:key.value}); key.value=''; status.textContent='Saved encrypted'; } catch(e){ status.textContent=String(e); } };
-  const stop=()=>{ if(media&&media.state==='recording') { media.stop(); } };
-  rec.onpointerdown=async()=>{ try { target=focusedPaneId; if(!target||!terminals.has(target)) throw Error('Select a terminal pane first'); media=await navigator.mediaDevices.getUserMedia({audio:true}); chunks=[]; const mr=new MediaRecorder(media); media.getTracks().forEach(t=>t.stop()); media=null; status.textContent='Recording… release to transcribe'; rec._mr=mr; mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)}; mr.onstop=async()=>{ status.textContent='Transcribing…'; const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'}); try { let text=''; if(provider.value==='deepgram'){ const token=await invoke('voice_deepgram_token'); const ws=new WebSocket('wss://api.deepgram.com/v1/listen?model=nova-3&language=ko&smart_format=true&interim_results=false&token='+encodeURIComponent(token)); text=await new Promise((resolve,reject)=>{ws.onopen=()=>ws.send(blob); ws.onmessage=e=>{try{const d=JSON.parse(e.data); const t=d.channel?.alternatives?.[0]?.transcript;if(t)resolve(t)}catch{}}; ws.onerror=()=>reject(Error('Deepgram connection failed')); setTimeout(()=>reject(Error('Transcription timeout')),30000);}); ws.close(); } else { const b64=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(String(fr.result).split(',')[1]);fr.readAsDataURL(blob)}); text=await invoke('voice_transcribe_local',{audioBase64:b64,command:cmd.value}); } text=String(text).replace(/[\r\n\x00-\x1f]+/g,' ').trim(); if(text&&terminals.has(target)) terminals.get(target).term.paste(text); status.textContent=text?'Inserted':'No speech detected'; }catch(e){status.textContent=String(e)} }; mr.start(); } catch(e){ status.textContent=String(e); } };
-  rec.onpointerup=stop; rec.onpointercancel=stop; rec.onpointerleave=e=>{if(e.buttons===0)stop()};
-  let voiceShortcutActive=false;
-  document.addEventListener('keydown',(e)=>{if(e.ctrlKey&&!e.altKey&&!e.shiftKey&&e.code==='Space'&&!e.repeat){e.preventDefault();voiceShortcutActive=true;rec.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:0,buttons:1}))}},true);
-  document.addEventListener('keyup',(e)=>{if(voiceShortcutActive&&(e.code==='Space'||e.key==='Control')){e.preventDefault();voiceShortcutActive=false;rec.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:0,buttons:0}))}},true);
+// ── Voice input 🎙 ────────────────────────────────────────────────────────────
+// Hold the button (or Ctrl+Space) to dictate into the focused pane. Two
+// engines: Deepgram in the cloud, or faster-whisper on this machine.
+//
+// The local path used to be unusable. It demanded an absolute path to an
+// executable literally named faster-whisper.exe — something Mymux never
+// shipped, never built and never described — while the field's placeholder
+// suggested a python command that could not pass that check. The popover now
+// states what to install, links it, and can verify the result.
+const VOICE_KEYS = {
+  provider: "mymux.voice.provider",
+  localMode: "mymux.voice.localMode",
+  runner: (mode) => `mymux.voice.runner.${mode}`,
+  model: "mymux.voice.model",
+  language: "mymux.voice.language",
+  pushToTalk: "mymux.voice.pushToTalk",
+};
+
+// MediaRecorder in WebView2 only emits webm/opus, which whisper cannot read
+// without ffmpeg beside it — the most common way a correct install still
+// transcribes nothing. Decode here and hand the backend a plain 16 kHz mono
+// WAV, which every engine reads natively. It is also a smaller payload.
+async function blobToWav16k(blob) {
+  const decodeContext = new AudioContext();
+  let decoded;
+  try {
+    decoded = await decodeContext.decodeAudioData(await blob.arrayBuffer());
+  } finally {
+    decodeContext.close();
+  }
+  const rate = 16000;
+  const frames = Math.max(1, Math.ceil(decoded.duration * rate));
+  const offline = new OfflineAudioContext(1, frames, rate);
+  const source = offline.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offline.destination);
+  source.start();
+  const mono = (await offline.startRendering()).getChannelData(0);
+
+  const bytes = new ArrayBuffer(44 + mono.length * 2);
+  const view = new DataView(bytes);
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + mono.length * 2, true);
+  ascii(8, "WAVEfmt ");
+  view.setUint32(16, 16, true); // PCM header size
+  view.setUint16(20, 1, true); // format: PCM
+  view.setUint16(22, 1, true); // channels
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  ascii(36, "data");
+  view.setUint32(40, mono.length * 2, true);
+  for (let i = 0; i < mono.length; i++) {
+    const sample = Math.max(-1, Math.min(1, mono[i]));
+    view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+
+  let binary = "";
+  const raw = new Uint8Array(bytes);
+  for (let i = 0; i < raw.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, raw.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
 }
 
-function setupVoiceInputSafe() {
-  const pop=document.getElementById('voice-popover'), toggle=document.getElementById('btn-voice-input'), provider=document.getElementById('voice-provider'), key=document.getElementById('voice-api-key'), save=document.getElementById('voice-save-key'), runner=document.getElementById('voice-command'), rec=document.getElementById('voice-record'), status=document.getElementById('voice-status');
-  if (!toggle || !rec) return; let stream=null, recorder=null, chunks=[], target=null;
-  const sync=()=>{ const local=provider.value==='faster-whisper'; document.getElementById('voice-key-row').classList.toggle('hidden',local); save.classList.toggle('hidden',local); document.getElementById('voice-command-row').classList.toggle('hidden',!local); };
-  toggle.onclick=()=>pop.classList.toggle('hidden'); provider.onchange=sync; sync();
-  save.onclick=async()=>{ try { await invoke('voice_store_deepgram_key',{key:key.value}); key.value=''; status.textContent='Saved encrypted'; } catch(e){ status.textContent=String(e); } };
-  const stop=()=>{ if(recorder&&recorder.state==='recording') recorder.stop(); };
-  rec.onpointerdown=async(e)=>{ e.preventDefault(); if(recorder) return; try { target=focusedPaneId; if(!target||!terminals.has(target)) throw Error('Select a terminal pane first'); stream=await navigator.mediaDevices.getUserMedia({audio:true}); chunks=[]; recorder=new MediaRecorder(stream); const mr=recorder; mr.ondataavailable=x=>{if(x.data.size)chunks.push(x.data)}; mr.onstop=async()=>{ recorder=null; stream?.getTracks().forEach(t=>t.stop()); stream=null; status.textContent='Transcribing'; const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'}); try { let text=''; if(provider.value==='deepgram'){ const token=await invoke('voice_deepgram_token'); const ws=new WebSocket('wss://api.deepgram.com/v1/listen?model=nova-3&language=ko-KR&smart_format=true&interim_results=false&token='+encodeURIComponent(token)); text=await new Promise((resolve,reject)=>{let all='',done=false,timer=setTimeout(()=>finish(Error('Transcription timeout')),30000); const finish=err=>{if(done)return;done=true;clearTimeout(timer);try{ws.close()}catch{} err?reject(err):resolve(all)}; ws.onopen=()=>{ws.send(blob);ws.send(JSON.stringify({type:'CloseStream'}))}; ws.onmessage=x=>{try{const d=JSON.parse(x.data);const t=d.channel?.alternatives?.[0]?.transcript;if(t)all+=(all?' ':'')+t;if(d.speech_final||d.is_final)finish()}catch{}}; ws.onerror=()=>finish(Error('Deepgram connection failed')); ws.onclose=()=>finish()}); } else { const modelPath=localStorage.getItem('mymux.voice.modelPath')||prompt('faster-whisper 모델 폴더의 절대 경로를 입력하세요'); if(!modelPath) throw Error('Model path is required'); localStorage.setItem('mymux.voice.modelPath',modelPath); const b64=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(String(fr.result).split(',')[1]);fr.readAsDataURL(blob)}); text=await invoke('voice_transcribe_local',{audioBase64:b64,runnerPath:runner.value,modelPath}); } text=String(text).replace(/[\r\n\x00-\x1f]+/g,' ').trim(); if(text&&terminals.has(target)) terminals.get(target).term.paste(text); status.textContent=text?'Inserted':'No speech detected'; }catch(x){status.textContent=String(x)} }; mr.start(); status.textContent='Recording release to transcribe'; } catch(x){stream?.getTracks().forEach(t=>t.stop());stream=null;status.textContent=String(x)} };
-  rec.onpointerup=stop; rec.onpointercancel=stop; rec.onpointerleave=e=>{if(e.buttons===0)stop()};
+function setupVoiceInput() {
+  const $ = (id) => document.getElementById(id);
+  const pop = $("voice-popover");
+  const toggle = $("btn-voice-input");
+  const provider = $("voice-provider");
+  const key = $("voice-api-key");
+  const saveKey = $("voice-save-key");
+  const localBox = $("voice-local");
+  const runner = $("voice-runner");
+  const browse = $("voice-browse");
+  const model = $("voice-model");
+  const language = $("voice-language");
+  const checkBtn = $("voice-check");
+  const ptt = $("voice-ptt");
+  const rec = $("voice-record");
+  const status = $("voice-status");
+  const indicator = $("voice-recording");
+  if (!toggle || !rec || !pop) return;
+
+  const read = (k, fallback) => localStorage.getItem(k) ?? fallback;
+  const localMode = () =>
+    pop.querySelector('input[name="voice-local-mode"]:checked')?.value || "standalone";
+  const isLocal = () => provider.value === "faster-whisper";
+
+  provider.value = read(VOICE_KEYS.provider, "deepgram");
+  const savedMode = read(VOICE_KEYS.localMode, "standalone");
+  const savedModeInput = pop.querySelector(`input[name="voice-local-mode"][value="${savedMode}"]`);
+  if (savedModeInput) savedModeInput.checked = true;
+  model.value = read(VOICE_KEYS.model, "small");
+  language.value = read(VOICE_KEYS.language, "ko");
+  ptt.checked = read(VOICE_KEYS.pushToTalk, "1") !== "0";
+
+  // The 🎙 button carries a dot while the local engine has no runner picked,
+  // so a half-finished setup is visible without opening the popover.
+  const syncReadiness = () => {
+    toggle.classList.toggle("not-ready", isLocal() && !runner.value);
+  };
+  const sync = () => {
+    const local = isLocal();
+    $("voice-key-row").classList.toggle("hidden", local);
+    saveKey.classList.toggle("hidden", local);
+    localBox.classList.toggle("hidden", !local);
+    const mode = localMode();
+    $("voice-guide-standalone").classList.toggle("hidden", mode !== "standalone");
+    $("voice-guide-python").classList.toggle("hidden", mode !== "python");
+    runner.value = read(VOICE_KEYS.runner(mode), "");
+    runner.title = runner.value;
+    runner.placeholder =
+      mode === "python" ? "python.exe 를 선택하세요" : "faster-whisper-xxl.exe 를 선택하세요";
+    syncReadiness();
+  };
+  sync();
+
+  // One-click setup: a private Python + faster-whisper + the chosen model, all
+  // installed by the backend, after which this popover wires itself to it. What
+  // the manual guides describe is the same thing done by hand.
+  const autoBtn = $("voice-auto-setup");
+  const autoBar = $("voice-auto-bar");
+  const autoMsg = $("voice-auto-msg");
+  const autoHint = autoMsg.textContent;
+  let managed = null; // { python, models } once the setup has run
+  let setupBusy = false;
+
+  const renderAuto = () => {
+    if (setupBusy) return;
+    autoMsg.classList.remove("voice-auto-ok");
+    if (!managed) {
+      autoBtn.textContent = "⚡ 자동 설치하고 바로 연결";
+      autoMsg.textContent = autoHint;
+    } else if (managed.models.includes(model.value)) {
+      autoBtn.textContent = "🔄 다시 설치 / 업데이트";
+      autoMsg.textContent = `✅ 설치됨 · 받은 모델: ${managed.models.join(", ")}`;
+      autoMsg.classList.add("voice-auto-ok");
+    } else {
+      autoBtn.textContent = `⬇ ${model.value} 모델 받기`;
+      autoMsg.textContent = "faster-whisper 는 설치돼 있지만 이 모델은 아직 받지 않았습니다.";
+    }
+  };
+  const refreshManaged = async () => {
+    try {
+      managed = await invoke("voice_managed_status");
+    } catch {
+      managed = null;
+    }
+    // Local storage may have been cleared while the install is still on disk.
+    if (managed && !read(VOICE_KEYS.runner("python"), "")) {
+      localStorage.setItem(VOICE_KEYS.runner("python"), managed.python);
+    }
+    sync();
+    renderAuto();
+  };
+  refreshManaged();
+
+  autoBtn.addEventListener("click", async () => {
+    if (setupBusy) return;
+    setupBusy = true;
+    autoBtn.disabled = true;
+    autoBar.value = 0;
+    autoBar.classList.remove("hidden");
+    autoMsg.classList.remove("voice-auto-ok");
+    autoMsg.textContent = "준비 중…";
+    status.textContent = "";
+    const events = window.__TAURI__ && window.__TAURI__.event;
+    let unlisten = null;
+    try {
+      if (events) {
+        unlisten = await events.listen("voice-setup-progress", (e) => {
+          const p = e.payload || {};
+          autoBar.max = p.total || 4;
+          autoBar.value = Math.max(0, (p.step || 1) - 1);
+          autoMsg.textContent =
+            `[${p.step}/${p.total}] ${p.message}` + (p.detail ? ` · ${p.detail}` : "");
+        });
+      }
+      const done = await invoke("voice_setup_local", { model: model.value });
+      localStorage.setItem(VOICE_KEYS.runner("python"), done.python);
+      localStorage.setItem(VOICE_KEYS.localMode, "python");
+      localStorage.setItem(VOICE_KEYS.provider, "faster-whisper");
+      const radio = pop.querySelector('input[name="voice-local-mode"][value="python"]');
+      if (radio) radio.checked = true;
+      provider.value = "faster-whisper";
+      autoBar.value = autoBar.max;
+      let version = "";
+      try {
+        version = " · " + (await invoke("voice_check_local", { mode: "python", runnerPath: done.python }));
+      } catch {}
+      status.textContent = `✅ 설치를 마쳤습니다${version}. 이제 눌러서 말하면 바로 인식합니다.`;
+    } catch (e) {
+      status.textContent = "❌ " + String(e);
+    } finally {
+      if (unlisten) unlisten();
+      setupBusy = false;
+      autoBtn.disabled = false;
+      autoBar.classList.add("hidden");
+      await refreshManaged();
+    }
+  });
+
+  toggle.onclick = () => pop.classList.toggle("hidden");
+  provider.onchange = () => {
+    localStorage.setItem(VOICE_KEYS.provider, provider.value);
+    sync();
+  };
+  for (const radio of pop.querySelectorAll('input[name="voice-local-mode"]')) {
+    radio.addEventListener("change", () => {
+      localStorage.setItem(VOICE_KEYS.localMode, localMode());
+      status.textContent = "";
+      sync();
+    });
+  }
+  model.onchange = () => {
+    localStorage.setItem(VOICE_KEYS.model, model.value);
+    renderAuto();
+  };
+  language.onchange = () => localStorage.setItem(VOICE_KEYS.language, language.value);
+  ptt.onchange = () => localStorage.setItem(VOICE_KEYS.pushToTalk, ptt.checked ? "1" : "0");
+
+  for (const link of pop.querySelectorAll(".voice-link")) {
+    link.addEventListener("click", () =>
+      invoke("open_external", { path: link.dataset.url }).catch((e) => toast(String(e), true))
+    );
+  }
+  for (const copy of pop.querySelectorAll(".voice-copy")) {
+    copy.addEventListener("click", async () => {
+      if (await clipboardWrite(copy.dataset.copy)) toast("복사했습니다.");
+    });
+  }
+  $("voice-pip-run").addEventListener("click", () => {
+    if (!focusedPaneId || !terminals.has(focusedPaneId)) {
+      status.textContent = "터미널 패인을 먼저 선택하세요.";
+      return;
+    }
+    sendMemoToPane(focusedPaneId, "pip install faster-whisper", false);
+    pop.classList.add("hidden");
+  });
+
+  browse.addEventListener("click", async () => {
+    try {
+      const picked = await invoke("voice_pick_runner");
+      if (!picked) return;
+      localStorage.setItem(VOICE_KEYS.runner(localMode()), picked);
+      runner.value = picked;
+      runner.title = picked;
+      status.textContent = "";
+      syncReadiness();
+    } catch (e) {
+      status.textContent = String(e);
+    }
+  });
+
+  checkBtn.addEventListener("click", async () => {
+    if (!runner.value) {
+      status.textContent = "먼저 실행 파일을 선택하세요.";
+      return;
+    }
+    status.textContent = "확인 중…";
+    try {
+      status.textContent = "✅ " + (await invoke("voice_check_local", {
+        mode: localMode(),
+        runnerPath: runner.value,
+      }));
+    } catch (e) {
+      status.textContent = "❌ " + String(e);
+    }
+  });
+
+  saveKey.onclick = async () => {
+    try {
+      await invoke("voice_store_deepgram_key", { key: key.value });
+      key.value = "";
+      status.textContent = "키를 암호화해 저장했습니다.";
+    } catch (e) {
+      status.textContent = String(e);
+    }
+  };
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let target = null;
+  const showRecording = (on) => indicator.classList.toggle("hidden", !on);
+  const stop = () => {
+    if (recorder && recorder.state === "recording") recorder.stop();
+  };
+
+  async function transcribe(blob) {
+    if (provider.value === "deepgram") {
+      const token = await invoke("voice_deepgram_token");
+      const ws = new WebSocket(
+        "wss://api.deepgram.com/v1/listen?model=nova-3&language=ko-KR&smart_format=true&interim_results=false&token=" +
+          encodeURIComponent(token)
+      );
+      return await new Promise((resolve, reject) => {
+        let all = "";
+        let done = false;
+        const finish = (err) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          try { ws.close(); } catch {}
+          if (err) reject(err); else resolve(all);
+        };
+        const timer = setTimeout(() => finish(Error("Transcription timeout")), 30000);
+        ws.onopen = () => { ws.send(blob); ws.send(JSON.stringify({ type: "CloseStream" })); };
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            const part = data.channel?.alternatives?.[0]?.transcript;
+            if (part) all += (all ? " " : "") + part;
+            if (data.speech_final || data.is_final) finish();
+          } catch {}
+        };
+        ws.onerror = () => finish(Error("Deepgram connection failed"));
+        ws.onclose = () => finish();
+      });
+    }
+    const mode = localMode();
+    const runnerPath = read(VOICE_KEYS.runner(mode), "");
+    if (!runnerPath) throw Error("아직 설치되지 않았습니다. 🎙 에서 [자동 설치하고 바로 연결] 을 눌러 주세요.");
+    // A model that was never downloaded would be fetched mid-dictation and hit
+    // the backend's timeout, so say what to do instead.
+    if (managed && runnerPath === managed.python && !managed.models.includes(model.value)) {
+      throw Error(`${model.value} 모델을 아직 받지 않았습니다. 🎙 에서 [${model.value} 모델 받기] 를 눌러 주세요.`);
+    }
+    return await invoke("voice_transcribe_local", {
+      audioBase64: await blobToWav16k(blob),
+      mode,
+      runnerPath,
+      model: model.value,
+      language: language.value,
+    });
+  }
+
+  rec.onpointerdown = async (event) => {
+    event.preventDefault();
+    if (recorder) return;
+    try {
+      target = focusedPaneId;
+      if (!target || !terminals.has(target)) throw Error("터미널 패인을 먼저 선택하세요.");
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      recorder = new MediaRecorder(stream);
+      const mr = recorder;
+      mr.ondataavailable = (x) => { if (x.data.size) chunks.push(x.data); };
+      mr.onstop = async () => {
+        recorder = null;
+        stream?.getTracks().forEach((t) => t.stop());
+        stream = null;
+        showRecording(false);
+        status.textContent = "인식 중…";
+        try {
+          const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+          let text = String(await transcribe(blob))
+            .replace(/[\r\n\x00-\x1f]+/g, " ")
+            .trim();
+          if (text && terminals.has(target)) terminals.get(target).term.paste(text);
+          status.textContent = text ? "입력했습니다." : "인식된 말이 없습니다.";
+        } catch (e) {
+          status.textContent = String(e);
+          toast("음성 인식 실패: " + String(e), true);
+        }
+      };
+      mr.start();
+      showRecording(true);
+      status.textContent = "녹음 중 — 떼면 인식합니다.";
+    } catch (e) {
+      stream?.getTracks().forEach((t) => t.stop());
+      stream = null;
+      recorder = null;
+      showRecording(false);
+      status.textContent = String(e);
+    }
+  };
+  rec.onpointerup = stop;
+  rec.onpointercancel = stop;
+  rec.onpointerleave = (e) => { if (e.buttons === 0) stop(); };
+
+  // Push-to-talk is global, so it can be switched off: it otherwise swallows
+  // Ctrl+Space from whatever is running in the focused pane.
+  let shortcutActive = false;
+  document.addEventListener("keydown", (e) => {
+    if (!ptt.checked || !e.ctrlKey || e.altKey || e.shiftKey || e.code !== "Space" || e.repeat) return;
+    e.preventDefault();
+    shortcutActive = true;
+    rec.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 0, buttons: 1 }));
+  }, true);
+  document.addEventListener("keyup", (e) => {
+    if (!shortcutActive || (e.code !== "Space" && e.key !== "Control")) return;
+    e.preventDefault();
+    shortcutActive = false;
+    rec.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 0, buttons: 0 }));
+  }, true);
 }
 
 async function setupListeners() {
-  setupVoiceInputSafe();
+  setupVoiceInput();
   // Sidebar tabs
   document.querySelectorAll(".sidebar-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
+      if (tab.dataset.tab === "commands" && !commandsVisible) setCommandsVisible(true);
       document.querySelectorAll(".sidebar-tab").forEach((t) => t.classList.remove("active"));
       document.querySelectorAll(".sidebar-panel").forEach((p) => p.classList.remove("active"));
       tab.classList.add("active");
       document.getElementById(`panel-${tab.dataset.tab}`).classList.add("active");
     });
   });
+  if (btnToggleCommands) {
+    btnToggleCommands.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setCommandsVisible(!commandsVisible);
+    });
+  }
+  if (btnDockCommands) btnDockCommands.addEventListener("click", dockCommandsPanel);
+  bindCommandsPanelDrag();
 
   btnToggleSidebar.addEventListener("click", () => { sidebar.classList.toggle("collapsed"); persistPanelState(); updatePanelToggleIcons(); });
-  btnToggleSessions.addEventListener("click", () => { sessionPanel.classList.toggle("collapsed"); persistPanelState(); updatePanelToggleIcons(); });
+  btnToggleSessions.addEventListener("click", toggleSessionPanel);
+  btnShowSessions?.addEventListener("click", toggleSessionPanel);
+  btnDetachSessions?.addEventListener("click", () => openSessionsWindow());
 
   // 🔔 Task-done flash settings modal (where the completion pulse shows).
   const btnNotifySettings = document.getElementById("btn-notify-settings");
@@ -344,8 +773,7 @@ async function setupListeners() {
   if (btnNotifySettings && notifyModal) {
     const closeNotifyModal = () => {
       notifyModal.classList.add("hidden");
-      // Restore the native browser overlay only if we're still on the browser view.
-      if (browserTabActive && browserMode === "native") openNativePane();
+      // Browser pages use an external OS window; there is no overlay to restore.
     };
     btnNotifySettings.addEventListener("click", () => {
       notifyChkPane.checked = notifyFlashPrefs.pane;
@@ -355,10 +783,12 @@ async function setupListeners() {
       if (notifyDialect) notifyDialect.value = notifyFlashPrefs.dialect;
       if (notifyChkCtxBadge) notifyChkCtxBadge.checked = notifyFlashPrefs.ctxBadge;
       if (notifyChkCtxVoice) notifyChkCtxVoice.checked = notifyFlashPrefs.ctxVoice;
-      // The native browser overlay floats above all HTML; hide it so the modal shows.
-      if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
+      refreshStatuslineRow();
+      // External browser pages cannot cover Mymux dialogs.
       notifyModal.classList.remove("hidden");
     });
+    const btnStatusline = document.getElementById("btn-statusline");
+    if (btnStatusline) btnStatusline.addEventListener("click", () => toggleStatusline());
     document.getElementById("notify-modal-close").addEventListener("click", closeNotifyModal);
     notifyModal.addEventListener("click", (e) => { if (e.target === notifyModal) closeNotifyModal(); });
     notifyModal.addEventListener("keydown", (e) => { if (e.key === "Escape") closeNotifyModal(); });
@@ -417,10 +847,11 @@ async function setupListeners() {
   document.querySelectorAll(".accent-swatch").forEach((sw) => {
     sw.addEventListener("click", () => setAccent(sw.dataset.accent));
   });
-  btnNewTerminal.addEventListener("click", () => spawnTerminal());
+  btnNewTerminal.addEventListener("click", spawnNewTerminalTab);
   const btnTabNew = document.getElementById("btn-tab-new");
-  if (btnTabNew) btnTabNew.addEventListener("click", () => spawnTerminal());
+  if (btnTabNew) btnTabNew.addEventListener("click", spawnNewTerminalTab);
   setupExplorerFileDrop();
+  setupAgentActivity();
 
   const tabCloseModal = document.getElementById("tab-close-modal");
   const tabCloseCancel = document.getElementById("tab-close-cancel");
@@ -442,7 +873,9 @@ async function setupListeners() {
 
   // "+ SSH" — open a new SSH connection anytime (works with sessions open).
   const btnSsh = document.getElementById("btn-ssh");
-  if (btnSsh) btnSsh.addEventListener("click", openSshModal);
+  // Wrapped, not passed directly: `openSshModal` takes a prefill argument and
+  // the click event must not leak into it.
+  if (btnSsh) btnSsh.addEventListener("click", () => openSshModal());
   const sshModalEl = document.getElementById("ssh-modal");
   const sshModalConnect = document.getElementById("ssh-modal-connect");
   const sshModalCancel = document.getElementById("ssh-modal-cancel");
@@ -503,6 +936,8 @@ async function setupListeners() {
     });
   }
   btnAdd.addEventListener("click", () => openModal());
+  document.getElementById("btn-create-team")?.addEventListener("click", createHarnessTeam);
+  renderHarnessTeams();
   const cmdSearch = document.getElementById("cmd-search");
   if (cmdSearch) cmdSearch.addEventListener("input", () => renderCmdList(savedCmds));
   wireSearchClear(cmdSearch);
@@ -510,6 +945,11 @@ async function setupListeners() {
   if (cmdHistToggle) {
     cmdHistToggle.checked = commandHistoryEnabled;
     cmdHistToggle.addEventListener("change", () => setCommandHistoryEnabled(cmdHistToggle.checked));
+  }
+  const cmdSavedToggle = document.getElementById("cmd-saved-toggle");
+  if (cmdSavedToggle) {
+    cmdSavedToggle.checked = savedCommandSuggestionsEnabled;
+    cmdSavedToggle.addEventListener("change", () => setSavedCommandSuggestionsEnabled(cmdSavedToggle.checked));
   }
   btnCancel.addEventListener("click", closeModal);
   modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
@@ -556,16 +996,18 @@ async function setupListeners() {
   if (newFolderConfirm) newFolderConfirm.addEventListener("click", confirmNewFolder);
 
   // Mouse "back"(3) / "forward"(4) special buttons — navigate directory
-  // history just like Chrome's back/forward. When the native browser panel is
-  // the active surface, defer to its own page history instead.
+  // history just like Chrome's back/forward. In CDP preview, forward history
+  // commands to the managed page; external browsing uses its own window.
   window.addEventListener("mousedown", (e) => {
     if (e.button === 3 || e.button === 4) e.preventDefault();
   });
   window.addEventListener("mouseup", (e) => {
     if (e.button !== 3 && e.button !== 4) return;
     e.preventDefault();
-    if (browserTabActive) {
-      invoke(e.button === 3 ? "browser_pane_back" : "browser_pane_forward").catch(() => {});
+    if (browserTabActive && browserMode === "ai") {
+      cdpSend("Runtime.evaluate", { expression: e.button === 3 ? "history.back()" : "history.forward()" });
+    } else if (browserTabActive) {
+      return;
     } else if (e.button === 3) {
       explorerBack();
     } else {
@@ -615,7 +1057,7 @@ async function setupListeners() {
     // Ctrl+Shift+N — new tab
     if (e.ctrlKey && e.shiftKey && e.key === "N") {
       e.preventDefault();
-      spawnTerminal();
+      spawnNewTerminalTab();
     }
     // Ctrl+Shift+F — search the focused pane's scrollback. Also match e.code:
     // with the Korean IME active e.key never arrives as the Latin letter.
@@ -671,10 +1113,26 @@ async function setupListeners() {
     try {
       await Promise.all([...terminals].map(async ([id, t]) => {
         try {
-          const [chunks, exited] = await invoke("pty_read", { id });
+          // Non-destructive read: one byte-offset cursor per pane. A fresh pane
+          // (including a reconnect with the same session key) starts at 0 and
+          // replays the retained history.
+          const { chunks, next, exited, truncated } = await invoke("pty_read", { id, offset: t.readOffset || 0 });
+          if (typeof next === "number" && next >= 0) t.readOffset = next;
+          if (truncated) {
+            t.term.write("\r\n\x1b[2m[Mymux: older output was trimmed]\x1b[0m\r\n");
+          }
           if (chunks.length) {
             const data = chunks.join("");
+            // ConPTY opens every Windows pane with focus reporting switched on
+            // (CSI ?1004h), before the shell or anything the user runs has said a
+            // word. Undo it once that first output is parsed. The prompt hook
+            // cannot be relied on for this: CMD, ssh and WSL never print an OSC
+            // 133 mark, and codex in the alternate screen gives the buffer hook
+            // no chance either, so it kept receiving `[I` on every focus change.
+            const firstOutput = !t.firstOutputSeen;
+            t.firstOutputSeen = true;
             t.term.write(data, () => {
+              if (firstOutput && IS_WINDOWS) clearStaleFocusReporting(t.term);
               const tt = terminals.get(id);
               if (tt) scanCtxUsage(id, tt, data); // Claude/Codex statusline -> ctx/model badge
             }); // one write, not per-chunk
@@ -846,7 +1304,7 @@ function fileDropTarget(position) {
   const hit = paneAtDragPoint(position);
   if (!hit) return null;
   const owner = terminals.get(hit.ptyId);
-  if (!owner || owner.type !== "ssh") return null;
+  if (!owner || !isRemotePane(owner)) return null;
   if (owner.sftpId == null) {
     const detail = owner.sftpStatus === "connecting"
       ? "SFTP 연결 중입니다. 잠시 후 다시 시도하세요."
@@ -1712,8 +2170,8 @@ function onViewerLinkClick(e) {
   if (!href) return;
   if (href.startsWith("#")) return; // in-page anchor — let it scroll
   e.preventDefault();
-  if (/^https?:\/\//i.test(href)) { openInNativeBrowser(href); return; }
-  if (/^\/\//.test(href)) { openInNativeBrowser("https:" + href); return; }
+  if (/^https?:\/\//i.test(href)) { openInExternalBrowser(href); return; }
+  if (/^\/\//.test(href)) { openInExternalBrowser("https:" + href); return; }
   if (/^mailto:/i.test(href)) { invoke("open_external", { path: href }).catch(() => {}); return; }
   // Windows-absolute path (C:\..) — a local path, NOT a URI scheme. Route to the
   // local opener (which never executes non-viewable files) instead of letting it
@@ -1735,8 +2193,8 @@ function onViewerLinkClick(e) {
   openLocalLink(resolveLocalPath(viewerDir, target));
 }
 
-// Open a web URL in the embedded Native browser panel (not the OS browser).
-function openInNativeBrowser(url) {
+// Open a web URL in the system browser, outside Mymux's UI process.
+function openInExternalBrowser(url) {
   if (!browserEnabled()) {
     try { localStorage.setItem("mymux.browserEnabled", "true"); } catch {}
     applyBrowserEnabled();
@@ -1746,7 +2204,7 @@ function openInNativeBrowser(url) {
   const navUrl = document.getElementById("nav-url");
   if (navUrl) navUrl.value = url;
   setBrowserView(true);
-  setTimeout(() => nativeNavigate(url), 80);
+  nativeNavigate(url);
 }
 
 // Open a local path: folders reveal in the Explorer, files open in the viewer.
@@ -1775,6 +2233,118 @@ async function openLocalLink(target) {
   }
 }
 
+function updateCommandsVisibilityButton() {
+  if (!btnToggleCommands) return;
+  btnToggleCommands.setAttribute("aria-pressed", commandsVisible ? "true" : "false");
+  btnToggleCommands.title = commandsVisible ? "Hide Commands" : "Show Commands";
+  btnToggleCommands.setAttribute("aria-label", btnToggleCommands.title);
+}
+
+function setCommandsVisible(visible) {
+  commandsVisible = Boolean(visible);
+  try { localStorage.setItem(COMMANDS_VISIBLE_KEY, commandsVisible ? "true" : "false"); } catch {}
+  if (commandsPanel) commandsPanel.classList.toggle("commands-hidden", !commandsVisible);
+  updateCommandsVisibilityButton();
+  if (commandsVisible && commandsPanel && !commandsPanel.classList.contains("is-floating")) {
+    document.querySelectorAll(".sidebar-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "commands"));
+    document.querySelectorAll(".sidebar-panel").forEach((p) => p.classList.toggle("active", p.id === "panel-commands"));
+  }
+  if (!commandsVisible) {
+    document.querySelectorAll(".sidebar-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "explorer"));
+    document.querySelectorAll(".sidebar-panel").forEach((p) => p.classList.toggle("active", p.id === "panel-explorer"));
+  }
+}
+
+function saveCommandsFloatingState() {
+  if (!commandsPanel || !commandsPanel.classList.contains("is-floating")) return;
+  const rect = commandsPanel.getBoundingClientRect();
+  try {
+    localStorage.setItem(COMMANDS_FLOAT_KEY, JSON.stringify({ x: Math.round(rect.left), y: Math.round(rect.top) }));
+  } catch {}
+}
+
+function applyCommandsFloatingPosition(position) {
+  if (!commandsPanel || !position) return;
+  const width = commandsPanel.offsetWidth || 320;
+  const height = commandsPanel.offsetHeight || 360;
+  const x = Math.max(8, Math.min(Number(position.x) || 0, window.innerWidth - width - 8));
+  const y = Math.max(8, Math.min(Number(position.y) || 0, window.innerHeight - height - 8));
+  commandsPanel.style.left = `${Math.round(x)}px`;
+  commandsPanel.style.top = `${Math.round(y)}px`;
+}
+
+function floatCommandsPanel(position = null) {
+  if (!commandsPanel) return;
+  const rect = commandsPanel.getBoundingClientRect();
+  commandsPanel.classList.add("is-floating");
+  commandsPanel.style.width = `${Math.max(240, Math.round(rect.width || 280))}px`;
+  commandsPanel.style.left = `${Math.round(rect.left)}px`;
+  commandsPanel.style.top = `${Math.round(rect.top)}px`;
+  if (position) applyCommandsFloatingPosition(position);
+  if (btnDockCommands) btnDockCommands.classList.remove("hidden");
+}
+
+function dockCommandsPanel() {
+  if (!commandsPanel) return;
+  commandsPanel.classList.remove("is-floating");
+  commandsPanel.style.removeProperty("left");
+  commandsPanel.style.removeProperty("top");
+  commandsPanel.style.removeProperty("width");
+  if (btnDockCommands) btnDockCommands.classList.add("hidden");
+  try { localStorage.removeItem(COMMANDS_FLOAT_KEY); } catch {}
+}
+
+function restoreCommandsPanelState() {
+  updateCommandsVisibilityButton();
+  if (!commandsPanel) return;
+  commandsPanel.classList.toggle("commands-hidden", !commandsVisible);
+  if (!commandsVisible) return;
+  try {
+    const position = JSON.parse(localStorage.getItem(COMMANDS_FLOAT_KEY) || "null");
+    if (position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.y))) {
+      // Mark the panel active BEFORE floating it. A sidebar panel is display:none
+      // unless it is the selected one, and the floating branch used to skip that —
+      // so a panel left floating at shutdown came back invisible until the user
+      // happened to click the Commands tab. setCommandsVisible only reassigns the
+      // tab selection while the panel is docked, so this order is required.
+      setCommandsVisible(true);
+      floatCommandsPanel(position);
+    } else {
+      setCommandsVisible(true);
+    }
+  } catch {}
+}
+
+function bindCommandsPanelDrag() {
+  if (!commandsDragHandle || !commandsPanel) return;
+  commandsDragHandle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const wasFloating = commandsPanel.classList.contains("is-floating");
+    if (!wasFloating) floatCommandsPanel();
+    const rect = commandsPanel.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left;
+    const offsetY = event.clientY - rect.top;
+    const move = (moveEvent) => {
+      const width = commandsPanel.offsetWidth;
+      const height = commandsPanel.offsetHeight;
+      const x = Math.max(8, Math.min(moveEvent.clientX - offsetX, window.innerWidth - width - 8));
+      const y = Math.max(8, Math.min(moveEvent.clientY - offsetY, window.innerHeight - height - 8));
+      commandsPanel.style.left = `${Math.round(x)}px`;
+      commandsPanel.style.top = `${Math.round(y)}px`;
+    };
+    const finish = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      saveCommandsFloatingState();
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", finish);
+    document.addEventListener("pointercancel", finish);
+  });
+}
+
 function activateSidebarTab(name) {
   const tab = document.querySelector(`.sidebar-tab[data-tab="${name}"]`);
   if (tab) tab.click();
@@ -1801,12 +2371,28 @@ function restorePanelState() {
   updatePanelToggleIcons();
 }
 
+async function toggleSessionPanel() {
+  if (sessionsWindowOpen) {
+    await closeSessionsWindow();
+    return;
+  }
+  sessionPanel.classList.toggle("collapsed");
+  persistPanelState();
+  updatePanelToggleIcons();
+}
+
 // Keep the (split-square) SVG icon; just refresh the tooltip for the state.
 function updatePanelToggleIcons() {
   const sb = document.getElementById("btn-toggle-sidebar");
   const sp = document.getElementById("btn-toggle-sessions");
+  const sessionsTop = document.getElementById("btn-show-sessions");
   if (sb) sb.title = sidebar.classList.contains("collapsed") ? "Expand sidebar" : "Collapse sidebar";
   if (sp) sp.title = sessionPanel.classList.contains("collapsed") ? "Expand session panel" : "Collapse session panel";
+  if (sessionsTop) {
+    const visible = !sessionPanel.classList.contains("collapsed") && !sessionPanel.classList.contains("sessions-detached");
+    sessionsTop.title = visible ? "Hide the Sessions panel" : "Show the Sessions panel";
+    sessionsTop.setAttribute("aria-pressed", String(visible));
+  }
 }
 
 // ── Local path helpers (Windows-first; tolerate / and \) ──
@@ -2519,15 +3105,49 @@ function trackTypedInput(ti, data) {
   ti.typedBuf = buf;
 }
 
-async function createPane(parentEl, shell, args, cwd) {
+// The command line the user actually submitted, most accurate source first.
+//
+// `getInputRegion` reads the real prompt region off the screen (OSC 133), so it
+// sees a line recalled with ↑ or completed by the shell itself. `typedBuf` only
+// sees literal keystrokes and deliberately bails on escape sequences, which is
+// exactly what ↑ sends. Anything that reacts to what was RUN — Explorer
+// `cd`/`ssh` following, command re-run — has to prefer the screen: relying on
+// keystrokes alone silently ignores every recalled command.
+function submittedCommandLine(ti) {
+  if (!ti || !ti.term) return "";
+  try {
+    const region = getInputRegion(ti);
+    if (region && region.text) return region.text.trim();
+    // No 133 integration (a plain remote shell): fall back to what we saw typed.
+    if (ti.term.buffer.active.type === "normal") return (ti.typedBuf || "").trim();
+  } catch {}
+  return "";
+}
+
+// At most one swallowed mouse press is outstanding at a time, across every
+// pane — a press orphaned in one pane must not survive a press in another, or
+// its stale coordinates get replayed into the pane it came from. Pane-scoped
+// state cannot express that, so this lives here.
+let pendingDragReclaim = null;
+
+// pty_spawn defaults a local shell to home. Keep the same directory in the
+// pane model, or transcript polling skips a new default session entirely.
+async function initialPaneCwd(shell, cwd) {
+  if (cwd || shell === "ssh") return cwd || null;
+  return invoke("explorer_home_dir");
+}
+
+async function createPane(parentEl, shell, args, cwd, sessionKey = null) {
+  const effectiveCwd = await initialPaneCwd(shell, cwd);
+  const stableSessionKey = sessionKey || crypto.randomUUID();
   const paneEl = document.createElement("div");
   paneEl.className = "pane-leaf";
   const termWrap = document.createElement("div");
-  termWrap.style.cssText = "flex:1;overflow:hidden;";
+  termWrap.style.cssText = "flex:1 1 0;min-width:0;min-height:0;overflow:hidden;";
   const statusBar = document.createElement("div");
   statusBar.className = "pane-statusbar";
-  paneEl.style.display = "flex";
-  paneEl.style.flexDirection = "column";
+  // NOTE: the leaf's flex-column layout now lives in the .pane-leaf rule, not
+  // inline — see the comment there.
   paneEl.appendChild(termWrap);
   paneEl.appendChild(statusBar);
   // Top-right usage badge (model | effort | ctx%) — filled by scanCtxUsage when
@@ -2551,11 +3171,37 @@ async function createPane(parentEl, shell, args, cwd) {
   // Ctrl+Click opens URLs in the in-app browser. Login URLs are the one
   // intentional exception: a normal click opens them in Mymux too, because
   // Claude Code/Codex print an OAuth URL as the action the user must take.
-  term.loadAddon(new WebLinksAddon.WebLinksAddon((event, uri) => {
-    if (event.ctrlKey || event.metaKey || isAiLoginUrl(uri)) openLinkFromTerminal(uri, isAiLoginUrl(uri));
-    else hintLinkOnce();
-  }));
+  //
+  // A terminal has TWO independent link paths and both must land here:
+  //   • WebLinksAddon — finds bare URL text with a regex.
+  //   • OSC 8 — the program marks a range as a hyperlink itself (the modern way,
+  //     and what Claude Code / codex actually emit). This one is routed by the
+  //     `linkHandler` terminal option, NOT by the addon. With no linkHandler
+  //     xterm falls back to its own default, which is a `confirm()` followed by
+  //     `window.open()` — in a Tauri webview that dialog and that popup are both
+  //     unavailable, so the click did nothing at all (#42).
+  term.loadAddon(new WebLinksAddon.WebLinksAddon(handleTerminalLink));
   term.open(termWrap);
+
+  // Renderer: xterm's DEFAULT DOM renderer lays out each row's glyphs via the
+  // browser's own text layout, so on macOS/WebKit any gap between the font's
+  // rendered advance width and xterm's integer cell grid drifts every glyph a
+  // fraction of a cell to the right. Past ~a line the cursor column desyncs from
+  // the shell's ZLE model — typed characters land in the wrong column and zsh's
+  // erase-by-`\b \b` paints its space at the visible cursor (Backspace looks
+  // like it types a space). Forcing letterSpacing 0 only shrank the drift, it
+  // didn't remove it. The Canvas renderer draws EVERY cell at an exact integer
+  // pixel position, so column drift is impossible regardless of font metrics —
+  // this is the real fix for the three linked symptoms (column drift + Backspace
+  // -as-space + off-looking layout). Must load after open() (needs the screen
+  // element); fall back to the DOM renderer if the 2D context can't be created.
+  // NOTE: needs xterm 5.x — xterm 6.0.0 removed the Canvas renderer (PR #5105),
+  // so do NOT bump xterm past 5.5.0 (docs/macos-webkit-gotchas.md §4).
+  try {
+    term.loadAddon(new CanvasAddon.CanvasAddon());
+  } catch (e) {
+    console.warn("Canvas renderer unavailable; falling back to DOM renderer", e);
+  }
 
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   fitAddon.fit();
@@ -2572,9 +3218,10 @@ async function createPane(parentEl, shell, args, cwd) {
   const id = await invoke("pty_spawn", {
     shell: shell || null,
     args: args || null,
-    cwd: cwd || null,
+    cwd: effectiveCwd,
     cols,
     rows,
+    sessionKey: stableSessionKey,
   });
 
   // Opened in a specific folder → name the session after that folder (shown on
@@ -2586,7 +3233,7 @@ async function createPane(parentEl, shell, args, cwd) {
   // lastInputAt baseline = pane birth, so the long-task check (10+ min since
   // last input) has a sane anchor even in a pane the user never typed in
   // (e.g. a restored session auto-replaying its command).
-  terminals.set(id, { id, term, fitAddon, search: searchAddon, paneEl, commandShortcutsEl, type: shell === "ssh" ? "ssh" : "local", shell: shell || null, label: sessionLabel, cwd: cwd || null, unseen: false, marks: [], inputMark: null, lastInputAt: performance.now() });
+  terminals.set(id, { id, term, fitAddon, search: searchAddon, paneEl, commandShortcutsEl, type: shell === "ssh" ? "ssh" : "local", shell: shell || null, label: sessionLabel, cwd: effectiveCwd, sessionKey: stableSessionKey, unseen: false, marks: [], inputMark: null, lastInputAt: performance.now() });
   renderPaneCommandShortcuts(id);
 
   // A brand-new pane's final size isn't settled at spawn (flex sizing, font
@@ -2617,7 +3264,7 @@ async function createPane(parentEl, shell, args, cwd) {
   const cwdLabel = cwd ? baseName(cwd) : "~";
   const cwdText = cwdLabel === sessionLabel ? "" : cwdLabel;
   statusBar.innerHTML = `
-    <span class="pane-grip" title="Drag to move pane">&#10287;</span>
+    <span class="pane-grip" title="Drag to move pane · drop on another tab header to move it there">&#10287;</span>
     <span class="pane-label">${esc(sessionLabel)}</span>
     ${shell !== "ssh" ? `<span class="pane-cwd">${esc(cwdText)}</span>` : ""}
     <span class="pane-actions">
@@ -2653,10 +3300,66 @@ async function createPane(parentEl, shell, args, cwd) {
   // buffer we scroll the viewport ourselves and swallow the event. Alt-screen
   // TUIs (vim/htop/less) keep receiving wheel reports as before, and
   // Ctrl+wheel is left alone for future zoom gestures.
+  //
+  // One alt-screen exception, Windows only (#40): Claude Code's fullscreen
+  // renderer (`tui: fullscreen`, the default for newer installs) never reacts
+  // to wheel reports on native Windows — in any terminal, Windows Terminal
+  // included (anthropics/claude-code#85712) — while the very same SGR bytes
+  // scroll it fine on macOS. Codex/OpenCode do get the wheel through ConPTY,
+  // so only a Claude-owned pane is touched: there the wheel becomes PgUp/PgDn,
+  // which Claude's fullscreen view scrolls by half a screen. One key per
+  // notch's worth of delta, so a touchpad's many tiny deltas don't flood it.
+  //
+  // Who owns the alt screen is asked of the process tree under the pane's
+  // shell (pty_ai_process) each time the screen is entered. The screen-based
+  // t.ctxSource is only reset by an OSC 133 prompt mark, which CMD and ssh never
+  // send — after Claude quits there, Codex started in the same pane would still
+  // look like Claude and lose its wheel. "ssh" means the program runs on another
+  // machine, where Claude's wheel works and must be left alone. Until the answer
+  // arrives, or when the tree names nothing we know, the screen guess decides.
+  let claudePageAcc = 0;
+  const WHEEL_NOTCH_PX = 100; // one wheel notch in Chromium/WebView2 pixel mode
+  let altOwner = null;
+  let altOwnerQuery = 0;
+  if (IS_WINDOWS) {
+    try {
+      term.buffer.onBufferChange(() => {
+        altOwner = null;
+        const query = ++altOwnerQuery;
+        if (term.buffer.active.type === "normal") return;
+        invoke("pty_ai_process", { id })
+          .then((who) => { if (query === altOwnerQuery) altOwner = who || null; })
+          .catch(() => {});
+      });
+    } catch {}
+  }
+  const claudeFullscreenOnWindows = () => {
+    if (!IS_WINDOWS || term.buffer.active.type === "normal") return false;
+    if ((term.modes.mouseTrackingMode || "none") === "none") return false;
+    if (altOwner) return altOwner === "claude";
+    const t = terminals.get(id);
+    return !!t && t.ctxSource === "claude" && !t.codexDetected;
+  };
   if (term.attachCustomWheelEventHandler) {
     term.attachCustomWheelEventHandler((e) => {
       try {
         if (e.ctrlKey) return true;
+        if (claudeFullscreenOnWindows()) {
+          const rowPx = (term.options.fontSize || 14) * 1.2;
+          const px = e.deltaMode === 1 ? e.deltaY * rowPx
+            : e.deltaMode === 2 ? e.deltaY * term.rows * rowPx
+            : e.deltaY;
+          if (!px) return false;
+          if (Math.sign(px) !== Math.sign(claudePageAcc)) claudePageAcc = 0;
+          claudePageAcc += px;
+          const pages = Math.trunc(claudePageAcc / WHEEL_NOTCH_PX);
+          if (pages) {
+            claudePageAcc -= pages * WHEEL_NOTCH_PX;
+            const key = pages < 0 ? "\x1b[5~" : "\x1b[6~"; // PgUp : PgDn
+            invoke("pty_write", { id, data: key.repeat(Math.min(3, Math.abs(pages))) });
+          }
+          return false;
+        }
         if (term.buffer.active.type !== "normal") return true;
         if ((term.modes.mouseTrackingMode || "none") === "none") return true; // no conflict — default handling already scrolls
         // deltaMode 1 = lines, 0 = pixels (~one row per ≈ fontSize*1.2 px).
@@ -2746,6 +3449,16 @@ async function createPane(parentEl, shell, args, cwd) {
     return true;
   });
 
+  // A full-screen program leaving the alternate screen has ended, so the modes it
+  // turned on end with it. This is the backstop for shells with no OSC 133 marks
+  // (a plain remote server over ssh), where markPaneReturnedToShell never runs.
+  // Only alt → normal is acted on; entering the alternate screen changes nothing.
+  try {
+    term.buffer.onBufferChange(() => {
+      if (term.buffer.active.type === "normal") clearStaleFocusReporting(term);
+    });
+  } catch {}
+
   term.onData((data) => {
     // NOTE: do NOT re-arm the task-done notification here. onData is not only
     // user typing — xterm also routes terminal-GENERATED data through it:
@@ -2758,6 +3471,8 @@ async function createPane(parentEl, shell, args, cwd) {
     // inside a mouse-tracking TUI (picking a Claude Code menu option is input
     // too). SGR press reports only; hover/move/wheel reports must not re-arm.
     const ti = terminals.get(id);
+    if (shouldDropTerminalFocusReport(ti, data)) return;
+    if (!IS_MAC && imeDuplicateCommit(ti, data)) return;
     if (/\x1b\[<[0-2];\d+;\d+M/.test(data)) armNotifyCycle(id);
     // Remember the command being submitted so a restored session can offer to
     // re-run it (e.g. relaunch `claude`/`codex`). Two capture paths:
@@ -2766,19 +3481,25 @@ async function createPane(parentEl, shell, args, cwd) {
     //     keystroke line buffer, so re-run works even without tmux on the remote.
     // Both are gated to the NORMAL buffer, so keystrokes typed INTO a full-screen
     // app (vim/htop/claude, alt-screen) never masquerade as a shell command.
-    if (ti && commandReplayEnabled()) {
+    //
+    // The keystroke buffer is kept even when command replay is switched off:
+    // the Explorer's `ssh`/`cd` following reads the same line and has nothing
+    // to do with the re-run feature.
+    let submittedLine = "";
+    if (ti) {
       try {
         trackTypedInput(ti, data);
         if (data.includes("\r") || data.includes("\n")) {
-          const r = getInputRegion(ti);
-          let cmd = r && r.text ? r.text.trim() : "";
-          if (!cmd && ti.term.buffer.active.type === "normal") cmd = (ti.typedBuf || "").trim();
-          if (cmd) { ti.lastCmd = cmd; if (ti.session) ti.session.lastCmd = cmd; }
+          submittedLine = submittedCommandLine(ti);
+          if (submittedLine && commandReplayEnabled()) {
+            ti.lastCmd = submittedLine;
+            if (ti.session) ti.session.lastCmd = submittedLine;
+          }
           ti.typedBuf = "";
         }
       } catch {}
     }
-    const result = handleTerminalInput(data, id);
+    const result = handleTerminalInput(data, id, submittedLine);
     if (result === "consumed") return;
     // Per-tab broadcast (Ctrl+Shift+B): typing in any pane of a broadcasting
     // tab goes to every pane of that tab — tmux synchronize-panes.
@@ -2878,23 +3599,66 @@ async function createPane(parentEl, shell, args, cwd) {
   // focus back within a second ("click twice to enter a pane"). Track the
   // switch on mousedown in the capture phase (runs before xterm can swallow
   // it), plus a DOM focus listener on the helper textarea (the element that
-  // actually receives focus; xterm 5.5 has no term.onFocus event) so state
+  // actually receives focus; xterm has no term.onFocus event) so state
   // syncs whenever xterm focuses itself.
   if (term.textarea) {
     term.textarea.addEventListener("focus", () => { if (focusedPaneId !== id) setFocusedPane(id); });
+    // xterm registers its input handler on the textarea in capture phase, so
+    // mark the event on the terminal ancestor where capture runs first.
+    term.element?.addEventListener("input", (e) => {
+      if (e.target !== term.textarea) return;
+      const ti = terminals.get(id);
+      if (!ti) return;
+      const inputDispatch = {};
+      ti.imeInputDispatch = inputDispatch;
+      queueMicrotask(() => {
+        if (ti.imeInputDispatch === inputDispatch) ti.imeInputDispatch = null;
+      });
+    }, true);
     // IME (Hangul) composition guard. When returning to the window, the focus
     // keeper blurs+refocuses this textarea; doing that mid-composition makes the
     // IME commit the syllable twice ("글자가 2개씩") and detaches its candidate
     // window. Track composition so restore() leaves an actively-composing textarea
     // alone, and cancel the pending post-return refocus retries the moment the
     // user starts composing (composition proves input focus is alive).
+    const noteImeActivity = () => {
+      const ti = terminals.get(id);
+      if (ti) ti.imeRestoreBlockedUntil = performance.now() + 350;
+      cancelFocusReturnRetries();
+    };
+    const isImeInputSignal = (e) => e.isComposing ||
+      e.inputType === "insertCompositionText" || e.inputType === "insertFromComposition" ||
+      (typeof e.data === "string" && /[^\x00-\x7F]/.test(e.data));
     term.textarea.addEventListener("compositionstart", () => {
       const ti = terminals.get(id); if (ti) ti.imeComposing = true;
-      cancelFocusReturnRetries();
-    });
+      noteImeActivity();
+    }, true);
+    term.textarea.addEventListener("compositionupdate", noteImeActivity, true);
+    term.textarea.addEventListener("beforeinput", (e) => {
+      if (isImeInputSignal(e)) noteImeActivity();
+    }, true);
+    term.textarea.addEventListener("input", (e) => {
+      if (isImeInputSignal(e)) noteImeActivity();
+    }, true);
     term.textarea.addEventListener("compositionend", () => {
       const ti = terminals.get(id); if (ti) ti.imeComposing = false;
-    });
+      noteImeActivity();
+    }, true);
+
+    // Event trace + keystroke counter for the duplicate-commit guard
+    // (imeDuplicateCommit). Every real key press fires a keydown, so the counter
+    // is what tells a repeated character from one emitted twice.
+    if (!IS_MAC) {
+      const ta = term.textarea;
+      for (const type of ["keydown", "keyup", "compositionstart", "compositionupdate", "compositionend", "beforeinput", "input", "focus", "blur"]) {
+        ta.addEventListener(type, (e) => {
+          const ti = terminals.get(id);
+          if (!ti) return;
+          if (type === "keydown") ti.imeKeySeq = (ti.imeKeySeq || 0) + 1;
+          imeTrace(ti, type, e.inputType ? [e.inputType, e.data] : (e.data ?? (e.keyCode !== undefined ? e.keyCode : undefined)));
+        }, true);
+      }
+    }
 
     // ── macOS WKWebView Korean/CJK IME fix ────────────────────────────────────
     // macOS-only. On WebKit (WKWebView) the very FIRST character of a typing run
@@ -2948,13 +3712,128 @@ async function createPane(parentEl, shell, args, cwd) {
       ta.addEventListener("blur", commit);
     }
   }
+  installCompositionAnchor(term);
   paneEl.addEventListener("mousedown", () => { if (focusedPaneId !== id) setFocusedPane(id); }, true);
   paneEl.addEventListener("click", () => { setFocusedPane(id); showExplorerForSession(id); });
   termWrap.addEventListener("click", () => { setFocusedPane(id); term.focus(); });
-  // A plain mouse drag should select text. dragDropEnabled:false re-enables the
-  // webview's native HTML5 drag, which would otherwise hijack a drag that begins
-  // over terminal text and stop xterm's selection — suppress it inside the pane.
+  // A plain mouse drag should select text. Whenever the webview delivers HTML5
+  // drag events (it does not while tauri.conf's `dragDropEnabled` is on, but
+  // that flag exists for the explorer's OS file drop and has been flipped both
+  // ways), a native drag starting over terminal text would hijack it and stop
+  // xterm's selection — suppress it inside the pane regardless.
   termWrap.addEventListener("dragstart", (e) => e.preventDefault());
+  // ...and a drag must still select once the program turns mouse tracking ON.
+  // xterm hands every button event to the program in that state and only lets
+  // Shift force a selection through, so dragging over a Claude Code answer
+  // selects nothing (and with no selection the auto-copy below never runs) while
+  // the program receives a stray click: press at the drag's start column,
+  // release at its end. Reclaim the drag — but only in the CLICK-tracking modes
+  // (?9 x10 / ?1000 vt200), where the program asked for press+release and never
+  // for motion, so a drag carries nothing it could act on anyway. ?1002/?1003
+  // programs (vim's mouse visual-select, htop) DID ask for motion; leave them
+  // alone, the same way the wheel handler above leaves alt-screen TUIs alone.
+  // Which mode is in play decides this, not which buffer is on screen: Claude
+  // Code turns on ?1000h in both.
+  // One trade-off is deliberate: the program hears the press when the button
+  // comes UP, as a press/release pair, instead of when it goes down. Click-only
+  // tracking has no motion to miss in between, so what changes is timing, not
+  // content — a program that paints a held-down state, or measures how long the
+  // button was held (hold-to-repeat, long-press), sees a 0ms click instead. In
+  // ?9 (x10) the delay is the whole hold, since that mode never reports a
+  // release at all and the press is all the program will ever get.
+  const CLICK_ONLY_TRACKING = new Set(["x10", "vt200"]);
+  const DRAG_SELECT_SLOP_PX = 4; // Windows SM_CXDRAG — below this it's a click
+  // The modifier that makes xterm force a selection is platform-specific:
+  // Shift everywhere, Option on macOS (paired with macOptionClickForcesSelection,
+  // which createXterm turns on). Replaying the wrong one on a Mac would hand the
+  // press straight back to the program and fix nothing.
+  const FORCE_SELECT_MODIFIER = IS_MAC ? { altKey: true } : { shiftKey: true };
+  // Right-click belongs to the terminal, not to the program (#47). Claude Code
+  // reads the OS clipboard itself the moment it receives a right-button report
+  // and types it into its prompt, so with the contextmenu handler below also
+  // pasting, one right-click pasted twice. Keeping the report from leaving is
+  // what makes Mymux the single paste path — and it restores copy-on-right-click
+  // too, because xterm clears the selection when it hands a press to a program,
+  // which left the contextmenu handler with nothing to copy and pasting instead.
+  //
+  // Same rule as the drag reclaim below: only in the CLICK-tracking modes. A
+  // ?1002/?1003 program (vim, htop) asked for every button and may have its own
+  // right-click gesture, so it keeps receiving them. A modifier-held right-click
+  // is left alone as well — measured: Ctrl+right-click still reaches the program
+  // as ESC[<18;… before and after. Shift is the exception, and not one this code
+  // creates: xterm spends Shift on shouldForceSelection() and never reports that
+  // press to the program, with or without this branch.
+  termWrap.addEventListener("mousedown", (e) => {
+    if (e.__mymuxReplay) return; // our own replay, on its way to xterm
+    if (e.button === 2 && !(e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) &&
+        CLICK_ONLY_TRACKING.has(term.modes.mouseTrackingMode || "none")) {
+      // Swallow the press only. `contextmenu` still fires (it is a separate
+      // event, not this one's default action) and does the copy/paste.
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (!CLICK_ONLY_TRACKING.has(term.modes.mouseTrackingMode || "none")) return;
+    if (pendingDragReclaim) pendingDragReclaim(); // a press some pane never saw end
+    // Swallow the press: a click and a drag are indistinguishable until the
+    // mouse moves (or doesn't), and replaying it later is what keeps both
+    // meanings intact.
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.target, startX = e.clientX, startY = e.clientY, detail = e.detail;
+    const replay = (type, x, y, extra) => {
+      const ev = new MouseEvent(type, Object.assign({
+        bubbles: true, cancelable: true, view: window, detail,
+        clientX: x, clientY: y, button: 0, buttons: type === "mouseup" ? 0 : 1,
+      }, extra || {}));
+      ev.__mymuxReplay = true;
+      target.dispatchEvent(ev);
+    };
+    const stop = () => {
+      if (pendingDragReclaim === stop) pendingDragReclaim = null;
+      document.removeEventListener("mousemove", onMove, true);
+      document.removeEventListener("mouseup", onUp, true);
+      document.removeEventListener("pointercancel", stop, true);
+      window.removeEventListener("blur", onBlur);
+    };
+    // Hand the program the press/release pair it would have gotten (picking a
+    // Claude Code menu option has to keep working).
+    const clickThrough = (x, y) => {
+      stop();
+      if (!termWrap.isConnected) return;
+      replay("mousedown", startX, startY);
+      replay("mouseup", x, y);
+    };
+    const onMove = (me) => {
+      // A press can end without a mouseup ever arriving — released outside the
+      // window, or the pane closed under it. Leaving the pair attached would
+      // let a LATER drag replay this dead press's coordinates into a disposed
+      // terminal, silently overwriting the clipboard through the auto-copy
+      // below, so every exit checks that the press and the pane are both alive.
+      if (!(me.buttons & 1) || !termWrap.isConnected) { stop(); return; }
+      if (Math.abs(me.clientX - startX) < DRAG_SELECT_SLOP_PX &&
+          Math.abs(me.clientY - startY) < DRAG_SELECT_SLOP_PX) return;
+      stop();
+      // The forcing modifier routes the press into xterm's own selection, which
+      // then owns the rest of the drag through the document listeners it
+      // installs itself.
+      replay("mousedown", startX, startY, FORCE_SELECT_MODIFIER);
+      replay("mousemove", me.clientX, me.clientY);
+    };
+    const onUp = (ue) => clickThrough(ue.clientX, ue.clientY); // never moved: a click
+    // Losing focus mid-press must still deliver the click. Dropping it would
+    // make clicks vanish at random on machines where something steals focus on
+    // a timer — WIZVERA Veraport does exactly that here, every few seconds
+    // (see the focus-keeper notes) — and before this handler existed the
+    // program got that press regardless of focus.
+    const onBlur = () => clickThrough(startX, startY);
+    pendingDragReclaim = stop;
+    document.addEventListener("mousemove", onMove, true);
+    document.addEventListener("mouseup", onUp, true);
+    document.addEventListener("pointercancel", stop, true); // the gesture is void: no click
+    window.addEventListener("blur", onBlur);
+  }, true);
   // Finishing a drag-select copies automatically (PuTTY-style) — no Ctrl+C
   // needed. onSelectionChange fires on every drag step, so let it settle before
   // touching the clipboard; an empty selection (a clear) is skipped.
@@ -2989,9 +3868,13 @@ async function createPane(parentEl, shell, args, cwd) {
   const helperTa = term.element && term.element.querySelector(".xterm-helper-textarea");
   if (helperTa) {
     helperTa.addEventListener("blur", () => {
+      const composingAtBlur = !!terminals.get(id)?.imeComposing;
       setTimeout(() => {
+        if (composingAtBlur || !document.hasFocus()) return;
         if (focusedPaneId !== id) return;              // only the active pane
         if (browserTabActive || viewerActive) return;  // not in terminal mode
+        const ti = terminals.get(id);
+        if (ti && (ti.imeComposing || performance.now() < (ti.imeRestoreBlockedUntil || 0))) return;
         const el = term.element;
         if (!el || el.classList.contains("focus")) return; // xterm already focused
         // Leave it only if focus genuinely moved to another input/pane (rename
@@ -3006,6 +3889,146 @@ async function createPane(parentEl, shell, args, cwd) {
 
   setFocusedPane(id);
   return id;
+}
+
+// A TUI may park its cursor elsewhere while repainting. xterm normally moves
+// its live IME overlay (and native candidate textarea) on every such repaint.
+// Keep an unfinished composition at the input cell where it started, and keep
+// the preview inside the pane even when it starts at the final column/row.
+function compositionPreviewPosition(anchor, cell, bounds, preview) {
+  return {
+    left: Math.max(0, Math.min(anchor.col * cell.width, bounds.width - Math.min(preview.width, bounds.width))),
+    top: Math.max(0, Math.min(anchor.row * cell.height, bounds.height - Math.min(preview.height, bounds.height))),
+  };
+}
+
+function installCompositionAnchor(term) {
+  const textarea = term.textarea;
+  const screen = term.element?.querySelector(".xterm-screen");
+  const view = term.element?.querySelector(".composition-view");
+  if (!textarea || !screen || !view) return;
+  let anchor = null;
+  const position = () => {
+    if (!anchor || !view.classList.contains("active")) return;
+    const cell = { width: screen.clientWidth / term.cols, height: screen.clientHeight / term.rows };
+    if (!(cell.width > 0 && cell.height > 0)) return;
+    const bounds = { width: Math.min(screen.clientWidth, term.element.clientWidth), height: Math.min(screen.clientHeight, term.element.clientHeight) };
+    const point = compositionPreviewPosition(anchor, cell, bounds, { width: view.offsetWidth, height: Math.max(view.offsetHeight, cell.height) });
+    for (const el of [view, textarea]) {
+      el.style.left = `${point.left}px`;
+      el.style.top = `${point.top}px`;
+    }
+    view.style.maxWidth = `${bounds.width}px`;
+    view.style.overflow = "hidden";
+  };
+  textarea.addEventListener("compositionstart", () => {
+    anchor = { col: Math.min(term.buffer.active.cursorX, term.cols - 1), row: term.buffer.active.cursorY };
+  });
+  const positionAfterXterm = () => {
+    position();
+    // Both compositionupdate and onRender queue xterm's own geometry update.
+    setTimeout(position, 0);
+  };
+  textarea.addEventListener("compositionupdate", positionAfterXterm);
+  const clear = () => { anchor = null; };
+  textarea.addEventListener("compositionend", clear);
+  textarea.addEventListener("blur", clear);
+  term.onRender(positionAfterXterm);
+}
+
+// ── Duplicate Hangul commits (Windows) ───────────────────────────────────────
+// xterm.js can send one IME-committed character twice ("한" → "한한"). It listens
+// for a commit in two independent places: the textarea `input` event (insertText)
+// and a setTimeout(0) armed on every keydown 229 that diffs the textarea's text.
+// When the key is already released and the commit lands before that timer fires
+// (Windows' IME reorders events like that when the UI thread is busy), both see
+// the same new character and each emits it. Reproduced against the real WebView2
+// with keydown → keyup → input(insertText) delivered back to back.
+//
+// The guard sits where the two paths meet, in term.onData. It distinguishes the
+// actual input event from xterm's deferred keydown fallback using
+// imeInputDispatch; window.event can remain stale inside WebView timeouts. If the
+// fallback repeats the input event's commit, imeInputBuf drops the second send.
+// Same-source input events remain allowed because an IME can batch legitimate
+// repeated commits, and a later keydown sequence still protects deliberate repeats.
+//
+// When it drops something it writes the surrounding event trace to a log, so a
+// duplicate that comes from some other path is diagnosable instead of a guess.
+const IME_DUP_WINDOW_MS = 80;
+const IME_TRACE_LEN = 60;
+const imeIncidents = [];
+let imeLastToast = 0;
+
+function imeTrace(ti, tag, detail) {
+  if (!ti) return;
+  const buf = ti.imeTraceBuf || (ti.imeTraceBuf = []);
+  buf.push(`${Math.round(performance.now())} ${tag}${detail === undefined ? "" : " " + JSON.stringify(detail)}`);
+  if (buf.length > IME_TRACE_LEN) buf.shift();
+}
+
+// True when `data` is the duplicate half of one committed character.
+function imeDuplicateCommit(ti, data) {
+  if (!ti) return false;
+  const via = ti.imeInputDispatch ? "input" : "async";
+  imeTrace(ti, "emit:" + via, data.length > 8 ? data.length + " chars" : data);
+  if (!/[^\x00-\x7F]/.test(data)) return false;
+  const now = performance.now();
+  const seq = ti.imeKeySeq || 0;
+  const fresh = (e) => !!e && e.seq === seq && now - e.t < IME_DUP_WINDOW_MS;
+  let dup = false;
+  if (via === "input") {
+    // What the `input` path has sent since the last keydown. The timer path
+    // diffs the whole textarea, so when several commits pile up before it fires
+    // it re-sends all of them as one string — compare against the running total,
+    // not just the last character.
+    const buf = fresh(ti.imeInputBuf) ? ti.imeInputBuf : (ti.imeInputBuf = { text: "", seq, t: now });
+    buf.text += data;
+    buf.t = now;
+  } else if (fresh(ti.imeInputBuf) && ti.imeInputBuf.text === data) {
+    dup = true;
+  }
+  const prev = ti.imeLastEmit;
+  if (!dup && fresh(prev) && prev.data === data && [...data].length === 1 &&
+      !(via === "input" && prev.via === "input")) dup = true;
+  if (!dup) ti.imeLastEmit = { data, via, seq, t: now };
+  else recordImeIncident(ti, data, `${(prev && prev.via) || "input"}+${via}`);
+  return dup;
+}
+
+function recordImeIncident(ti, data, paths) {
+  imeTrace(ti, "DROPPED duplicate", data);
+  imeIncidents.push(
+    `[${new Date().toISOString()}] dropped duplicate "${data}" (${paths})\n` +
+    (ti.imeTraceBuf || []).map((l) => "  " + l).join("\n")
+  );
+  if (imeIncidents.length > 20) imeIncidents.shift();
+  // The popup is a heads-up that the correction ran, not something to act on, so
+  // it is rate-limited rather than shown for every character.
+  if (performance.now() - imeLastToast > 60000) {
+    imeLastToast = performance.now();
+    toast("한글 중복 입력을 걸러냈습니다.");
+  }
+  invoke("explorer_home_dir")
+    .then((home) => invoke("write_text_file", {
+      path: `${home}/.mycli/logs/ime-incidents.log`,
+      content: imeIncidents.join("\n\n") + "\n",
+    }))
+    .catch(() => {});
+}
+
+// Codex can inherit DECSET 1004 from an earlier CLI, and some versions consume
+// its focus reports as editor input. Check the current owner on every report,
+// including genuine Alt-Tab blur/focus; suppressing only synthetic focus-in
+// leaves both of those paths open. Never strip printable brackets or mixed data.
+function shouldDropTerminalFocusReport(t, data) {
+  if (data !== "\x1b[I" && data !== "\x1b[O") return false;
+  return !!t && (t.restoringTerminalFocus === true || t.codexDetected === true || t.ctxSource === "codex");
+}
+
+function restoreTerminalFocusState(t, textarea) {
+  t.restoringTerminalFocus = true;
+  try { textarea.dispatchEvent(new FocusEvent("focus")); }
+  finally { t.restoringTerminalFocus = false; }
 }
 
 function setFocusedPane(ptyId) {
@@ -3023,8 +4046,8 @@ function setFocusedPane(ptyId) {
   }
   updateSessionActive();
   showExplorerForSession(ptyId);
-  if (t && t.type !== "ssh" && (t.codexDetected || t.ctxSource === "codex")) {
-    loadCodexLimits();
+  if (t && !isRemotePane(t) && (t.codexDetected || t.ctxSource === "codex")) {
+    loadCodexLimits(ptyId);
   }
 }
 
@@ -3083,7 +4106,7 @@ function startFocusKeeper() {
     if (tab && tab.panes.length && !tab.panes.includes(pid)) pid = tab.panes[0];
     if (pid == null || !terminals.has(pid)) return;
     const t = terminals.get(pid);
-    if (t.imeComposing) return; // mid-Hangul composition — blur/refocus here double-types & breaks the IME
+    if (t.imeComposing || performance.now() < (t.imeRestoreBlockedUntil || 0)) return;
     const el = t.term.element;
     if (!el || !el.offsetParent) return; // not visible → leave it
     const ta = el.querySelector(".xterm-helper-textarea");
@@ -3118,7 +4141,10 @@ function startFocusKeeper() {
       // never reads the event object, so it re-applies the class / cursor / DECSET-
       // 1004 report exactly the same, with zero OS-level focus churn to disturb
       // the IME. (Fixes the "AI CLI 한글 첫 글자 깨짐 after window return" report.)
-      try { ta.dispatchEvent(new FocusEvent("focus")); } catch {}
+      //
+      // The report is synchronous with dispatchEvent. Scope suppression to that
+      // dispatch so it cannot accidentally consume a later real focus event.
+      try { restoreTerminalFocusState(t, ta); } catch {}
     } else {
       try { t.term.focus(); } catch {}
       try { if (ta && document.activeElement !== ta) ta.focus({ preventScroll: true }); } catch {}
@@ -3145,9 +4171,9 @@ function startFocusKeeper() {
     restore(true);
     forceRepaintVisiblePanes(); // wake xterm's rAF renderer so buffered echo paints now, not in a burst
     returnRetries = [
-      setTimeout(() => restore(true), 80),
-      setTimeout(() => restore(true), 220),
-      setTimeout(() => restore(true), 500),
+      setTimeout(() => restore(false), 80),
+      setTimeout(() => restore(false), 220),
+      setTimeout(() => restore(false), 500),
     ];
   };
   window.addEventListener("focus", (e) => {
@@ -3194,7 +4220,7 @@ function setupSessionResizer() {
   const resizer = document.getElementById("session-resizer");
   if (!panel || !resizer) return;
   const saved = parseInt(localStorage.getItem("mymux.sessionWidth"), 10);
-  if (saved >= 140 && saved <= 1000) panel.style.width = saved + "px";
+  if (saved >= 140 && saved <= 1000) panel.style.setProperty("--session-panel-width", saved + "px");
   let startX = 0, startW = 0, dragging = false;
   resizer.addEventListener("mousedown", (e) => {
     if (panel.classList.contains("collapsed")) return;
@@ -3211,7 +4237,7 @@ function setupSessionResizer() {
     // Panel is pinned to the right; dragging the handle left widens it.
     let w = startW + (startX - e.clientX);
     w = Math.max(140, Math.min(window.innerWidth - 360, w));
-    panel.style.width = w + "px";
+    panel.style.setProperty("--session-panel-width", w + "px");
   });
   window.addEventListener("mouseup", () => {
     if (!dragging) return;
@@ -3219,7 +4245,7 @@ function setupSessionResizer() {
     panel.style.transition = "";
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
-    const w = parseInt(panel.style.width, 10);
+    const w = parseInt(panel.style.getPropertyValue("--session-panel-width"), 10);
     if (w) localStorage.setItem("mymux.sessionWidth", String(w));
     try { refitAllPanes(true); } catch {} // terminal grid changed with the panel
   });
@@ -3602,12 +4628,41 @@ function parseCodexFooter(text) {
   return found;
 }
 
+// Undo focus reporting (DECSET 1004) left behind by a program that has ended.
+//
+// A full-screen TUI turns the mode on and does not always turn it back off on
+// the way out — Claude Code is one. xterm keeps DEC private modes for the life
+// of the pane, so whatever runs NEXT inherits a report stream it never asked
+// for. codex is the case that surfaced this (#38): its binary carries only the
+// DISABLE sequence for 1004 and never the enable, yet it was getting CSI I on
+// every window return. It parses ESC as "cancel" and drops the rest into the
+// input box as text, so the leftover `[I` shows up where the user types.
+//
+// ConPTY switches the mode on at the birth of every Windows pane, so this also
+// runs once on a pane's first output (see pumpTerminals).
+//
+// Turn the mode off through xterm's own parser, so the mode dies with the
+// program that asked for it and every other DEC mode stays untouched.
+function clearStaleFocusReporting(term) {
+  try {
+    if (!term) return;
+    const core = term._core && term._core.coreService;
+    const modes = core && core.decPrivateModes;
+    if (modes && !modes.sendFocus) return; // nothing left on — don't queue a write
+    term.write("\x1b[?1004l");
+  } catch {}
+}
+
 // OSC 133;D means the shell prompt has taken ownership of the pane again.
 // xterm invokes the OSC handler during term.write(), before that write's
 // scanCtxUsage callback. Drop the just-finished TUI's detector state and skip
 // that one callback so its final footer cannot immediately switch the dock
 // back to AI mode.
 function markPaneReturnedToShell(id, t) {
+  // The shell is back, so the program that owned the pane is gone with whatever
+  // it turned on. This runs before the AI-mode early return below: a plain TUI
+  // (never in AI mode) leaks the mode just as well.
+  clearStaleFocusReporting(t.term);
   t._ctxTail = "";
   t.skipCtxScanOnce = true;
   const ownedByAi = t.aiMode
@@ -3627,6 +4682,7 @@ function markPaneReturnedToShell(id, t) {
   t.ctxLvl = 0;
   setPaneAiMode(t, false);
   clearPaneCtxUi(id, t);
+  clearPaneAgents(id, t);
 }
 
 function clearPaneCtxUi(id, t) {
@@ -3833,7 +4889,7 @@ function ctxBadgeText(t) {
   if (t.ctxSource === "codex") {
     // Codex's status footer has no reasoning setting, so prefer the active
     // rollout value and fall back to config.toml. ctxPct is converted from "left".
-    const localFallback = t.type !== "ssh";
+    const localFallback = !isRemotePane(t);
     parts.push(t.codexModel || t.codexSnapshotModel ||
       (localFallback ? codexConfiguredModel : null) || "Codex");
     const effort = t.codexReasoningEffort || t.codexSnapshotEffort ||
@@ -3878,6 +4934,112 @@ function updateCtxUi(id, t) {
     se.style.color = color;
     se.style.borderColor = color;
     se.classList.toggle("stale", stale);
+  }
+}
+
+// ── Claude statusline hookup (the source of the per-session %) ──────────────
+// The pane badge and the session-list % are scraped from `ctx:NN%` in a pane's
+// output, and Claude Code hands those numbers to its statusline command only —
+// they are not in the transcript, and the toolbar's CL readout is account-wide.
+// So on a PC with no statusline set up the toolbar shows usage while every
+// session stays blank. Mymux can install itself as that statusline.
+let statuslineState = null;
+
+async function refreshStatuslineRow() {
+  const label = document.getElementById("statusline-state");
+  const btn = document.getElementById("btn-statusline");
+  if (!label || !btn) return;
+  btn.disabled = true;
+  btn.textContent = "확인 중…";
+  label.className = "statusline-state";
+  refreshCodexUsageRow();
+  try {
+    statuslineState = await invoke("claude_statusline_status");
+  } catch (e) {
+    statuslineState = null;
+    label.textContent = "Claude Code: 설정을 읽지 못했습니다 — " + e;
+    label.classList.add("warn");
+    btn.textContent = "켜기";
+    return;
+  }
+  switch (statuslineState.state) {
+    case "mymux":
+      label.textContent = "Claude Code: 켜짐 — Mymux가 사용량을 제공합니다. / On";
+      label.classList.add("on");
+      btn.textContent = "끄기";
+      btn.disabled = false;
+      break;
+    case "other":
+      // Someone else's statusline (OMC HUD and the like) is never replaced. If
+      // it prints ctx% the badges already work, so nothing is broken here.
+      label.textContent = "Claude Code: 다른 statusline 사용 중이라 건드리지 않습니다 (OMC HUD 등).";
+      btn.textContent = "사용 중";
+      break;
+    case "none":
+      label.textContent = "Claude Code: 꺼짐 — 패인 배지와 세션 목록 % 가 안 나옵니다. / Off";
+      label.classList.add("warn");
+      btn.textContent = "켜기";
+      btn.disabled = false;
+      break;
+    default:
+      label.textContent = "Claude Code: " + statuslineState.path + " 를 JSON으로 읽을 수 없습니다.";
+      label.classList.add("warn");
+      btn.textContent = "켜기";
+  }
+}
+
+// Codex has no statusline to install — its per-session usage is read back from
+// the session rollout (`~/.codex/sessions/**/rollout-*.jsonl`, token_count
+// events). Nothing to configure, so just report whether that data is there:
+// on a PC where Codex has never run there is no rollout and hence no %.
+async function refreshCodexUsageRow() {
+  const el = document.getElementById("codexusage-state");
+  if (!el) return;
+  el.className = "statusline-state";
+  try {
+    const tail = await invoke("codex_rollout_tail", { maxBytes: 200_000 });
+    if (tail && tail.indexOf('"type":"token_count"') >= 0) {
+      el.textContent = "Codex: 사용 가능 — 세션 기록에서 사용량을 읽습니다. / Ready";
+      el.classList.add("on");
+    } else {
+      el.textContent = "Codex: 세션 기록에 사용량이 아직 없습니다 — Codex로 한 번 대화하면 잡힙니다.";
+      el.classList.add("warn");
+    }
+  } catch {
+    el.textContent = "Codex: 세션 기록이 없습니다 — Codex를 한 번 실행하면 사용량이 표시됩니다.";
+    el.classList.add("warn");
+  }
+}
+
+async function toggleStatusline() {
+  const remove = !!statuslineState && statuslineState.state === "mymux";
+  try {
+    statuslineState = await invoke(remove ? "claude_statusline_remove" : "claude_statusline_install");
+    // Claude Code reads settings.json at launch, so panes already running keep
+    // the old statusline until they are restarted.
+    toast(remove
+      ? "Mymux statusline을 제거했습니다 — 실행 중인 Claude 세션은 다시 시작해야 반영됩니다."
+      : "Mymux statusline을 설정했습니다 — Claude 세션을 다시 시작하면 사용량이 표시됩니다.");
+  } catch (e) {
+    toast(String(e), true);
+  }
+  refreshStatuslineRow();
+}
+
+// Claude only sends per-session context data to its configured statusline
+// command. Use Mymux's own command when no statusline exists, while leaving
+// OMC or any other user-selected statusline untouched.
+async function ensureMymuxStatusline() {
+  try {
+    const current = await invoke("claude_statusline_status");
+    if (current?.state !== "none") return;
+    await invoke("claude_statusline_install");
+    statuslineState = await invoke("claude_statusline_status");
+  } catch (e) {
+    // Statusline setup is an optional integration. Existing panes and the
+    // global usage readout must keep working if Claude is not installed or its
+    // settings file is not writable.
+    console.warn("Mymux statusline setup skipped", e);
   }
 }
 
@@ -4025,7 +5187,19 @@ function updateGlobalUsageUi() {
     tool.textContent = "CL";
     el.appendChild(tool);
     if (clResetAt && now - clResetAt < RESET_N_MS) el.appendChild(resetNBadge());
-    if (cl.fiveH != null) el.appendChild(usageSeg("5h", cl.fiveH, stale));
+    if (cl.fiveH != null) {
+      const fiveHour = usageSeg("5h", cl.fiveH, stale);
+      if (cl.fiveHResetAt) {
+        const remaining = fmtIsoRemain(cl.fiveHResetAt);
+        if (remaining) {
+          const timer = document.createElement("span");
+          timer.className = "usage-age";
+          timer.textContent = `(${remaining})`;
+          fiveHour.appendChild(timer);
+        }
+      }
+      el.appendChild(fiveHour);
+    }
     if (cl.wk != null) el.appendChild(usageSeg("wk", cl.wk, stale));
     if (cl.mo != null) el.appendChild(usageSeg("mo", cl.mo, stale));
     tips.push("Claude 전체 사용량"
@@ -4125,23 +5299,24 @@ function parseCodexTokenCountEvent(ev) {
 
   const info = payload.info || ev.info || {};
   // `total_token_usage` is cumulative for the rollout and can reach the
-  // context-window size even when the current turn is still small. The badge
-  // is a current-context indicator, so prefer the per-event last usage.
-  const usage = info.last_token_usage || payload.last_token_usage || ev.last_token_usage
-    || info.total_token_usage || payload.total_token_usage || ev.total_token_usage || {};
+  // context-window size even when the current turn is still small. Never use
+  // it as a fallback for the current-context badge: until a per-turn
+  // `last_token_usage` arrives the value is genuinely unknown.
+  const usage = info.last_token_usage || payload.last_token_usage || ev.last_token_usage;
+  if (!usage || typeof usage !== "object") return null;
   const inputTokens = numberValueDeep({ usage, info, payload, ev }, ["input_tokens", "inputTokens"]);
   const totalTokens = numberValueDeep({ usage, info, payload, ev }, ["total_tokens", "totalTokens"]);
   const windowTokens = numberValueDeep({ info, payload, ev }, ["model_context_window", "modelContextWindow", "context_window", "contextWindow"]);
   if (!windowTokens || windowTokens <= 0) return null;
 
   // Cached input is billed differently but still occupies the prompt context.
-  const used = inputTokens != null ? inputTokens : totalTokens;
+  const used = totalTokens != null ? totalTokens : inputTokens;
   if (used == null) return null;
   return Math.max(0, Math.min(100, Math.round((used / windowTokens) * 100)));
 }
 function applyCodexSessionSnapshot() {
   for (const [pid, tt] of terminals) {
-    if (tt.type === "ssh" || pid !== codexSnapshotPaneId) continue;
+    if (isRemotePane(tt) || pid !== codexSnapshotPaneId) continue;
     if (!tt.codexDetected || tt.ctxSource !== "codex") continue;
     let changed = false;
     const stalePanePct = tt.ctxPct == null || performance.now() - (tt.ctxAt || 0) > 10_000;
@@ -4164,13 +5339,29 @@ function applyCodexSessionSnapshot() {
     if (changed || tt.ctxSource === "codex") updateCtxUi(pid, tt);
   }
 }
-async function loadCodexLimits() {
+
+// A new `codex` command starts a new context accounting stream. Do not let
+// the previous rollout snapshot flash in the new session while its first
+// token_count event is still pending.
+function resetCodexSessionSnapshot() {
+  codexSessionCtxPct = null;
+  codexSessionCtxAt = 0;
+  codexSessionModel = null;
+  codexSessionReasoningEffort = null;
+  codexSnapshotPaneId = null;
+  codexSnapshotRequestGeneration++;
+}
+
+async function loadCodexLimits(paneId = null) {
   try {
     const requestGeneration = ++codexSnapshotRequestGeneration;
-    const ownerId = focusedPaneId;
+    // Callers that just started/selected a Codex pane pass its ID explicitly.
+    // This keeps a global usage refresh from losing the session-badge owner
+    // when focus changes while the rollout file is being read.
+    const ownerId = paneId == null ? focusedPaneId : paneId;
     const owner = ownerId == null ? null : terminals.get(ownerId);
-    const localCodexOwner = owner && owner.type !== "ssh" &&
-      (owner.codexDetected || owner.ctxSource === "codex");
+    const localCodexOwner = owner && !isRemotePane(owner) &&
+      (owner.codexDetected || owner.ctxSource === "codex" || paneId != null);
     const snapshotPaneId = localCodexOwner ? ownerId : null;
     const cwd = localCodexOwner ? (owner.cwd || owner.session?.cwd || null) : null;
     // A real rollout can grow past 400 KB; 64 KB commonly contains only the
@@ -4262,6 +5453,7 @@ async function loadClaudeUsageApi() {
     if (!u || (u.fiveH == null && u.wk == null)) return;
     claudeLimitsApi = {
       fiveH: u.fiveH,
+      fiveHResetAt: u.fiveHResetsAt,
       fiveHReset: fmtIsoRemain(u.fiveHResetsAt),
       wk: u.wk,
       wkReset: fmtIsoRemain(u.wkResetsAt),
@@ -4310,6 +5502,7 @@ async function loadCodexModelSetting() {
 }
 
 function initCtxUsage() {
+  ensureMymuxStatusline();
   loadClaudeEffort();
   setInterval(loadClaudeEffort, 60_000);
   loadCodexModelSetting();
@@ -4320,6 +5513,7 @@ function initCtxUsage() {
   setInterval(loadCodexResetCredits, 60_000);
   loadClaudeUsageApi();
   setInterval(loadClaudeUsageApi, 60_000);
+  setInterval(() => { if (claudeLimitsApi?.fiveHResetAt) updateGlobalUsageUi(); }, 1000);
   // Staleness sweep: dim badges whose statusline stopped redrawing (Claude
   // Code exited or the pane went back to a plain shell).
   setInterval(() => {
@@ -4478,28 +5672,35 @@ function isAiLoginUrl(uri) {
   }
 }
 
-// Ctrl+Click routes into the in-app browser tab when the Browser feature is
-// enabled; authentication links force the in-app route even if the optional
-// browser tab was hidden. Non-auth links retain the user's OS-browser fallback.
-function openLinkFromTerminal(uri, forceInApp = false) {
+// The single gate every terminal link click goes through, whichever path found
+// the link — the WebLinks addon's regex or an OSC 8 hyperlink the program drew
+// itself. Keeping one gate means the two cannot drift apart.
+//
+// A plain click opens the link, straight into the in-app browser. The one case
+// where a click is NOT ours is a full-screen program that turned mouse tracking
+// on (vim, htop, a TUI menu): there the click is the program's input, so only
+// Ctrl/Cmd+Click opens the link and a bare click is left alone. An auth URL
+// opens regardless of any of this, because opening it IS the action the CLI just
+// asked the user to take.
+function handleTerminalLink(event, uri) {
+  if (isAiLoginUrl(uri)) return openLinkFromTerminal(uri, true);
+  const t = terminals.get(focusedPaneId);
+  const tracking = (t && t.term.modes.mouseTrackingMode) || "none";
+  const programOwnsClick = tracking !== "none";
+  if (event.ctrlKey || event.metaKey || !programOwnsClick) openLinkFromTerminal(uri);
+  else hintLinkOnce();
+}
+
+// Every terminal link opens in Mymux's own browser — one path for all of them.
+// `openInExternalBrowser` turns the browser on if the user had hidden it, switches
+// to the native view, and navigates, so a link never leaves the app for an OS
+// browser. `isLogin` only changes the toast wording; the routing is the same,
+// and the login URL still never reaches the imported-profile launcher that could
+// start Chrome.
+function openLinkFromTerminal(uri, isLogin = false) {
   if (!/^https?:\/\//i.test(uri)) return;
-  // Authentication must stay in Mymux. Never hand the login URL to the
-  // imported-profile/Playwright launcher because that can start Chrome.
-  if (forceInApp) {
-    openInNativeBrowser(uri);
-    toast("로그인 링크를 Mymux 내부 브라우저에서 엽니다.");
-    return;
-  }
-  if (forceInApp || browserEnabled()) {
-    if (browserMode !== "native") setBrowserMode("native");
-    setBrowserView(true);
-    const nav = document.getElementById("nav-url");
-    if (nav) nav.value = uri;
-    nativeNavigate(uri);
-    if (forceInApp) toast("로그인 링크를 Mymux 브라우저에서 엽니다.");
-  } else {
-    invoke("open_external", { path: uri }).catch((e) => toast(String(e), true));
-  }
+  openInExternalBrowser(uri);
+  toast(isLogin ? "로그인 링크를 Mymux 브라우저에서 엽니다." : "Mymux 브라우저에서 링크를 엽니다.");
 }
 
 function browserProfileImported() {
@@ -4681,7 +5882,7 @@ function copyCommandBlock(id) {
 // ── Command palette (Ctrl+Shift+P) ───────────────────────────────────────
 function commandPaletteActions() {
   return [
-    { name: "New terminal / 새 터미널", hint: "Ctrl+Shift+N", run: () => spawnTerminal() },
+    { name: "New terminal / 새 터미널", hint: "Ctrl+Shift+N", run: () => spawnNewTerminalTab() },
     { name: "Split pane horizontally / 가로 분할", hint: "Ctrl+Shift+D", run: () => splitPane("horizontal") },
     { name: "Split pane vertically / 세로 분할", hint: "Ctrl+Shift+E", run: () => splitPane("vertical") },
     { name: "Close pane / 패인 닫기", hint: "Ctrl+Shift+W", run: () => focusedPaneId && closePane(focusedPaneId) },
@@ -4833,9 +6034,9 @@ function closeShortcutsHelp() {
 // backend. Unset preference defaults to PowerShell ("powershell" → pwsh, or
 // built-in powershell.exe when pwsh is absent); "bash" → undefined → Git Bash.
 function getDefaultShellId() {
-  // macOS: always use the system login shell (zsh); the Windows shell prefs
-  // (PowerShell/CMD/Git Bash) don't exist here. undefined → Rust new_default_prog.
-  if (IS_MAC) return undefined;
+  // POSIX: use the user's system login shell; Windows shell preferences do not
+  // apply on macOS or Linux. undefined → Rust new_default_prog.
+  if (!IS_WINDOWS) return undefined;
   let pref = "powershell";
   try { pref = localStorage.getItem("mymux.defaultShell") || "powershell"; } catch {}
   if (pref === "powershell") return "powershell";
@@ -4843,7 +6044,7 @@ function getDefaultShellId() {
   return undefined;
 }
 
-async function spawnTerminal(shell, cwd) {
+async function spawnTerminal(shell, cwd, sessionKey = null) {
   terminalWelcome.style.display = "none";
 
   const tabIdx = tabCounter++;
@@ -4852,7 +6053,7 @@ async function spawnTerminal(shell, cwd) {
 
   const rootContainer = document.createElement("div");
   rootContainer.className = "pane-container horizontal";
-  rootContainer.style.cssText = "flex:1;";
+  rootContainer.style.cssText = "flex:1 1 0;min-width:0;min-height:0;";
   tabEl.appendChild(rootContainer);
   terminalContainer.appendChild(tabEl);
 
@@ -4860,16 +6061,16 @@ async function spawnTerminal(shell, cwd) {
 
   try {
     const launch = shell !== undefined ? shell : getDefaultShellId();
-    const ptyId = await createPane(rootContainer, launch, null, cwd);
+    const ptyId = await createPane(rootContainer, launch, null, cwd, sessionKey);
     tabs.set(tabIdx, {
       el: tabEl,
       rootEl: rootContainer,
       panes: [ptyId],
       label,
-      session: { kind: "local", shell: shell || null, cwd: cwd || null },
+      session: { kind: "local", shell: shell || null, cwd: terminals.get(ptyId)?.cwd || cwd || null },
     });
     const ti0 = terminals.get(ptyId);
-    if (ti0) ti0.session = { kind: "local", shell: shell || null, cwd: cwd || null };
+    if (ti0) ti0.session = { kind: "local", shell: shell || null, cwd: ti0.cwd || cwd || null };
     addTab(tabIdx, label);
     switchToTab(tabIdx);
     refreshSessionList();
@@ -4879,6 +6080,12 @@ async function spawnTerminal(shell, cwd) {
     tabEl.remove();
     terminalWelcome.style.display = "";
   }
+}
+
+async function spawnNewTerminalTab() {
+  if (browserTabActive) setBrowserView(false);
+  if (viewerActive) setViewerView(false);
+  await spawnTerminal();
 }
 
 // Reparenting a live pane (split/close/drag-retile/move-to-tab) detaches its
@@ -4911,15 +6118,123 @@ function captureBottomPins() {
   };
 }
 
+// A pane can arrive here with an old flex value from a divider drag or a
+// re-tile. Normalize every new split branch before xterm measures it so the
+// branch cannot retain an intrinsic min-content width/height or cover its
+// sibling during the first layout pass. Also clears the width/height pins
+// equalizeActiveTabSplits writes: an explicit width:0 survives into a
+// column (stacked) container and beats align-items:stretch, collapsing that
+// pane into a zero-width strip stuck at the left edge — invisible top pane
+// right after a split-down. Same for a stale height:0 in a row container.
+function normalizeSplitChildren(container) {
+  if (!container || !container.children) return;
+  container.style.flex = "1 1 0";
+  container.style.minWidth = "0";
+  container.style.minHeight = "0";
+  for (const child of [...container.children]) {
+    if (child.classList.contains("pane-divider")) continue;
+    child.style.flex = "1 1 0";
+    child.style.minWidth = "0";
+    child.style.minHeight = "0";
+    child.style.width = "";     // equalize pins — must not leak across axes
+    child.style.height = "";
+    child.style.maxWidth = "";
+    child.style.maxHeight = "";
+  }
+}
+
+function splitChildrenHaveSpace(container) {
+  if (!container || !container.isConnected) return false;
+  const containerRect = container.getBoundingClientRect();
+  if (containerRect.width <= 1 || containerRect.height <= 1) return false;
+  const axis = container.classList.contains("vertical") ? "height" : "width";
+  const children = [...container.children].filter((child) =>
+    !child.classList.contains("pane-divider"));
+  return children.length >= 2 && children.every((child) =>
+    child.getBoundingClientRect()[axis] > 1);
+}
+
+// WebView2 can expose the new flex tree over several layout frames while
+// fonts and the window/DPI scale are settling. Refit only after both branches
+// have a real rectangle, so xterm never measures a transient 0x0 pane.
+function settleSplitLayout(container) {
+  return new Promise((resolve) => {
+    let attempts = 0;
+    const settle = () => {
+      normalizeSplitChildren(container);
+      if (splitChildrenHaveSpace(container) || attempts++ >= 8) {
+        refitAllPanes(true);
+        resolve();
+        return;
+      }
+      requestAnimationFrame(settle);
+    };
+    requestAnimationFrame(settle);
+  });
+}
+
+// Give a pane (or subtree) back the full space of the split it just left.
+// Assigning `style.cssText` here would also wipe inline styles the element set
+// for ITSELF, so clear exactly the sizing that splitting/equalizing wrote and
+// nothing else.
+function resetSplitChildSizing(el) {
+  if (!el || !el.style) return;
+  el.style.flex = "1 1 0";
+  el.style.minWidth = "0";
+  el.style.minHeight = "0";
+  el.style.width = "";           // equalizeActiveTabSplits pins width/height
+  el.style.height = "";          // to 0 so flex-basis wins — undo that here
+  el.style.maxWidth = "";
+  el.style.maxHeight = "";
+}
+
+// Tidy the split container a pane was just removed from. Only DIRECT children
+// are touched: a `querySelector(".pane-divider")` lookup can match a nested
+// split's divider and strip the wrong one. With two or more panes left the
+// container stays and its dividers are re-laid; with exactly one left the
+// container is unwrapped — except when it is the tab root, which owns the
+// tab's layout and must not be replaced.
+function collapseSplitContainer(container, tab) {
+  if (!container) return;
+  const isDivider = (el) => el.classList && el.classList.contains("pane-divider");
+  for (const el of [...container.children]) if (isDivider(el)) el.remove();
+  const survivors = [...container.children];
+  if (!survivors.length) return;
+
+  if (survivors.length > 1) {
+    // Still a real split. A container can hold three or more panes (a
+    // drag-to-tab move appends into the root, and restored trees keep whatever
+    // was saved), and unwrapping one of those would drop every sibling but the
+    // first — their terminals would vanish from screen while still open.
+    const dir = container.classList.contains("vertical") ? "vertical" : "horizontal";
+    for (let i = survivors.length - 1; i > 0; i--) {
+      const divider = document.createElement("div");
+      divider.className = "pane-divider";
+      container.insertBefore(divider, survivors[i]);
+      setupDividerDrag(divider, container, dir);
+    }
+    return;
+  }
+
+  const remaining = survivors[0];
+  if (container.parentElement && container !== (tab && tab.rootEl)) {
+    container.parentElement.replaceChild(remaining, container);
+  }
+  resetSplitChildSizing(remaining);
+}
+
 // Split the focused pane
+let splitInProgress = false;
+
 async function splitPane(direction, cwd) {
-  if (!focusedPaneId) return;
+  if (!focusedPaneId || splitInProgress) return;
+  splitInProgress = true;
   clearPaneZoom(); // layout is about to change — drop any zoom overlay first
   const tInfo = terminals.get(focusedPaneId);
-  if (!tInfo) return;
+  if (!tInfo) { splitInProgress = false; return; }
 
   const currentTab = findTabForPane(focusedPaneId);
-  if (!currentTab) return;
+  if (!currentTab) { splitInProgress = false; return; }
 
   const paneEl = tInfo.paneEl;
   const parent = paneEl.parentElement;
@@ -4927,7 +6242,7 @@ async function splitPane(direction, cwd) {
   // Create a new split container
   const splitContainer = document.createElement("div");
   splitContainer.className = `pane-container ${direction}`;
-  splitContainer.style.cssText = "flex:1;";
+  splitContainer.style.cssText = "flex:1 1 0;min-width:0;min-height:0;";
 
   // Move existing pane into split (scroll pin captured first — see
   // captureBottomPins for why reparenting breaks bottom-follow).
@@ -4941,24 +6256,34 @@ async function splitPane(direction, cwd) {
   divider.className = "pane-divider";
   splitContainer.appendChild(divider);
   setupDividerDrag(divider, splitContainer, direction);
+  // Normalize before async pane creation starts; otherwise a stale divider
+  // ratio can collapse the existing pane while the new pane is measured.
+  normalizeSplitChildren(splitContainer);
 
   // Create new pane
   try {
     const splitShell = getDefaultShellId();
     const newPtyId = await createPane(splitContainer, splitShell, null, cwd);
+    // Keep both branches shrinkable while the new xterm is being measured.
+    // Without an explicit zero basis, its intrinsic viewport can temporarily
+    // cover the existing branch during the first layout pass.
+    await settleSplitLayout(splitContainer);
     currentTab.panes.push(newPtyId);
+    // A split nests the new pane, so appending is not necessarily where it
+    // ended up on screen. Re-derive so the list matches the layout.
+    syncTabPaneOrder(currentTab);
     const nti = terminals.get(newPtyId);
-    if (nti) nti.session = { kind: "local", shell: splitShell || null, cwd: cwd || null };
+    if (nti) nti.session = { kind: "local", shell: splitShell || null, cwd: nti.cwd || cwd || null };
     refreshSessionList();
 
     // Refit all panes in this tab, then re-assert the bottom pin — the spawn
     // spans several frames, past the repin scheduled at the DOM move.
-    await new Promise((r) => requestAnimationFrame(r));
-    refitAllPanes();
     repin();
     return newPtyId;
   } catch (err) {
     toast("Split failed: " + err, true);
+  } finally {
+    splitInProgress = false;
   }
 }
 
@@ -5015,6 +6340,15 @@ function flipSplitDirection() {
   const toVertical = c.classList.contains("horizontal");
   c.classList.toggle("horizontal", !toVertical);
   c.classList.toggle("vertical", toVertical);
+  // The axis changed: an equalize pin for the old axis (width:0 in a row,
+  // height:0 in a column) would collapse every pane against the new axis.
+  // Clear the pins but keep each pane's flex ratio.
+  for (const kid of kids) {
+    kid.style.width = "";
+    kid.style.height = "";
+    kid.style.maxWidth = "";
+    kid.style.maxHeight = "";
+  }
   refitAllPanes();
   saveSessionNow();
 }
@@ -5118,17 +6452,10 @@ function closePane(ptyId) {
   terminals.delete(ptyId);
   tab.panes = tab.panes.filter((p) => p !== ptyId);
 
-  // If split container now has only one child (+ divider), unwrap it — a
-  // reparent of the surviving pane/subtree, so preserve its bottom pin.
+  // Collapse the split this pane left behind — that reparents the surviving
+  // pane/subtree, so preserve its bottom pin.
   const repin = captureBottomPins();
-  const divider = splitContainer.querySelector(".pane-divider");
-  if (divider) divider.remove();
-
-  const remaining = splitContainer.children[0];
-  if (remaining && splitContainer.parentElement) {
-    splitContainer.parentElement.replaceChild(remaining, splitContainer);
-    if (remaining.style) remaining.style.flex = "1";
-  }
+  collapseSplitContainer(splitContainer, tab);
 
   // Focus another pane
   if (tab.panes.length > 0) {
@@ -5160,7 +6487,10 @@ function findTabForPane(ptyId) {
 }
 
 // Move a pane (session) from its current tab into another tab (drag in the list).
-function movePaneToTab(ptyId, targetTabIdx) {
+// Move a pane into another tab. `dropTargetId` is the session it was dropped
+// onto, which decides where in that tab's layout it lands; dropping on the tab
+// header instead leaves it null and the pane goes to the end as before.
+function movePaneToTab(ptyId, targetTabIdx, dropTargetId = null, after = true) {
   const srcTab = findTabForPane(ptyId);
   const dstTab = tabs.get(targetTabIdx);
   if (!srcTab || !dstTab || srcTab.tabIdx === targetTabIdx) return;
@@ -5176,18 +6506,30 @@ function movePaneToTab(ptyId, targetTabIdx) {
     detachAndCollapse(leaf, srcTab);
     srcTab.panes = srcTab.panes.filter((p) => p !== ptyId);
 
-    // Append into the destination root as a new split column/row.
     const dstRoot = dstTab.rootEl;
-    if (dstRoot.children.length > 0) {
-      const vertical = dstRoot.classList.contains("vertical");
-      const divider = document.createElement("div");
-      divider.className = "pane-divider";
-      dstRoot.appendChild(divider);
-      setupDividerDrag(divider, dstRoot, vertical ? "vertical" : "horizontal");
+    const dropTarget =
+      dropTargetId != null && dstTab.panes.includes(dropTargetId)
+        ? terminals.get(dropTargetId)
+        : null;
+    const placed =
+      !!dropTarget && insertLeafBeside(leaf, dropTarget.paneEl, after);
+    if (!placed) {
+      // Append into the destination root as a new split column/row.
+      // The arriving leaf may carry an equalize width/height pin from its
+      // old tab — clear it or it collapses to a strip in the new layout.
+      resetSplitChildSizing(leaf);
+      if (dstRoot.children.length > 0) {
+        const vertical = dstRoot.classList.contains("vertical");
+        const divider = document.createElement("div");
+        divider.className = "pane-divider";
+        dstRoot.appendChild(divider);
+        setupDividerDrag(divider, dstRoot, vertical ? "vertical" : "horizontal");
+      }
+      leaf.style.flex = "1";
+      dstRoot.appendChild(leaf);
     }
-    leaf.style.flex = "1";
-    dstRoot.appendChild(leaf);
     dstTab.panes.push(ptyId);
+    syncTabPaneOrder(dstTab);
 
     // Close the source tab if it has no panes left (and tell the user).
     const srcEmptied = srcTab.panes.length === 0;
@@ -5389,11 +6731,31 @@ function hideDropIndicator() {
   if (ind) ind.style.display = "none";
 }
 
+// A drag that actually moved is followed by a `click` on whatever it started
+// from. The session list uses that click to focus a session, so it has to be
+// able to tell a click apart from the tail of a drag. Cleared on the next
+// mousedown as well, so a drag that ends off any row cannot swallow a later
+// click.
+let paneDragEndedWithMove = false;
+function consumePaneDragClick() {
+  const wasDrag = paneDragEndedWithMove;
+  paneDragEndedWithMove = false;
+  return wasDrag;
+}
+
 function startPaneDrag(srcId, startEvent) {
   startEvent.preventDefault();
+  paneDragEndedWithMove = false;
   let dragging = false;
   let curTarget = null;
   let curPos = null;
+  let curTabIdx = null;
+  let curDropTargetId = null;
+  let curReorderId = null;
+  let curDropAfter = true;
+  const clearTabHighlight = () => {
+    document.querySelectorAll("#terminal-tabs .tab.drop-target").forEach((el) => el.classList.remove("drop-target"));
+  };
   const onMove = (e) => {
     if (!dragging) {
       if (Math.abs(e.clientX - startEvent.clientX) + Math.abs(e.clientY - startEvent.clientY) < 5) return;
@@ -5401,7 +6763,81 @@ function startPaneDrag(srcId, startEvent) {
       document.body.style.cursor = "grabbing";
       document.body.style.userSelect = "none";
     }
+    // 1) Hovering a top tab header → move the session to that tab on drop.
+    const tabEl = (() => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      return el && el.closest ? el.closest("#terminal-tabs .tab[data-id]") : null;
+    })();
+    if (tabEl) {
+      const targetIdx = Number(tabEl.dataset.id);
+      const srcTab = findTabForPane(srcId);
+      if (srcTab && targetIdx !== srcTab.tabIdx && tabs.has(targetIdx)) {
+        curTarget = null;
+        curDropTargetId = null;
+        curReorderId = null;
+        curTabIdx = targetIdx;
+        hideDropIndicator();
+        clearTabHighlight();
+        tabEl.classList.add("drop-target");
+        return;
+      }
+    }
+    clearTabHighlight();
+    curTabIdx = null;
+    curDropTargetId = null;
+    curReorderId = null;
     const el = document.elementFromPoint(e.clientX, e.clientY);
+    // 2) Hovering a session-list row → move into that tab, or, when the row
+    //    belongs to the dragged pane's own tab, reorder within it.
+    //    An agent row counts as its own session: those rows sit between the
+    //    session rows, and a drop aimed at a session should not fall through
+    //    just because it landed on one of that session's agents.
+    const agentRow = el && el.closest ? el.closest(".session-agent[data-owner-pty]") : null;
+    const sessRow = agentRow
+      ? sessionListEl.querySelector(`.session-item[data-pty-id="${agentRow.dataset.ownerPty}"]`)
+      : (el && el.closest ? el.closest(".session-item[data-pty-id]") : null);
+    const sessGroup = el && el.closest ? el.closest(".session-group") : null;
+    if (sessRow) {
+      const targetPty = Number(sessRow.dataset.ptyId);
+      const dstTab = Number.isFinite(targetPty) ? findTabForPane(targetPty) : null;
+      const srcTab = findTabForPane(srcId);
+      if (dstTab && srcTab && targetPty !== srcId) {
+        curTarget = null;
+        curPos = null;
+        const rect = sessRow.getBoundingClientRect();
+        curDropAfter = (e.clientY - rect.top) > rect.height / 2;
+        if (dstTab.tabIdx === srcTab.tabIdx) {
+          curReorderId = targetPty;
+        } else {
+          curTabIdx = dstTab.tabIdx;
+          curDropTargetId = targetPty;
+        }
+        sessRow.classList.toggle("drop-below", curDropAfter);
+        sessRow.classList.toggle("drop-above", !curDropAfter);
+        hideDropIndicator();
+        return;
+      }
+      sessRow.classList.remove("drop-above", "drop-below");
+    }
+    document.querySelectorAll(".session-item.drop-above,.session-item.drop-below").forEach((row) => {
+      if (row !== sessRow) row.classList.remove("drop-above", "drop-below");
+    });
+    if (!sessRow && sessGroup) {
+      const groupTabIdx = Number(sessGroup.dataset.tabIdx);
+      const srcTab = findTabForPane(srcId);
+      if (Number.isFinite(groupTabIdx) && tabs.has(groupTabIdx) && srcTab && groupTabIdx !== srcTab.tabIdx) {
+        curTarget = null;
+        curPos = null;
+        curDropTargetId = null;
+        curTabIdx = groupTabIdx;
+        sessGroup.classList.add("drop-target");
+        hideDropIndicator();
+        return;
+      }
+    }
+    document.querySelectorAll(".session-group.drop-target").forEach((g) => {
+      if (g !== sessGroup) g.classList.remove("drop-target");
+    });
     const leaf = el && el.closest ? el.closest(".pane-leaf") : null;
     const tid = leaf && leaf.dataset && leaf.dataset.ptyId ? Number(leaf.dataset.ptyId) : null;
     if (leaf && tid && tid !== srcId && terminals.has(tid)) {
@@ -5419,7 +6855,25 @@ function startPaneDrag(srcId, startEvent) {
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
     hideDropIndicator();
-    if (dragging && curTarget != null) movePane(srcId, curTarget, curPos);
+    clearTabHighlight();
+    document.querySelectorAll(".session-item.drop-above,.session-item.drop-below,.session-group.drop-target").forEach((row) => row.classList.remove("drop-above", "drop-below", "drop-target"));
+    if (!dragging) return;
+    // Tell the session list's click handler that this was a drag, not a click.
+    paneDragEndedWithMove = true;
+    // Dropped on another tab's header / session-list row / group → move there.
+    if (curTabIdx != null) {
+      const srcTab = findTabForPane(srcId);
+      if (srcTab && srcTab.tabIdx !== curTabIdx) movePaneToTab(srcId, curTabIdx, curDropTargetId, curDropAfter);
+      return;
+    }
+    // Dropped on a session row of its own tab → reorder inside that tab. Which
+    // half of the row took the drop decides whether it lands before or after.
+    if (curReorderId != null) {
+      const srcTab = findTabForPane(srcId);
+      if (srcTab) reorderSessionWithin(srcTab, srcId, curReorderId, curDropAfter);
+      return;
+    }
+    if (curTarget != null) movePane(srcId, curTarget, curPos);
   };
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
@@ -5430,18 +6884,71 @@ function startPaneDrag(srcId, startEvent) {
 function detachAndCollapse(leaf, tab) {
   const container = leaf.parentElement;
   leaf.remove();
-  if (!container) return;
-  const divider = [...container.children].find(
-    (c) => c.classList && c.classList.contains("pane-divider")
-  );
-  if (divider) divider.remove();
-  const remaining = container.children[0];
-  if (remaining) {
-    if (container.parentElement && container !== tab.rootEl) {
-      container.parentElement.replaceChild(remaining, container);
+  collapseSplitContainer(container, tab);
+}
+
+// Pane ids in the order they appear on screen. `tab.panes` drives the session
+// list, so deriving it from the layout is what keeps the list from claiming an
+// order the panes do not have.
+function panesInLayoutOrder(tab) {
+  if (!tab || !tab.rootEl) return tab && tab.panes ? [...tab.panes] : [];
+  const onScreen = [...tab.rootEl.querySelectorAll(".pane-leaf")]
+    .map((el) => Number(el.dataset.ptyId))
+    .filter((id) => terminals.has(id));
+  // A pane that is somehow not under this root still belongs to the tab —
+  // keep it rather than dropping it out of the list entirely.
+  const missing = (tab.panes || []).filter((id) => terminals.has(id) && !onScreen.includes(id));
+  return [...onScreen, ...missing];
+}
+function syncTabPaneOrder(tab) {
+  if (tab) tab.panes = panesInLayoutOrder(tab);
+}
+
+// Place `leaf` next to `targetLeaf`, matching how that part of the layout is
+// already arranged.
+//
+// A vertical stack takes the arrival as a flat sibling at the drop point, so
+// every pane keeps an equal share — nesting there would halve just the pane
+// that was dropped on. A horizontal row has no "between" that reads as the
+// drop position, so the dropped-on pane splits and the arrival goes
+// underneath it. Either way the session's place in the list is its place on
+// screen. Returns false when there is nothing to attach to.
+function insertLeafBeside(leaf, targetLeaf, after) {
+  const parent = targetLeaf && targetLeaf.parentElement;
+  if (!parent || leaf === targetLeaf) return false;
+  leaf.style.flex = "1 1 0";
+  // The arrival always lands in a column (stacked) container — either the
+  // parent already is one or a new one is built below. A stale equalize
+  // width pin would collapse it to a left-edge strip, so drop the cross-axis
+  // pin (main-axis height pins are left alone).
+  leaf.style.width = "";
+  leaf.style.maxWidth = "";
+  const divider = document.createElement("div");
+  divider.className = "pane-divider";
+
+  if (parent.classList.contains("vertical")) {
+    if (after) {
+      parent.insertBefore(leaf, targetLeaf.nextSibling);
+      parent.insertBefore(divider, leaf);
+    } else {
+      parent.insertBefore(leaf, targetLeaf);
+      parent.insertBefore(divider, targetLeaf);
     }
-    if (remaining.style) remaining.style.flex = "1";
+    setupDividerDrag(divider, parent, "vertical");
+    normalizeSplitChildren(parent);
+    return true;
   }
+
+  const split = document.createElement("div");
+  split.className = "pane-container vertical";
+  split.style.cssText = "flex:1 1 0;min-width:0;min-height:0;";
+  parent.replaceChild(split, targetLeaf);
+  targetLeaf.style.flex = "1 1 0";
+  if (after) split.append(targetLeaf, divider, leaf);
+  else split.append(leaf, divider, targetLeaf);
+  setupDividerDrag(divider, split, "vertical");
+  normalizeSplitChildren(split);
+  return true;
 }
 
 // Move `srcId` next to `targetId` on the given side (top/bottom/left/right),
@@ -5470,19 +6977,20 @@ function movePane(srcId, targetId, position) {
 
   const split = document.createElement("div");
   split.className = `pane-container ${vertical ? "vertical" : "horizontal"}`;
-  split.style.cssText = "flex:1;";
+  split.style.cssText = "flex:1 1 0;min-width:0;min-height:0;";
   parent.replaceChild(split, targetLeaf);
 
   const divider = document.createElement("div");
   divider.className = "pane-divider";
-  srcLeaf.style.flex = "1";
-  targetLeaf.style.flex = "1";
+  srcLeaf.style.flex = "1 1 0";
+  targetLeaf.style.flex = "1 1 0";
 
   if (before) {
     split.append(srcLeaf, divider, targetLeaf);
   } else {
     split.append(targetLeaf, divider, srcLeaf);
   }
+  normalizeSplitChildren(split);
   setupDividerDrag(divider, split, vertical ? "vertical" : "horizontal");
   repin();
 
@@ -5514,14 +7022,28 @@ async function connectSshFields(targetVal, portVal, password, keyfile, tmux, tmu
   return true;
 }
 
+// When set, the SSH modal is not opening a new session — it is collecting the
+// password for a pane whose ssh command we already adopted.
+let sshModalSftpOnlyPaneId = null;
+
 // ── "+ SSH" modal — open a new SSH connection at any time ──
-function openSshModal() {
+function openSshModal(prefill = null) {
   const m = document.getElementById("ssh-modal");
   if (!m) return;
-  // The native browser overlay floats above all HTML; hide it so the modal shows.
-  if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
+  // External browser pages cannot cover Mymux dialogs.
+  sshModalSftpOnlyPaneId = prefill?.forPaneId ?? null;
+  if (prefill) {
+    const addr = document.getElementById("ssh-modal-input");
+    const port = document.getElementById("ssh-modal-port");
+    if (addr) addr.value = `${prefill.username}@${prefill.host}`;
+    if (port) port.value = String(prefill.port);
+  }
   m.classList.remove("hidden");
-  const inp = document.getElementById("ssh-modal-input");
+  // The address is already known for an adopted pane — go straight to the
+  // one thing we are missing.
+  const inp = prefill
+    ? document.getElementById("ssh-modal-password")
+    : document.getElementById("ssh-modal-input");
   if (inp) inp.focus();
 }
 
@@ -5532,13 +7054,40 @@ function closeSshModal() {
   const pw = document.getElementById("ssh-modal-password");
   if (pw) pw.value = "";
   // Restore the native browser overlay only if we're still on the browser view.
-  if (browserTabActive && browserMode === "native") openNativePane();
+    if (browserTabActive && browserMode === "native") showBrowserStart("external");
+  sshModalSftpOnlyPaneId = null;
 }
 
 async function submitSshModal() {
+  const password = document.getElementById("ssh-modal-password").value;
+  // Adopted pane: the shell is already connected, so attach SFTP to it
+  // instead of opening another session in a new tab.
+  if (sshModalSftpOnlyPaneId != null) {
+    const paneId = sshModalSftpOnlyPaneId;
+    const target = terminals.get(paneId)?.adoptedSsh;
+    if (!target) {
+      closeSshModal();
+      return;
+    }
+    const sftpId = await attachSftpToPane(
+      paneId,
+      {
+        host: target.host,
+        port: target.port,
+        username: target.user,
+        password,
+        keyPath: target.keyPath,
+      },
+      true, // the user asked for this one, so a failure may speak up
+    );
+    if (sftpId != null) {
+      if (focusedPaneId === paneId) showExplorerForSession(paneId);
+      closeSshModal();
+    }
+    return;
+  }
   const target = document.getElementById("ssh-modal-input").value;
   const port = document.getElementById("ssh-modal-port").value;
-  const password = document.getElementById("ssh-modal-password").value;
   const keyfile = document.getElementById("ssh-modal-keyfile").value;
   const save = document.getElementById("ssh-save-info");
   const tmux = document.getElementById("ssh-tmux");
@@ -5673,9 +7222,10 @@ function renderSshFavs() {
   const list = document.getElementById("ssh-fav-list");
   if (!list) return;
   list.innerHTML = "";
-  for (const f of getSshFavs()) {
+  for (const [favoriteIndex, f] of getSshFavs().entries()) {
     const li = document.createElement("li");
     li.className = "ssh-fav-item";
+    li.dataset.favoriteIndex = String(favoriteIndex);
     const label = f.target + (f.tmux ? ` (tmux${f.tmuxName ? ":" + f.tmuxName : ""})` : "") + (f.keyPath ? " 🔑" : "");
     li.innerHTML = `<span class="ssh-fav-star">★</span><span class="ssh-fav-name"></span><button class="ssh-fav-x" title="Remove favorite">×</button>`;
     li.querySelector(".ssh-fav-name").textContent = label;
@@ -5687,6 +7237,7 @@ function renderSshFavs() {
     });
     list.appendChild(li);
   }
+  scheduleSessionsWindowSnapshot();
 }
 function connectSshFav(f) {
   const parts = (f.target || "").split("@");
@@ -5775,9 +7326,100 @@ function detachPaneSftp(ptyId) {
   }
 }
 
+// A pane is "remote" when its shell lives on another machine — either because
+// Mymux opened the SSH session itself (type "ssh") or because the user typed
+// `ssh …` at the prompt and we adopted it (adoptedSsh). The Explorer, the cd
+// sync, the shell-syntax choice and the local-only Codex lookups all key off
+// this, so they must not test `type` directly.
+function isRemotePane(t) {
+  return t?.type === "ssh" || t?.adoptedSsh != null;
+}
+
+// The user typed `ssh …` at a local prompt. Mymux did not open that session,
+// so nothing has attached SFTP to it and the Explorer is still showing the
+// local disk. Work out what the command connects to and open an SFTP session
+// beside it, exactly as `+ SSH` would have.
+//
+// This is not something the user asked for, so it stays quiet: a command we
+// cannot resolve, or a connection we cannot make, leaves the pane local.
+async function adoptTypedSsh(typed, ptyId) {
+  const t = terminals.get(ptyId);
+  if (!t || isRemotePane(t)) return; // already remote — nothing to adopt
+  let target = null;
+  try {
+    target = await invoke("ssh_resolve_command", { command: typed });
+  } catch {
+    return;
+  }
+  if (!target) return;
+  const live = terminals.get(ptyId);
+  if (!live || isRemotePane(live)) return; // the pane changed while we asked
+  live.adoptedSsh = target;
+  live.sshTarget = `${target.user}@${target.host}`;
+  // Remember where the local shell was. The remote cd sync overwrites `cwd`,
+  // so without this the Explorer would show a server path after `exit`.
+  live.localCwdBeforeSsh = live.cwd || null;
+  // The row's globe icon and its `SSH: …` label both read the state we just
+  // changed, so the list has to be redrawn to show them.
+  refreshSessionList();
+  if (!target.keyPath) {
+    // Password auth: SFTP is a separate connection and cannot reuse whatever
+    // the terminal just authenticated with. Offer the connection instead.
+    live.sftpStatus = "needs-password";
+    if (focusedPaneId === ptyId) showExplorerBlockedForSession(ptyId, live);
+    return;
+  }
+  const sftpId = await attachSftpToPane(
+    ptyId,
+    { host: target.host, port: target.port, username: target.user, keyPath: target.keyPath },
+    false, // announce=false — the user did not ask for this
+  );
+  if (sftpId == null) {
+    // The key did not work, the host refused, the pane closed. Give the pane
+    // back to the local Explorer rather than leaving it on a blocked screen
+    // it never asked to see.
+    //
+    // Say why, once per pane and target. We resolved the host, so this is a
+    // connection we genuinely tried and failed — staying completely silent is
+    // what made "the Explorer just doesn't follow my ssh" impossible to
+    // diagnose. An unresolvable command still says nothing at all.
+    const failed = terminals.get(ptyId);
+    const reason = failed?.sftpError || "";
+    const attempted = `${target.user}@${target.host}:${target.port}`;
+    releaseTypedSsh(ptyId);
+    if (failed && reason && failed.sftpAdoptWarnedFor !== attempted) {
+      failed.sftpAdoptWarnedFor = attempted;
+      toast(`${attempted} 탐색기 연동 실패 — ${reason}`, true);
+    }
+    return;
+  }
+  if (focusedPaneId === ptyId) showExplorerForSession(ptyId);
+}
+
+// The adopted session ended. Drop the SFTP connection with it so the Explorer
+// goes back to the local disk instead of showing a server the shell already
+// left. A disconnect we miss (the server hanging up, say) is not fatal — the
+// Explorer's source dropdown still switches back by hand.
+function releaseTypedSsh(ptyId) {
+  const t = terminals.get(ptyId);
+  if (!t?.adoptedSsh) return;
+  t.adoptedSsh = null;
+  t.sshTarget = null;
+  t.sftpStatus = null;
+  t.remotePath = null;
+  if (t.localCwdBeforeSsh) {
+    t.cwd = t.localCwdBeforeSsh;
+    t.localCwdBeforeSsh = null;
+  }
+  if (t.session) t.session.remotePath = null;
+  detachPaneSftp(ptyId);
+  refreshSessionList(); // drop the globe icon and the `SSH: …` label again
+  if (focusedPaneId === ptyId) showExplorerForSession(ptyId);
+}
+
 async function attachSftpToPane(ptyId, credentials, announce = true) {
   const t = terminals.get(ptyId);
-  if (!t || t.type !== "ssh") return null;
+  if (!t || !isRemotePane(t)) return null;
   detachPaneSftp(ptyId);
   const token = t.sftpConnectToken;
   t.sftpStatus = "connecting";
@@ -5794,8 +7436,10 @@ async function attachSftpToPane(ptyId, credentials, announce = true) {
     live.sftpId = sftpId;
     live.sftpStatus = "connected";
     live.sftpError = null;
-    let initialPath = live.remotePath || live.session?.remotePath ||
-      live.cwd || live.session?.cwd || null;
+    // Never reuse the local SSH PTY cwd as a remote SFTP path. It can be a
+    // Windows path or a stale local restore value and makes the first listing
+    // fail even though SSH/SFTP itself connected successfully.
+    let initialPath = live.remotePath || live.session?.remotePath || null;
     if (initialPath) {
       try {
         initialPath = await invoke("sftp_resolve_dir", { sessionId: sftpId, path: initialPath });
@@ -5828,8 +7472,13 @@ async function attachSftpToPane(ptyId, credentials, announce = true) {
     live.sftpStatus = isSftpUnsupportedError(error) ? "unsupported" : "error";
     live.sftpError = String(error);
     if (focusedPaneId === ptyId) showExplorerBlockedForSession(ptyId, live);
-    if (live.sftpStatus === "unsupported") showSftpUnsupportedModal();
-    else if (announce) toast("SSH opened. SFTP: " + error, true);
+    // `announce` also means "the user asked for this connection". An adopted
+    // session did not ask, so it must not raise a modal or a toast about a
+    // failure the user never initiated.
+    if (announce) {
+      if (live.sftpStatus === "unsupported") showSftpUnsupportedModal();
+      else toast("SSH opened. SFTP: " + error, true);
+    }
     return null;
   }
 }
@@ -5845,7 +7494,7 @@ async function doSshConnect(opts) {
   tabEl.className = "terminal-instance active";
   const rootContainer = document.createElement("div");
   rootContainer.className = "pane-container horizontal";
-  rootContainer.style.cssText = "flex:1;";
+  rootContainer.style.cssText = "flex:1 1 0;min-width:0;min-height:0;";
   tabEl.appendChild(rootContainer);
   terminalContainer.appendChild(tabEl);
 
@@ -5870,9 +7519,11 @@ async function doSshConnect(opts) {
       keyPath: keyPath || null, auth,
       tmux: !!opts.tmux, tmuxName: (opts.tmuxName || "").trim() || null,
       lastCmd: opts.lastCmd || null, // carried through restore so re-run works over SSH
-      memo: opts.memo || null,       // scratch memo rides restore too
+      memos: normalizeMemos(opts),   // scratch memos ride restore too
+      activeMemoId: opts.activeMemoId || null,
+      sessionKey: opts.sessionKey || null,
     };
-    const ptyId = await createPane(rootContainer, "ssh", sshArgs);
+    const ptyId = await createPane(rootContainer, "ssh", sshArgs, undefined, opts.sessionKey || null);
     terminals.get(ptyId).sshTarget = target;
     terminals.get(ptyId).session = sessionMeta;
     markMemoIndicator(ptyId);
@@ -5909,29 +7560,137 @@ function applyBrowserEnabled() {
   const tab = document.getElementById("browser-tab");
   if (tab) tab.style.display = on ? "" : "none";
   const btn = document.getElementById("btn-toggle-browser");
-  if (btn) { btn.classList.toggle("active", on); btn.title = on ? "Turn off browser" : "Turn on browser"; }
+  if (btn) { btn.classList.toggle("active", on); btn.title = on && browserTabActive ? "Turn off browser" : "Open browser"; }
   if (!on) {
-    // Turning the browser off is also the escape hatch for a stuck native
-    // overlay: leave the view if open, and force-hide the child WebView either way.
+    // Leave the browser panel if open. External pages live in a separate OS window.
     if (browserTabActive) setBrowserView(false);
-    else invoke("browser_pane_hide").catch(() => {});
   }
 }
 function toggleBrowserEnabled() {
-  try { localStorage.setItem("mymux.browserEnabled", browserEnabled() ? "false" : "true"); } catch {}
+  if (browserTogglePending) return;
+  browserTogglePending = true;
+  if (!browserEnabled() || !browserTabActive) {
+    try { localStorage.setItem("mymux.browserEnabled", "true"); } catch {}
+    // Flip the HTML view now; initialize/show WebView after this click returns.
+    applyBrowserEnabled();
+    setTimeout(() => { requestBrowserView(); browserTogglePending = false; }, 0);
+    return;
+  }
+  try { localStorage.setItem("mymux.browserEnabled", "false"); } catch {}
   applyBrowserEnabled();
+  browserTogglePending = false;
+}
+
+const BROWSER_LABELS = {
+  en: { tab: "Browser", address: "Search or enter a web address", go: "Go", home: "Home", title: "Browse inside Mymux", hint: "Enter a website or search above. Your terminal sessions stay open.", loading: "Opening browser…", error: "Could not open the browser. Try again.", retry: "Try again", invalid: "Use an HTTP or HTTPS address", navSending: "Sending navigation request…", navSent: "Navigation request sent. Page-load completion is not tracked.", navFailed: "Could not send the navigation request." },
+  ko: { tab: "브라우저", address: "검색어 또는 웹 주소 입력", go: "이동", home: "홈", title: "Mymux 안에서 웹 탐색", hint: "웹 주소나 검색어를 입력하세요. 터미널 세션은 그대로 유지됩니다.", loading: "브라우저를 여는 중…", error: "브라우저를 열지 못했습니다. 다시 시도해 주세요.", retry: "다시 시도", invalid: "HTTP 또는 HTTPS 주소를 입력하세요", navSending: "주소 요청을 보내는 중…", navSent: "브라우저에 주소 요청을 보냈습니다. 페이지 로드 완료 여부는 추적하지 않습니다.", navFailed: "브라우저에 주소 요청을 보내지 못했습니다." },
+  ja: { tab: "ブラウザー", address: "検索またはウェブアドレスを入力", go: "移動", home: "ホーム", title: "Mymux 内でウェブを閲覧", hint: "ウェブアドレスまたは検索語を入力してください。ターミナルセッションは開いたままです。", loading: "ブラウザーを開いています…", error: "ブラウザーを開けませんでした。もう一度お試しください。", retry: "再試行", invalid: "HTTP または HTTPS のアドレスを入力してください", navSending: "移動リクエストを送信しています…", navSent: "移動リクエストを送信しました。ページの読み込み完了は追跡していません。", navFailed: "移動リクエストを送信できませんでした。" },
+  zh: { tab: "浏览器", address: "搜索或输入网址", go: "前往", home: "主页", title: "在 Mymux 中浏览网页", hint: "请输入网址或搜索词。终端会话将保持打开。", loading: "正在打开浏览器…", error: "无法打开浏览器，请重试。", retry: "重试", invalid: "请输入 HTTP 或 HTTPS 地址", navSending: "正在发送导航请求…", navSent: "已发送导航请求。不会跟踪页面是否加载完成。", navFailed: "无法发送导航请求。" },
+};
+const BROWSER_IMPORT_PROMPT_LABELS = {
+  en: {
+    title: "Import from another browser?",
+    copy: "Bring your Chrome or Edge profile into Mymux. Importing bookmarks and history is optional, and login data is copied only after your explicit consent. You can start this later from the Browser panel’s Import section.",
+    platform: "Browser profile and data import is currently available on Windows. On macOS or Linux, you can continue without importing.",
+    now: "Import now",
+    later: "Later",
+  },
+  ko: {
+    title: "다른 브라우저에서 가져올까요?",
+    copy: "Chrome 또는 Edge 프로필을 Mymux에서 사용할 수 있습니다. 북마크와 방문 기록은 선택 항목이며, 로그인 정보는 별도 동의 후에만 복사됩니다. 지금 건너뛰어도 브라우저 화면의 Import 항목에서 나중에 시작할 수 있습니다.",
+    platform: "브라우저 프로필 및 데이터 가져오기는 현재 Windows에서 지원합니다. macOS와 Linux에서는 가져오지 않고 계속할 수 있습니다.",
+    now: "지금 가져오기",
+    later: "나중에",
+  },
+  ja: {
+    title: "別のブラウザーからインポートしますか？",
+    copy: "Chrome または Edge のプロファイルを Mymux で使用できます。ブックマークと履歴は任意で、ログイン情報は明示的な同意後にのみコピーされます。後でブラウザーパネルの Import から開始できます。",
+    platform: "ブラウザープロファイルとデータのインポートは現在 Windows で利用できます。macOS または Linux ではインポートせずに続行できます。",
+    now: "今すぐインポート",
+    later: "後で",
+  },
+  zh: {
+    title: "要从其他浏览器导入吗？",
+    copy: "可以在 Mymux 中使用 Chrome 或 Edge 配置文件。书签和历史记录为可选项，只有在你明确同意后才会复制登录数据。稍后可在浏览器面板的 Import 中开始。",
+    platform: "浏览器配置文件和数据导入目前仅支持 Windows。macOS 或 Linux 用户可以暂不导入并继续。",
+    now: "立即导入",
+    later: "稍后",
+  },
+};
+const BROWSER_IMPORT_PROMPT_SEEN_KEY = "mymux.browserImportPromptSeen.v1";
+function browserText(key) {
+  const language = (navigator.language || "en").split("-")[0];
+  return (BROWSER_LABELS[language] || BROWSER_LABELS.en)[key];
+}
+function browserImportPromptText(key) {
+  const language = (navigator.language || "en").split("-")[0];
+  return (BROWSER_IMPORT_PROMPT_LABELS[language] || BROWSER_IMPORT_PROMPT_LABELS.en)[key];
+}
+function finishBrowserImportPrompt(importNow) {
+  const modal = document.getElementById("browser-import-prompt");
+  modal?.classList.add("hidden");
+  try { localStorage.setItem(BROWSER_IMPORT_PROMPT_SEEN_KEY, "1"); } catch {}
+  if (!importNow) { openManagedBrowser(); return; }
+  setBrowserMode("ai");
+  setBrowserView(true);
+  const details = document.getElementById("browser-import-details");
+  if (details) details.open = true;
+  if (IS_WINDOWS) scanBrowserProfiles();
+  else toast(browserImportPromptText("platform"), true);
+}
+function requestBrowserView() {
+  // Selecting the browser should switch views immediately. Profile import is
+  // optional and remains available from the Browser panel's Import section.
+  try { localStorage.setItem(BROWSER_IMPORT_PROMPT_SEEN_KEY, "1"); } catch {}
+  openManagedBrowser();
+}
+async function openManagedBrowser() {
+  if (browserMode !== "ai") setBrowserMode("ai");
+  setBrowserView(true);
+  showBrowserStart("loading");
+  try {
+    const status = await invoke("browser_status");
+    if (!status?.running) await launchBrowser();
+  } catch {
+    await launchBrowser();
+  }
+}
+
+function resolveBrowserInput(input) {
+  const text = String(input || "").trim();
+  if (!text) return null;
+  let candidate;
+  if (/^https?:\/\//i.test(text)) candidate = text;
+  else if (/^(localhost|\[[0-9a-f:]+\]|(?:\d{1,3}\.){3}\d{1,3})(?=[:/\?#]|$)/i.test(text)) candidate = "http://" + text;
+  else if (/^[^\s/:]+\.[^\s/:]+(?=[:/\?#]|$)/.test(text)) candidate = "https://" + text;
+  else if (/^[a-z][a-z0-9+.-]*:/i.test(text)) throw Error(browserText("invalid"));
+  else return "https://www.google.com/search?q=" + encodeURIComponent(text);
+  const parsed = new URL(candidate);
+  if (!parsed.hostname || !["http:", "https:"].includes(parsed.protocol)) throw Error(browserText("invalid"));
+  return parsed.href;
 }
 
 function initBrowserPanel() {
+  document.querySelectorAll("[data-browser-text]").forEach(node => { node.textContent = browserText(node.dataset.browserText); });
+  for (const id of ["nav-url", "browser-start-input"]) {
+    const input = document.getElementById(id);
+    input.placeholder = browserText("address");
+    input.setAttribute("aria-label", browserText("address"));
+  }
+  document.getElementById("nav-home").title = browserText("home");
+  document.getElementById("nav-home").setAttribute("aria-label", browserText("home"));
   // Persistent Browser tab pinned at the left of the tab strip.
   const tab = document.createElement("div");
   tab.className = "browser-tab";
   tab.id = "browser-tab";
-  tab.innerHTML = `${ICON.globe}<span>Browser</span><span class="tab-close" title="Close">&times;</span>`;
-  tab.title = "Playwright/CDP browser";
+  tab.innerHTML = `${ICON.globe}<span>${browserText("tab")}</span><span class="tab-close" title="Close">&times;</span>`;
+  tab.title = browserText("tab");
+  tab.tabIndex = 0;
+  tab.setAttribute("role", "button");
+  tab.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); requestBrowserView(); } });
   tab.addEventListener("click", (e) => {
     if (e.target.classList.contains("tab-close")) { setBrowserView(false); return; }
-    setBrowserView(true);
+    requestBrowserView();
   });
   terminalTabs.prepend(tab);
 
@@ -5944,6 +7703,13 @@ function initBrowserPanel() {
   document.getElementById("browser-port").addEventListener("input", () => updateBrowserInfo());
   document.getElementById("btn-browser-profile-scan").addEventListener("click", scanBrowserProfiles);
   document.getElementById("btn-browser-profile-import").addEventListener("click", importBrowserProfile);
+  document.getElementById("btn-browser-data-import").addEventListener("click", importBrowserData);
+  document.getElementById("browser-import-prompt-now").addEventListener("click", () => finishBrowserImportPrompt(true));
+  document.getElementById("browser-import-prompt-later").addEventListener("click", () => finishBrowserImportPrompt(false));
+  const importPrompt = document.getElementById("browser-import-prompt");
+  importPrompt.addEventListener("click", (event) => { if (event.target === importPrompt) finishBrowserImportPrompt(false); });
+  importPrompt.addEventListener("keydown", (event) => { if (event.key === "Escape") finishBrowserImportPrompt(false); });
+  setupBrowserDataModal();
   document.querySelectorAll("#browser-panel .copy-btn").forEach((btn) => {
     btn.addEventListener("click", () => copyBrowserField(btn.dataset.copy));
   });
@@ -5955,36 +7721,39 @@ function initBrowserPanel() {
   // Native address bar
   const navUrl = document.getElementById("nav-url");
   document.getElementById("nav-go").addEventListener("click", () => nativeNavigate(navUrl.value));
-  navUrl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") nativeNavigate(navUrl.value);
+  navUrl.addEventListener("focus", () => navUrl.select());
+  navUrl.addEventListener("input", () => { nativeAddressDirty = navUrl.value !== nativeCurrentUrl; });
+  document.getElementById("nav-home").addEventListener("click", showBrowserHome);
+  document.getElementById("browser-start-form").addEventListener("submit", e => {
+    e.preventDefault(); nativeNavigate(document.getElementById("browser-start-input").value);
   });
-  document.getElementById("nav-back").addEventListener("click", () => invoke("browser_pane_back").catch(() => {}));
-  document.getElementById("nav-forward").addEventListener("click", () => invoke("browser_pane_forward").catch(() => {}));
-  document.getElementById("nav-reload").addEventListener("click", () => invoke("browser_pane_reload").catch(() => {}));
-
-  // Keep the native overlay aligned with its viewport box on any layout change.
-  const vp = document.getElementById("browser-viewport");
-  if (window.ResizeObserver) new ResizeObserver(() => scheduleSync()).observe(vp);
-  window.addEventListener("resize", scheduleSync);
-
-  // Reflect link-click navigation back into the address bar (when not editing).
-  setInterval(async () => {
-    if (!browserTabActive || browserMode !== "native") return;
-    if (document.activeElement === navUrl) return;
-    try {
-      const u = await invoke("browser_pane_url");
-      if (u) {
-        nativeCurrentUrl = u;
-        navUrl.value = u;
-      }
-    } catch {}
-  }, 1500);
+  document.getElementById("browser-retry").addEventListener("click", () => nativeNavigate(nativeCurrentUrl));
+  navUrl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) nativeNavigate(navUrl.value);
+  });
+  document.getElementById("nav-back").addEventListener("click", () => {
+    if (browserMode === "ai") cdpSend("Runtime.evaluate", { expression: "history.back()" });
+  });
+  document.getElementById("nav-forward").addEventListener("click", () => {
+    if (browserMode === "ai") cdpSend("Runtime.evaluate", { expression: "history.forward()" });
+  });
+  document.getElementById("nav-reload").addEventListener("click", () => {
+    if (browserMode === "ai") cdpSend("Page.reload");
+  });
 
   setBrowserMode("native");
   updateBrowserInfo();
+  invoke("browser_control_info").then(info => {
+    const node = document.getElementById("browser-local-control");
+    if (node && info.helper) {
+      node.hidden = false;
+      updateBrowserControlCommand();
+      node.querySelector(".browser-local-endpoint").textContent = `CLI helper: ${info.helper} · default endpoint: ${info.endpoint || "http://127.0.0.1:9222"}`;
+    }
+  }).catch(() => {});
   setInterval(() => {
     if (browserTabActive && browserMode === "ai") refreshBrowserPages();
-  }, 1500);
+  }, 2500);
 }
 
 function setBrowserView(on) {
@@ -5999,22 +7768,21 @@ function setBrowserView(on) {
     if (tab) tab.classList.add("active");
     terminalTabs.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
     if (browserMode === "native") {
-      openNativePane();
+      showBrowserStart("external");
     } else {
       refreshBrowserStatus(); // attaches the screencast if a browser is running
     }
   } else {
+    nativeNavigationSequence += 1;
     panel.classList.add("hidden");
     terminalContainer.style.display = "";
     if (tab) tab.classList.remove("active");
-    // The native webview floats above all HTML, so it MUST hide when the tab
-    // isn't visible; also stop any AI screencast stream.
-    invoke("browser_pane_hide").catch(() => {});
+    // Stop the AI stream when hidden. External browser pages run independently.
     detachScreencast();
-    // Return focus to the terminal so the app is immediately interactive again
-    // (the native overlay holding focus makes the rest of the UI feel inert).
+    // Return focus to the terminal.
     if (activeTermId && terminals.has(activeTermId)) terminals.get(activeTermId).term.focus();
   }
+  applyBrowserEnabled();
 }
 
 function browserPort() {
@@ -6022,17 +7790,27 @@ function browserPort() {
   return Number.isInteger(v) && v >= 1024 && v <= 65535 ? v : 9222;
 }
 
+function updateBrowserControlCommand() {
+  const code = document.querySelector("#browser-local-control code");
+  if (!code) return;
+  const helper = IS_WINDOWS ? '"$env:MYMUX_BROWSER_CONTROL"' : '"$MYMUX_BROWSER_CONTROL"';
+  code.textContent = `node ${helper} targets --endpoint http://127.0.0.1:${browserPort()}`;
+}
+
 function updateBrowserInfo(endpointOverride) {
   const ep = endpointOverride || `http://localhost:${browserPort()}`;
+  updateBrowserControlCommand();
   document.getElementById("browser-endpoint").textContent = ep;
   document.getElementById("browser-mcp-cli").textContent =
-    `npx @playwright/mcp@latest --cdp-endpoint ${ep}`;
+    `npx -y @playwright/mcp@latest --cdp-endpoint ${ep}`;
   document.getElementById("browser-mcp-add").textContent =
-    `claude mcp add playwright -- npx @playwright/mcp@latest --cdp-endpoint ${ep}`;
+    `claude mcp add playwright -- npx -y @playwright/mcp@latest --cdp-endpoint ${ep}`;
 }
 
 function toggleBrowserInfo() {
   browserInfoOpen = !browserInfoOpen;
+  document.getElementById("browser-panel").classList.toggle("browser-settings-open", browserInfoOpen);
+  document.getElementById("btn-browser-info").setAttribute("aria-expanded", String(browserInfoOpen));
   const conn = document.getElementById("browser-conn");
   if (conn) conn.classList.toggle("browser-info-open", browserInfoOpen);
 }
@@ -6047,8 +7825,9 @@ function renderBrowserPages() {
     tab.type = "button";
     tab.className = "browser-page-tab" + (page.targetId === activeBrowserPageId ? " active" : "");
     tab.dataset.targetId = page.targetId;
-    tab.title = page.url || "about:blank";
-    const label = page.url && page.url !== "about:blank" ? page.url.replace(/^https?:\/\//, "").split(/[/?#]/)[0] : "New page";
+    const label = page.title?.trim() || (page.url && page.url !== "about:blank" ? page.url.replace(/^https?:\/\//, "").split(/[/?#]/)[0] : "New page");
+    tab.title = `${label} · ${page.targetId} · ${page.url || "about:blank"}`;
+    tab.setAttribute("aria-label", `Select ${label}`);
     tab.innerHTML = `<span class="browser-page-label"></span><span class="browser-page-close" title="Close">×</span>`;
     tab.querySelector(".browser-page-label").textContent = label || "New page";
     tab.addEventListener("click", (e) => {
@@ -6060,9 +7839,21 @@ function renderBrowserPages() {
   wrap.style.display = browserMode === "ai" && browserPages.length ? "flex" : "none";
 }
 
+let browserPageTargetsPromise = null;
+function getBrowserPageTargets(port = browserPort()) {
+  if (!browserPageTargetsPromise) {
+    browserPageTargetsPromise = invoke("browser_page_targets", { port })
+      .finally(() => { browserPageTargetsPromise = null; });
+  }
+  return browserPageTargetsPromise;
+}
+
+let browserPageRefreshInFlight = false;
 async function refreshBrowserPages() {
+  if (browserPageRefreshInFlight) return;
+  browserPageRefreshInFlight = true;
   try {
-    const pages = await invoke("browser_page_targets", { port: browserPort() });
+    const pages = await getBrowserPageTargets();
     browserPages = Array.isArray(pages) ? pages : [];
     if (!browserPages.some((p) => p.targetId === activeBrowserPageId)) {
       activeBrowserPageId = browserPages[0]?.targetId || null;
@@ -6073,6 +7864,8 @@ async function refreshBrowserPages() {
     browserPages = [];
     activeBrowserPageId = null;
     renderBrowserPages();
+  } finally {
+    browserPageRefreshInFlight = false;
   }
 }
 
@@ -6111,15 +7904,18 @@ async function closeBrowserPage(targetId) {
 
 function applyBrowserStatus(st) {
   const statusEl = document.getElementById("browser-status");
+  const portInput = document.getElementById("browser-port");
   if (st && st.running) {
     statusEl.textContent = `● Running · ${st.browser} · ${st.endpoint}`;
     statusEl.classList.remove("stopped");
     statusEl.classList.add("running");
-    if (st.port) document.getElementById("browser-port").value = st.port;
+    if (st.port) portInput.value = st.port;
+    portInput.disabled = true;
     updateBrowserInfo(st.endpoint);
     refreshBrowserPages();
-    if (browserTabActive) attachScreencast();
+    if (browserTabActive && browserMode === "ai") attachScreencast();
   } else {
+    portInput.disabled = false;
     statusEl.textContent = "○ Stopped";
     statusEl.classList.remove("running");
     statusEl.classList.add("stopped");
@@ -6182,6 +7978,8 @@ async function scanBrowserProfiles() {
     }
     select.disabled = false;
     importBtn.disabled = false;
+    const dataBtn = document.getElementById("btn-browser-data-import");
+    if (dataBtn) dataBtn.disabled = false;
     toast(`${browserImportProfiles.length}개 브라우저 프로필을 찾았습니다.`);
   } catch (e) {
     toast(String(e), true);
@@ -6210,9 +8008,244 @@ async function importBrowserProfile() {
     try { localStorage.setItem("mymux.browserProfileImported.v1", String(browserPort())); } catch {}
     try { localStorage.setItem("mymux.browserImportedBrowser.v1", selected.browser); } catch {}
     if (browserMode !== "ai") setBrowserMode("ai");
+    if (browserTabActive) await launchBrowser();
   } catch (e) {
     toast(String(e), true);
   }
+}
+
+// ── Import Chrome/Edge bookmarks, history and saved passwords ────────────────
+// Read-only against the user's own profile, and only after an explicit consent
+// dialog. Passwords are the sensitive part: the warning names them outright,
+// and the result view keeps them masked until the user reveals one.
+let browserData = null;         // the last import result
+let browserDataKind = "bookmarks"; // which tab of the result modal is shown
+let browserDataImporting = false;
+
+function showBrowserDataImportProgress(selected, kinds, error = "") {
+  const modal = document.getElementById("browser-data-modal");
+  const progress = document.getElementById("browser-import-progress");
+  const results = document.getElementById("browser-data-results");
+  const title = document.getElementById("browser-import-progress-title");
+  const source = document.getElementById("browser-import-progress-source");
+  const selectedKinds = document.getElementById("browser-import-progress-kinds");
+  const message = document.getElementById("browser-import-progress-message");
+  const indicator = document.getElementById("browser-import-progress-indicator");
+  const actions = document.getElementById("browser-import-progress-actions");
+  if (!modal || !progress || !results) return;
+
+  const kindNames = { bookmarks: "북마크", history: "방문 기록", passwords: "저장된 비밀번호" };
+  if (title) title.textContent = error ? "브라우저 정보를 가져오지 못했습니다" : "브라우저 정보를 가져오는 중";
+  if (source) source.textContent = `${selected.browser} · ${selected.name} (${selected.profile})`;
+  if (selectedKinds) selectedKinds.textContent = `가져올 항목: ${kinds.map((kind) => kindNames[kind] || kind).join(", ")}`;
+  if (message) message.textContent = error || "선택한 브라우저 프로필을 읽고 있습니다. 데이터 양에 따라 시간이 걸릴 수 있습니다.";
+  if (indicator) indicator.classList.toggle("hidden", Boolean(error));
+  if (actions) actions.classList.toggle("hidden", !error);
+  progress.classList.remove("hidden");
+  results.classList.add("hidden");
+  modal.setAttribute("aria-labelledby", "browser-import-progress-title");
+  modal.setAttribute("aria-busy", String(!error));
+  modal.classList.remove("hidden");
+  if (error) document.getElementById("browser-import-progress-close")?.focus();
+  else progress.focus();
+}
+
+async function importBrowserData() {
+  if (browserDataImporting) return;
+  const select = document.getElementById("browser-import-profile");
+  const selected = browserImportProfiles.find((p) => p.id === select.value);
+  if (!selected) { toast("먼저 Scan 으로 프로필을 고르세요.", true); return; }
+
+  const kinds = [];
+  if (document.getElementById("bd-bookmarks").checked) kinds.push("bookmarks");
+  if (document.getElementById("bd-history").checked) kinds.push("history");
+  const wantPw = document.getElementById("bd-passwords").checked;
+  if (wantPw) kinds.push("passwords");
+  if (kinds.length === 0) { toast("가져올 항목을 하나 이상 선택하세요.", true); return; }
+
+  // Passwords earn their own, blunter consent line.
+  const lines = [
+    `${selected.browser}의 “${selected.name}” 프로필에서 다음을 읽어옵니다:`,
+    `· ${kinds.map((k) => ({ bookmarks: "북마크", history: "방문 기록", passwords: "저장된 비밀번호" }[k])).join(", ")}`,
+    "",
+    "원본 프로필은 수정하지 않고 읽기만 합니다.",
+  ];
+  if (wantPw) {
+    lines.push("", "⚠ 저장된 비밀번호를 복호화해 화면에 표시합니다. 신뢰할 수 있는 환경에서만 진행하세요.");
+  }
+  if (!window.confirm(lines.join("\n"))) return;
+
+  const btn = document.getElementById("btn-browser-data-import");
+  browserDataImporting = true;
+  if (btn) { btn.disabled = true; btn.textContent = "불러오는 중…"; }
+  showBrowserDataImportProgress(selected, kinds);
+  try {
+    // Let WebView paint the modal before the database read starts.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    browserData = await invoke("browser_import_data", {
+      browser: selected.browser,
+      profile: selected.profile,
+      kinds,
+      consent: true,
+    });
+    showBrowserDataModal(kinds[0]);
+  } catch (e) {
+    showBrowserDataImportProgress(selected, kinds, String(e));
+  } finally {
+    browserDataImporting = false;
+    if (btn) { btn.disabled = false; btn.textContent = "동의하고 불러오기"; }
+  }
+}
+
+function setupBrowserDataModal() {
+  const modal = document.getElementById("browser-data-modal");
+  if (!modal) return;
+  document.getElementById("browser-data-close")?.addEventListener("click", hideBrowserDataModal);
+  document.getElementById("browser-data-ok")?.addEventListener("click", hideBrowserDataModal);
+  document.getElementById("browser-import-progress-close")?.addEventListener("click", hideBrowserDataModal);
+  modal.addEventListener("click", (e) => { if (!browserDataImporting && e.target && e.target.id === "browser-data-modal") hideBrowserDataModal(); });
+  modal.querySelectorAll(".bd-tab").forEach((tab) => {
+    tab.addEventListener("click", () => showBrowserDataModal(tab.dataset.kind));
+  });
+  document.getElementById("browser-data-search")?.addEventListener("input", renderBrowserDataList);
+}
+
+function showBrowserDataModal(kind) {
+  if (!browserData) return;
+  browserDataKind = kind || browserDataKind;
+  const modal = document.getElementById("browser-data-modal");
+  if (!modal) return;
+
+  document.getElementById("browser-import-progress")?.classList.add("hidden");
+  document.getElementById("browser-data-results")?.classList.remove("hidden");
+  modal.setAttribute("aria-labelledby", "browser-data-title");
+  modal.setAttribute("aria-busy", "false");
+
+  for (const k of ["bookmarks", "history", "passwords"]) {
+    const count = (browserData[k] || []).length;
+    const el = document.getElementById(`bd-count-${k}`);
+    if (el) el.textContent = count;
+  }
+  modal.querySelectorAll(".bd-tab").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.kind === browserDataKind);
+  });
+  const notes = document.getElementById("browser-data-notes");
+  if (notes) {
+    notes.textContent = (browserData.notes || []).join(" ");
+    notes.style.display = (browserData.notes || []).length ? "" : "none";
+  }
+  const search = document.getElementById("browser-data-search");
+  if (search) search.value = "";
+  renderBrowserDataList();
+  modal.classList.remove("hidden");
+  document.getElementById("browser-data-close")?.focus();
+}
+
+function hideBrowserDataModal() {
+  if (browserDataImporting) return;
+  document.getElementById("browser-data-modal")?.classList.add("hidden");
+}
+
+function renderBrowserDataList() {
+  const list = document.getElementById("browser-data-list");
+  if (!list || !browserData) return;
+  list.replaceChildren();
+  const q = (document.getElementById("browser-data-search")?.value || "").trim().toLowerCase();
+  const items = browserData[browserDataKind] || [];
+
+  const match = (hay) => !q || hay.toLowerCase().includes(q);
+  let shown = 0;
+  for (const item of items) {
+    let row;
+    if (browserDataKind === "passwords") {
+      if (!match(`${item.url} ${item.username}`)) continue;
+      row = passwordRow(item);
+    } else {
+      const title = item.title || item.url;
+      if (!match(`${title} ${item.url}`)) continue;
+      row = linkRow(title, item.url, browserDataKind === "history" ? item : null);
+    }
+    list.appendChild(row);
+    if (++shown >= 1000) break; // a modal list past a thousand rows helps no one
+  }
+  if (shown === 0) {
+    const empty = document.createElement("div");
+    empty.className = "browser-data-empty";
+    empty.textContent = q ? "검색 결과가 없습니다." : "항목이 없습니다.";
+    list.appendChild(empty);
+  }
+}
+
+// A bookmark / history row: title over URL, opening in the in-app browser.
+function linkRow(title, url, history) {
+  const row = document.createElement("div");
+  row.className = "browser-data-row link";
+  const main = document.createElement("div");
+  main.className = "bd-main";
+  const t = document.createElement("div");
+  t.className = "bd-title";
+  t.textContent = title;
+  const u = document.createElement("div");
+  u.className = "bd-url";
+  u.textContent = url;
+  main.append(t, u);
+  row.appendChild(main);
+  if (history && history.visitCount != null) {
+    const meta = document.createElement("div");
+    meta.className = "bd-meta";
+    const when = history.lastVisitMs ? new Date(history.lastVisitMs).toLocaleDateString() : "";
+    meta.textContent = [when, `${history.visitCount}회`].filter(Boolean).join(" · ");
+    row.appendChild(meta);
+  }
+  row.title = url + "\n클릭하면 Mymux 브라우저에서 엽니다";
+  row.addEventListener("click", () => { openInExternalBrowser(url); hideBrowserDataModal(); });
+  return row;
+}
+
+// A password row: origin + username, secret masked behind a reveal toggle.
+function passwordRow(item) {
+  const row = document.createElement("div");
+  row.className = "browser-data-row password";
+  const main = document.createElement("div");
+  main.className = "bd-main";
+  const t = document.createElement("div");
+  t.className = "bd-title";
+  t.textContent = item.username || "(사용자명 없음)";
+  const u = document.createElement("div");
+  u.className = "bd-url";
+  u.textContent = item.url;
+  main.append(t, u);
+  row.appendChild(main);
+
+  const secret = document.createElement("div");
+  secret.className = "bd-secret";
+  if (item.blocked) {
+    secret.classList.add("blocked");
+    secret.textContent = "🔒 App-Bound";
+    secret.title = "App-Bound Encryption 이라 브라우저 밖에서는 읽을 수 없습니다.";
+  } else if (item.password == null) {
+    secret.textContent = "—";
+  } else {
+    const dots = document.createElement("span");
+    dots.className = "bd-pw";
+    dots.textContent = "••••••••";
+    const reveal = makeIconButton("bd-reveal", ICON.eye || "👁", "표시");
+    let shown = false;
+    reveal.addEventListener("click", (e) => {
+      e.stopPropagation();
+      shown = !shown;
+      dots.textContent = shown ? item.password : "••••••••";
+    });
+    const copy = makeIconButton("bd-copy", ICON.copy, "복사");
+    copy.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const ok = await clipboardWrite(item.password);
+      toast(ok ? "비밀번호를 복사했습니다." : "복사하지 못했습니다.", !ok);
+    });
+    secret.append(dots, reveal, copy);
+  }
+  row.appendChild(secret);
+  return row;
 }
 
 async function copyBrowserField(which) {
@@ -6232,14 +8265,22 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+let screencastAttachGeneration = 0;
+let screencastAttachPending = false;
+let cdpFrameState = null;
+
 async function attachScreencast() {
+  if (!browserTabActive || browserMode !== "ai" || screencastAttachPending) return;
   if (cdpWs) return; // already attached
+  screencastAttachPending = true;
+  const generation = screencastAttachGeneration;
+  try {
   const port = browserPort();
   // The debugging port + page target take a moment after launch; retry briefly.
   let target = browserPages.find((p) => p.targetId === activeBrowserPageId) || null;
-  for (let i = 0; i < 24 && !target && browserTabActive; i++) {
+  for (let i = 0; i < 24 && !target && browserTabActive && browserMode === "ai" && generation === screencastAttachGeneration; i++) {
     try {
-      const pages = await invoke("browser_page_targets", { port });
+      const pages = await getBrowserPageTargets(port);
       browserPages = Array.isArray(pages) ? pages : [];
       target = browserPages.find((p) => p.targetId === activeBrowserPageId) || browserPages[0] || null;
       if (target) {
@@ -6250,11 +8291,13 @@ async function attachScreencast() {
       await sleep(250);
     }
   }
-  if (!target || !browserTabActive) return;
+  if (!target || !browserTabActive || browserMode !== "ai" || generation !== screencastAttachGeneration) return;
   openCdp(target.wsUrl);
+  } finally { if (generation === screencastAttachGeneration) screencastAttachPending = false; }
 }
 
 function openCdp(wsUrl) {
+  if (cdpWs || !browserTabActive || browserMode !== "ai") return;
   let ws;
   try {
     ws = new WebSocket(wsUrl);
@@ -6263,21 +8306,24 @@ function openCdp(wsUrl) {
     return;
   }
   cdpWs = ws;
+  cdpFrameState = { ws, busy: false, pending: null };
   ws.onopen = () => {
+    if (cdpWs !== ws || !browserTabActive || browserMode !== "ai") { ws.close(); return; }
     cdpSend("Page.enable");
     cdpSend("Page.startScreencast", {
       format: "jpeg",
       quality: 70,
-      maxWidth: 1600,
-      maxHeight: 1000,
-      everyNthFrame: 1,
+      // Browser rendering is isolated in Chrome; keep the in-app preview light
+      // enough that image transfer/decode cannot starve terminal interaction.
+      maxWidth: Math.max(320, Math.min(1280, Math.round(document.getElementById("browser-viewport").clientWidth))),
+      maxHeight: Math.max(200, Math.min(720, Math.round(document.getElementById("browser-viewport").clientHeight))),
+      everyNthFrame: 4,
     });
     bindScreenInput();
   };
-  ws.onmessage = (ev) => handleCdpMessage(ev.data);
+  ws.onmessage = (ev) => { if (cdpWs === ws) handleCdpMessage(ev.data); };
   ws.onclose = () => {
-    if (cdpWs === ws) cdpWs = null;
-    setScreenActive(false);
+    if (cdpWs === ws) { cdpWs = null; cdpFrameState = null; setScreenActive(false); }
   };
   ws.onerror = () => {
     /* onclose follows */
@@ -6297,16 +8343,46 @@ function handleCdpMessage(data) {
   } catch {
     return;
   }
-  if (msg.method === "Page.screencastFrame") {
-    const p = msg.params;
-    lastFrameMeta = p.metadata;
-    document.getElementById("browser-screen").src = "data:image/jpeg;base64," + p.data;
+  if (msg.method === "Page.screencastFrame" && cdpFrameState) {
+    const state = cdpFrameState;
+    // Keep just the newest queued JPEG while a prior image is decoding.
+    if (state.pending) acknowledgeFrame(state, state.pending.sessionId);
+    state.pending = msg.params;
+    paintCdpFrame(state);
+  }
+}
+
+function acknowledgeFrame(state, sessionId) {
+  if (state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ id: ++cdpMsgId, method: "Page.screencastFrameAck", params: { sessionId } }));
+  }
+}
+
+async function paintCdpFrame(state) {
+  if (state.busy || !state.pending) return;
+  const frame = state.pending;
+  state.pending = null;
+  state.busy = true;
+  try {
+    const decoded = new Image();
+    decoded.src = "data:image/jpeg;base64," + frame.data;
+    await decoded.decode();
+    if (cdpFrameState !== state || !browserTabActive || browserMode !== "ai") return;
+    document.getElementById("browser-screen").src = decoded.src;
+    lastFrameMeta = frame.metadata;
     setScreenActive(true);
-    cdpSend("Page.screencastFrameAck", { sessionId: p.sessionId });
+  } catch { /* A bad frame must not stall the stream. */ }
+  finally {
+    acknowledgeFrame(state, frame.sessionId);
+    state.busy = false;
+    if (cdpFrameState === state) paintCdpFrame(state);
   }
 }
 
 function detachScreencast() {
+  screencastAttachGeneration += 1;
+  screencastAttachPending = false;
+  cdpFrameState = null;
   if (cdpWs) {
     try { cdpSend("Page.stopScreencast"); } catch {}
     try { cdpWs.close(); } catch {}
@@ -6341,9 +8417,20 @@ function bindScreenInput() {
   const img = document.getElementById("browser-screen");
   img.setAttribute("tabindex", "0");
 
+  let pendingMove = null;
+  let moveFramePending = false;
   img.addEventListener("mousemove", (e) => {
     const c = screenCoords(e);
-    if (c) cdpSend("Input.dispatchMouseEvent", { type: "mouseMoved", x: c.x, y: c.y });
+    if (!c) return;
+    pendingMove = c;
+    if (moveFramePending) return;
+    moveFramePending = true;
+    requestAnimationFrame(() => {
+      moveFramePending = false;
+      const point = pendingMove;
+      pendingMove = null;
+      if (point) cdpSend("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+    });
   });
   img.addEventListener("mousedown", (e) => {
     const c = screenCoords(e);
@@ -6389,85 +8476,120 @@ function sendKey(e, type) {
   });
 }
 
-// ── Native embedded browser (child WebView overlay) ──
-let nativePaneCreated = false;
-
+// ── External browser plus optional CDP preview ──
+// Human browsing opens the system browser in its own process. The Mymux window
+// never hosts the third-party page, so a busy site cannot own its UI thread.
 function setBrowserMode(mode) {
   browserMode = mode;
   document.getElementById("mode-native").classList.toggle("active", mode === "native");
   document.getElementById("mode-ai").classList.toggle("active", mode === "ai");
-  document.getElementById("browser-nav").style.display = mode === "native" ? "" : "none";
+  document.getElementById("browser-nav").style.display = "";
   document.getElementById("browser-ai-controls").style.display = mode === "ai" ? "" : "none";
   document.getElementById("browser-conn").style.display = mode === "ai" ? "" : "none";
   const pageTabs = document.getElementById("browser-page-tabs");
   if (pageTabs) pageTabs.style.display = mode === "ai" && browserPages.length ? "flex" : "none";
   const conn = document.getElementById("browser-conn");
   if (conn) conn.classList.toggle("browser-info-open", browserInfoOpen && mode === "ai");
+  for (const id of ["nav-back", "nav-forward", "nav-reload"]) {
+    const button = document.getElementById(id);
+    if (button) {
+      if (button.dataset.aiTitle == null) button.dataset.aiTitle = button.title;
+      button.disabled = mode !== "ai";
+      button.title = mode === "ai" ? button.dataset.aiTitle || button.title : "Use the system browser window";
+    }
+  }
 
   if (mode === "native") {
-    // AI → Native: stop the screencast, hide its image, show the native pane.
+    // AI preview → external browsing: stop frames; the external browser is
+    // independent and remains available in its own window.
     detachScreencast();
     setScreenActive(false);
-    if (browserTabActive) openNativePane();
+    showBrowserStart("external");
   } else {
-    // Native → AI: hide the native overlay, (re)attach screencast if running.
-    invoke("browser_pane_hide").catch(() => {});
+    nativeNavigationSequence += 1;
+    // External browsing → AI preview. Attach only after the user opts in.
     if (browserTabActive) refreshBrowserStatus();
   }
 }
 
-async function openNativePane() {
-  // A native child WebView always floats above the HTML session sidebar.
-  // Do not let another browser-state callback cover an open memo popover.
-  if (memoNativePaneHidden) return;
-  const vp = document.getElementById("browser-viewport");
-  const r = vp.getBoundingClientRect();
-  try {
-    if (!nativePaneCreated) {
-      await invoke("browser_pane_open", {
-        url: nativeCurrentUrl,
-        x: r.x,
-        y: r.y,
-        width: r.width,
-        height: r.height,
-      });
-      nativePaneCreated = true;
-    } else {
-      // Re-entry: just show + realign, preserving the page that was open.
-      await invoke("browser_pane_show");
-      await invoke("browser_pane_set_bounds", { x: r.x, y: r.y, width: r.width, height: r.height });
-    }
-  } catch (e) {
-    toast(String(e), true);
+let nativeNavigationSequence = 0;
+let nativeAddressDirty = false;
+let nativeNavigationStatusTimer = null;
+function setBrowserNavigationStatus(state, text) {
+  const status = document.getElementById("browser-nav-status");
+  if (!status) return;
+  if (nativeNavigationStatusTimer) clearTimeout(nativeNavigationStatusTimer);
+  nativeNavigationStatusTimer = null;
+  status.textContent = text;
+  status.classList.toggle("is-error", state === "error");
+  status.classList.toggle("hidden", !text);
+  if (text && state === "sent") {
+    nativeNavigationStatusTimer = setTimeout(() => {
+      status.classList.add("hidden");
+      status.textContent = "";
+      nativeNavigationStatusTimer = null;
+    }, 8000);
   }
 }
 
-function scheduleSync() {
-  // Debounce: ResizeObserver can fire a storm during window drag; coalesce to
-  // one set_bounds per ~100ms so we don't flood the main thread with ops.
-  if (paneSyncPending) return;
-  paneSyncPending = true;
-  setTimeout(() => {
-    paneSyncPending = false;
-    syncPaneBounds();
-  }, 100);
+function showBrowserStart(state = "home", detail = "") {
+  const placeholder = document.getElementById("browser-placeholder");
+  placeholder.dataset.state = state;
+  const message = state === "external"
+    ? (/^ko/i.test(navigator.language)
+      ? "웹 페이지는 별도 브라우저 창에서 열립니다. 무거운 페이지도 Mymux 터미널을 멈추지 않습니다."
+      : "Pages open in a separate system browser so heavy websites cannot block Mymux.")
+    : state === "loading" ? browserText("loading") : state === "error" ? browserText("error") : "";
+  document.getElementById("browser-start-message").textContent = message;
+  const title = document.querySelector("#browser-placeholder h2");
+  if (title) title.textContent = state === "external"
+    ? (/^ko/i.test(navigator.language) ? "분리된 브라우저로 안전하게 열기" : "Browse in an isolated window")
+    : "";
+  document.getElementById("browser-start-error").textContent = detail;
+  document.getElementById("browser-retry").hidden = state !== "error";
 }
 
-async function syncPaneBounds() {
-  if (!browserTabActive || browserMode !== "native") return;
-  const vp = document.getElementById("browser-viewport");
-  const r = vp.getBoundingClientRect();
-  if (r.width < 1 || r.height < 1) return;
-  try {
-    await invoke("browser_pane_set_bounds", { x: r.x, y: r.y, width: r.width, height: r.height });
-  } catch {}
+function showBrowserHome() {
+  nativeNavigationSequence += 1;
+  nativeAddressDirty = false;
+  nativeCurrentUrl = "";
+  document.getElementById("nav-url").value = "";
+  if (browserMode !== "native") setBrowserMode("native");
+  showBrowserStart("external");
+  document.getElementById("browser-start-input").focus();
 }
 
-function nativeNavigate(input) {
-  const url = (input || "").trim();
+async function nativeNavigate(input) {
+  let url;
+  try { url = resolveBrowserInput(input); }
+  catch (e) { toast(String(e.message || e), true); return; }
   if (!url) return;
+  document.getElementById("nav-url").value = url;
+  nativeAddressDirty = false;
+  if (browserMode === "ai") {
+    if (cdpWs?.readyState === WebSocket.OPEN) {
+      setBrowserNavigationStatus("pending", browserText("navSending"));
+      cdpSend("Page.navigate", { url });
+      setBrowserNavigationStatus("sent", browserText("navSent"));
+    }
+    else { document.getElementById("browser-url").value = url; launchBrowser(); }
+    return;
+  }
+  const sequence = ++nativeNavigationSequence;
   nativeCurrentUrl = url;
-  invoke("browser_pane_navigate", { url }).catch((e) => toast(String(e), true));
+  setBrowserNavigationStatus("pending", browserText("navSending"));
+  try {
+    await invoke("open_external", { path: url });
+    if (sequence !== nativeNavigationSequence) return;
+    setBrowserNavigationStatus("sent", /^ko/i.test(navigator.language)
+      ? "기본 브라우저에서 열었습니다. 페이지 탐색은 해당 창에서 계속하세요."
+      : "Opened in your system browser. Continue browsing in that window.");
+    showBrowserStart("external", url);
+  } catch (e) {
+    if (sequence !== nativeNavigationSequence) return;
+    showBrowserStart("error", String(e));
+    setBrowserNavigationStatus("error", String(e));
+  }
 }
 
 // ── Session persistence + close prompt ──
@@ -6477,7 +8599,7 @@ function serializePane(el) {
   if (el.classList && el.classList.contains("pane-leaf")) {
     const id = Number(el.dataset.ptyId);
     const t = terminals.get(id);
-    return { leaf: t && t.session ? t.session : { kind: "local", shell: null, cwd: null } };
+    return { leaf: { ...(t && t.session ? t.session : { kind: "local", shell: null, cwd: null }), sessionKey: t?.sessionKey || null } };
   }
   const dir = el.classList && el.classList.contains("vertical") ? "vertical" : "horizontal";
   const children = [...el.children]
@@ -6498,8 +8620,15 @@ function collectSession() {
       // isn't updated as the user types).
       const t0 = tab.panes && terminals.get(tab.panes[0]);
       const lastCmd = (t0 && t0.session && t0.session.lastCmd) || tab.session.lastCmd || null;
-      const memo = (t0 && t0.session && t0.session.memo) || tab.session.memo || null;
-      arr.push({ ...tab.session, lastCmd, memo, label: tab.label });
+      // `||` cannot pick between these: an empty array is truthy, so a pane
+      // whose memos were all deleted would resurrect the saved copy.
+      const live = t0 && t0.session ? normalizeMemos(t0.session) : [];
+      const memos = live.length ? live : normalizeMemos(tab.session);
+      const activeMemoId =
+        (t0 && t0.session && t0.session.activeMemoId) || tab.session.activeMemoId || null;
+      const entry = { ...tab.session, lastCmd, memos, activeMemoId, label: tab.label, sessionKey: t0?.sessionKey || tab.session.sessionKey || null };
+      delete entry.memo; // migrated into `memos`; do not keep writing the old shape
+      arr.push(entry);
     }
   }
   return { version: 2, tabs: arr };
@@ -6520,7 +8649,7 @@ async function buildPaneNode(parentEl, node) {
       }
       sshArgs.push(s.target);
       if (tmuxCommand) sshArgs.push(tmuxCommand);
-      const id = await createPane(parentEl, "ssh", sshArgs);
+      const id = await createPane(parentEl, "ssh", sshArgs, undefined, s.sessionKey);
       const t = terminals.get(id);
       if (t) {
         t.sshTarget = s.target;
@@ -6545,10 +8674,17 @@ async function buildPaneNode(parentEl, node) {
         );
       }
     } else {
-      const id = await createPane(parentEl, s.shell || getDefaultShellId(), null, s.cwd || undefined);
+      const id = await createPane(parentEl, s.shell || getDefaultShellId(), null, s.cwd || undefined, s.sessionKey);
       const t = terminals.get(id);
       if (t) {
-        t.session = { kind: "local", shell: s.shell || null, cwd: s.cwd || null, lastCmd: s.lastCmd || null, memo: s.memo || "" };
+        t.session = {
+          kind: "local",
+          shell: s.shell || null,
+          cwd: t.cwd || s.cwd || null,
+          lastCmd: s.lastCmd || null,
+          memos: normalizeMemos(s),
+          activeMemoId: s.activeMemoId || null,
+        };
         markMemoIndicator(id);
       }
     }
@@ -6557,7 +8693,7 @@ async function buildPaneNode(parentEl, node) {
   const dir = node && node.dir === "vertical" ? "vertical" : "horizontal";
   const container = document.createElement("div");
   container.className = "pane-container " + dir;
-  container.style.cssText = "flex:1;";
+  container.style.cssText = "flex:1 1 0;min-width:0;min-height:0;";
   parentEl.appendChild(container);
   const kids = (node && node.children) || [];
   for (let i = 0; i < kids.length; i++) {
@@ -6605,8 +8741,11 @@ async function restoreTabFromTree(tabData) {
 async function saveSessionNow() {
   try {
     await invoke("session_save", { data: collectSession() });
+    return true;
   } catch (e) {
     console.error("session_save failed", e);
+    toast(`Could not save sessions: ${e}`, true);
+    return false;
   }
 }
 
@@ -6638,17 +8777,21 @@ async function restoreSession() {
             tmux: !!s.tmux,
             tmuxName: s.tmuxName || null,
             lastCmd: s.lastCmd || null,
-            memo: s.memo || null,
+            memos: normalizeMemos(s),
+            activeMemoId: s.activeMemoId || null,
+            sessionKey: s.sessionKey || null,
           });
         } else {
           pwSessions.push(s); // password auth → prompt below
         }
       } else {
-        const pid = await spawnTerminal(s.shell || undefined, s.cwd || undefined);
+        const pid = await spawnTerminal(s.shell || undefined, s.cwd || undefined, s.sessionKey || null);
         const t = pid != null ? terminals.get(pid) : null;
         if (t && t.session && s.lastCmd) t.session.lastCmd = s.lastCmd;
-        if (t && t.session && s.memo) {
-          t.session.memo = s.memo;
+        const restoredMemos = normalizeMemos(s);
+        if (t && t.session && restoredMemos.length) {
+          t.session.memos = restoredMemos;
+          t.session.activeMemoId = s.activeMemoId || null;
           markMemoIndicator(pid);
         }
       }
@@ -6793,7 +8936,9 @@ function promptSshPasswordRestore(s) {
         tmux: !!s.tmux,
         tmuxName: s.tmuxName || null,
         lastCmd: s.lastCmd || null,
-        memo: s.memo || null,
+        memos: normalizeMemos(s),
+        activeMemoId: s.activeMemoId || null,
+        sessionKey: s.sessionKey || null,
       });
       resolve();
     }
@@ -6832,17 +8977,32 @@ async function setupCloseHandler() {
 
     document.getElementById("close-cancel").addEventListener("click", () => {
       document.getElementById("close-modal").classList.add("hidden");
-      // Restore the native browser overlay we hid to surface this dialog.
-      if (browserTabActive && browserMode === "native") openNativePane();
+      // The external browser cannot cover this dialog.
     });
     document.getElementById("close-save").addEventListener("click", async () => {
       if (document.getElementById("close-remember-pref").checked) setClosePref("always");
-      await saveSessionNow();
+      if (!await saveSessionNow()) return;
+      try { await invoke("terminal_shutdown", {}); }
+      catch (e) { toast(`Could not stop terminal sessions: ${e}`, true); return; }
       await destroyWindow();
     });
     document.getElementById("close-forget").addEventListener("click", async () => {
       if (document.getElementById("close-remember-pref").checked) setClosePref("never");
-      await invoke("session_clear").catch(() => {});
+      try {
+        await invoke("session_clear");
+        await invoke("terminal_shutdown", {});
+      } catch (e) { toast(`Could not close terminal sessions: ${e}`, true); return; }
+      await destroyWindow();
+    });
+    document.getElementById("close-background").addEventListener("click", async () => {
+      if (!await saveSessionNow()) return;
+      const sessionKeys = [...terminals.values()].map(t => t.sessionKey).filter(Boolean);
+      try {
+        const kept = await invoke("terminal_background_handoff", { sessionKeys });
+        if (sessionKeys.length && (!Array.isArray(kept) || kept.length !== sessionKeys.length)) {
+          throw Error("The background server did not confirm every terminal session.");
+        }
+      } catch (e) { toast(`Could not keep sessions running: ${e}`, true); return; }
       await destroyWindow();
     });
   } catch (e) {
@@ -6851,6 +9011,7 @@ async function setupCloseHandler() {
 }
 
 async function destroyWindow() {
+  await closeSessionsWindow();
   try {
     await closeAppWindow.destroy();
   } catch (e) {
@@ -6863,15 +9024,19 @@ async function handleCloseRequest() {
   // dialog — if it's showing, the modal would be trapped behind it and the app
   // would appear frozen (only the browser responds). Hide it first; the
   // close-cancel handler restores it if the user backs out.
-  await invoke("browser_pane_hide").catch(() => {});
   const pref = closePref();
   if (pref === "always") {
-    await saveSessionNow();
+    if (!await saveSessionNow()) return;
+    try { await invoke("terminal_shutdown", {}); }
+    catch (e) { toast(`Could not stop terminal sessions: ${e}`, true); return; }
     await destroyWindow();
     return;
   }
   if (pref === "never") {
-    await invoke("session_clear").catch(() => {});
+    try {
+      await invoke("session_clear");
+      await invoke("terminal_shutdown", {});
+    } catch (e) { toast(`Could not close terminal sessions: ${e}`, true); return; }
     await destroyWindow();
     return;
   }
@@ -6893,6 +9058,18 @@ function createXterm() {
     fontWeight: 300,
     fontWeightBold: 500,
     theme: terminalTheme(),
+    // OSC 8 hyperlinks (what modern CLIs emit) are routed here, not through the
+    // WebLinks addon. Without this xterm uses its own default — confirm() then
+    // window.open() — which a Tauri webview silently swallows (#42).
+    linkHandler: { activate: handleTerminalLink },
+    // What lets a selection override a program that has mouse tracking on.
+    // xterm asks shouldForceSelection(), which is Shift everywhere EXCEPT macOS,
+    // where it is Option AND this option — off by default, so on a Mac there was
+    // no way at all to select inside a tracking program. Turning it on gives the
+    // Mac the same escape hatch every other platform already had (and is what
+    // Terminal.app/iTerm2 train the fingers to expect), and it is what the drag
+    // reclaim in createPane replays to start a selection (#45).
+    macOptionClickForcesSelection: true,
   });
 }
 
@@ -6920,7 +9097,11 @@ function addTab(tabIdx, label) {
     e.stopPropagation();
     startRenameTabInBar(tabIdx, tab);
   });
-  tab.title = "Double-click to rename";
+  tab.title = "Double-click to rename · drop a session here to move it to this tab";
+  // Dropping a session onto this header is handled by startPaneDrag, which
+  // hit-tests the header itself on every mouse move. No HTML5 drop target here:
+  // `dragDropEnabled` is on for the explorer's OS file drop, and with that on
+  // the webview never delivers HTML5 drag events at all (see refreshSessionList).
   const newTabButton = document.getElementById("btn-tab-new");
   if (newTabButton) terminalTabs.insertBefore(tab, newTabButton);
   else terminalTabs.appendChild(tab);
@@ -6950,7 +9131,11 @@ async function promptRestorePreviousSession() {
       resolve(restore);
     };
     const onYes = () => finish(true);
-    const onNo = () => finish(false);
+    const onNo = async () => {
+      try { await invoke("terminal_shutdown", {}); }
+      catch (e) { toast(`Could not stop previous terminal sessions: ${e}`, true); }
+      finish(false);
+    };
     const onBackdrop = (e) => { if (e.target === modal) onNo(); };
     const onKey = (e) => { if (e.key === "Escape") onNo(); };
     yes.addEventListener("click", onYes);
@@ -7101,8 +9286,9 @@ function sendToTerminal(command) {
 // Detect a pane's shell family so the "cd here, then run" line uses syntax
 // that shell actually supports (PowerShell 5.1 has no `&&`).
 function paneShellKind(t) {
-  if (!t) return "powershell";
-  if (t.type === "ssh") return "posix";
+  if (!t) return IS_WINDOWS ? "powershell" : "posix";
+  if (isRemotePane(t)) return "posix";
+  if (!IS_WINDOWS && !t.shell) return "posix";
   const s = (t.shell || (localStorage.getItem("mymux.defaultShell") || "powershell")).toLowerCase();
   if (s.includes("pwsh") || s.includes("powershell")) return "powershell";
   if (s.includes("cmd")) return "cmd";
@@ -7138,8 +9324,9 @@ function presetCtxSourceFromCmd(ptyId, t, command) {
   setPaneAiMode(t, true);
   updateCtxUi(ptyId, t);
   if (source === "codex") {
+    resetCodexSessionSnapshot();
     applyCodexSessionSnapshot();
-    loadCodexLimits();
+    loadCodexLimits(ptyId);
   }
   return true;
 }
@@ -7300,50 +9487,165 @@ function setPaneCwd(ptyId, path) {
 // Reorder a session within its own tab's panes — changes the session-list order
 // and the #N numbering. (The split layout on screen is left as-is; moving a
 // session to a *different* tab uses movePaneToTab, which relocates the pane.)
+// Reorder inside one tab. This used to shuffle `tab.panes` and nothing else,
+// so the list claimed an order the panes on screen did not have; the pane is
+// relocated for real now and the list is re-derived from where it landed.
 function reorderSessionWithin(tab, dragId, targetId, after) {
-  const arr = tab.panes;
-  const from = arr.indexOf(dragId);
-  if (from < 0) return;
-  arr.splice(from, 1);
-  const to = arr.indexOf(targetId);
-  if (to < 0) arr.push(dragId);
-  else arr.splice(after ? to + 1 : to, 0, dragId);
-  refreshSessionList();
+  if (!tab || dragId === targetId) return;
+  const src = terminals.get(dragId);
+  const target = terminals.get(targetId);
+  if (!src || !target || !src.paneEl || !target.paneEl) return;
+  if (!tab.panes.includes(dragId) || !tab.panes.includes(targetId)) return;
+
+  clearPaneZoom(); // layout is about to change — drop any zoom overlay first
+  try {
+    // Re-tiling reparents both leaves (and any collapsed sibling) — keep pins.
+    const repin = captureBottomPins();
+    detachAndCollapse(src.paneEl, tab);
+    // Read the target's parent only now: collapsing the source's container can
+    // promote the target into its grandparent.
+    if (!insertLeafBeside(src.paneEl, target.paneEl, after)) {
+      // The target lost its place while we were detaching — put the pane back
+      // at the end of the tab rather than leaving it orphaned off-screen.
+      tab.rootEl.appendChild(src.paneEl);
+    }
+    syncTabPaneOrder(tab);
+    repin();
+    refreshSessionList();
+    requestAnimationFrame(() => { refitAllPanes(); repin(); });
+  } catch (e) {
+    toast("세션 이동 오류: " + (e && e.message), true);
+    console.error("reorderSessionWithin failed", e);
+  }
 }
 
-// ── Session scratch memo 🗒 ───────────────────────────────────────────────────
-// A per-session temporary notepad. Drag-selecting in the terminal auto-appends
-// to it (on top of the usual clipboard copy); the text is freely editable, can
-// be copied in one click, and can be sent to the pane's command line — typed for
-// review, or run outright. It lives on t.session.memo so it rides the existing
-// session_save/session_load pipeline: it survives a restart and is dropped when
-// the pane is closed.
-function paneMemo(id) {
-  const t = terminals.get(id);
-  return t && t.session && typeof t.session.memo === "string" ? t.session.memo : "";
+// ── Session scratch memos 🗒 ──────────────────────────────────────────────────
+// A per-session notepad holding several separate memos: a title list on the
+// left, the selected memo's body on the right. Drag-selecting in the terminal
+// auto-appends to the current memo (on top of the usual clipboard copy); the
+// text is freely editable, can be copied in one click, saved as a .txt, and
+// sent to the pane's command line — typed for review, or run outright.
+//
+// Memos live on t.session.memos so they ride the existing session_save/
+// session_load pipeline: they survive a restart and are dropped with the pane.
+// A pane holds a LIST of memos. `title` is what the user renamed it to; when
+// it is empty the first non-blank body line stands in, so a memo never needs
+// naming before it is useful.
+const MAX_MEMO_BODY = 64 * 1024; // one memo; drag-collect can append log chunks
+const MAX_MEMOS_PER_PANE = 100;  // every pane's memos share one session.json
+
+function newMemoId() {
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 5);
 }
-function setPaneMemo(id, text) {
+function newMemo(body = "", title = "") {
+  return { id: newMemoId(), title, body };
+}
+function memoTitle(m) {
+  if (!m) return "(빈 메모)";
+  if (m.title) return m.title;
+  const first = (m.body || "").split("\n").find((line) => line.trim()) || "";
+  return first.trim().slice(0, 200) || "(빈 메모)";
+}
+// Accept whatever session.json holds. An older build wrote a single `memo`
+// string; read it once as memo #1 rather than dropping the user's notes.
+function normalizeMemos(s) {
+  if (!s) return [];
+  if (Array.isArray(s.memos)) {
+    return s.memos
+      .filter((m) => m && typeof m === "object")
+      .slice(0, MAX_MEMOS_PER_PANE)
+      .map((m) => ({
+        id: typeof m.id === "string" && m.id ? m.id : newMemoId(),
+        title: typeof m.title === "string" ? m.title.slice(0, 200) : "",
+        body: typeof m.body === "string" ? m.body.slice(-MAX_MEMO_BODY) : "",
+      }));
+  }
+  if (typeof s.memo === "string" && s.memo.trim()) return [newMemo(s.memo)];
+  return [];
+}
+function paneMemos(id) {
   const t = terminals.get(id);
-  if (!t) return;
+  if (!t) return [];
+  if (!t.session) return [];
+  if (!Array.isArray(t.session.memos)) t.session.memos = normalizeMemos(t.session);
+  return t.session.memos;
+}
+function activeMemo(id) {
+  const list = paneMemos(id);
+  if (!list.length) return null;
+  const t = terminals.get(id);
+  return list.find((m) => m.id === t?.session?.activeMemoId) || list[0];
+}
+function setActiveMemo(id, memoId) {
+  const t = terminals.get(id);
+  if (t && t.session) t.session.activeMemoId = memoId;
+  scheduleMemoSave();
+}
+// Create a memo and make it current. Returns null when the pane is at its cap.
+function addPaneMemo(id, body = "") {
+  const t = terminals.get(id);
+  if (!t) return null;
   if (!t.session) t.session = { kind: "local", shell: null, cwd: null };
-  // Cap runaway growth (drag-collect can append large log chunks) by keeping the
-  // most recent tail; session.json is persisted and reloaded on every restart.
-  const MAX_MEMO = 64 * 1024;
-  t.session.memo = text.length > MAX_MEMO ? text.slice(text.length - MAX_MEMO) : text;
+  const list = paneMemos(id);
+  if (list.length >= MAX_MEMOS_PER_PANE) {
+    toast(`메모는 세션당 ${MAX_MEMOS_PER_PANE}개까지입니다.`, true);
+    return null;
+  }
+  const memo = newMemo(body);
+  list.unshift(memo); // newest on top, right under the ＋ button
+  t.session.activeMemoId = memo.id;
+  markMemoIndicator(id);
+  scheduleMemoSave();
+  return memo;
+}
+function deletePaneMemo(id, memoId) {
+  const t = terminals.get(id);
+  const list = paneMemos(id);
+  const at = list.findIndex((m) => m.id === memoId);
+  if (at < 0) return;
+  list.splice(at, 1);
+  // Never leave the editor with nothing to edit.
+  if (!list.length) list.push(newMemo());
+  if (t && t.session && t.session.activeMemoId === memoId) {
+    t.session.activeMemoId = list[Math.min(at, list.length - 1)].id;
+  }
   markMemoIndicator(id);
   scheduleMemoSave();
 }
-// Drag-select auto-collect: append the selection as its own line, skipping an
-// exact repeat (onSelectionChange settles more than once per drag).
+function setMemoBody(id, memoId, text) {
+  const memo = paneMemos(id).find((m) => m.id === memoId);
+  if (!memo) return;
+  // Keep the most recent tail: drag-collect appends and session.json is
+  // rewritten on every change.
+  memo.body = text.length > MAX_MEMO_BODY ? text.slice(text.length - MAX_MEMO_BODY) : text;
+  markMemoIndicator(id);
+  scheduleMemoSave();
+}
+function setMemoTitle(id, memoId, title) {
+  const memo = paneMemos(id).find((m) => m.id === memoId);
+  if (!memo) return;
+  // An empty title hands the name back to the first body line.
+  memo.title = (title || "").trim().slice(0, 200);
+  scheduleMemoSave();
+}
+// Drag-select auto-collect: append the selection as its own line of the
+// current memo, skipping an exact repeat (onSelectionChange settles more than
+// once per drag).
 function appendPaneMemo(id, sel) {
   const add = (sel || "").replace(/\s+$/, "");
   if (!add) return;
-  const cur = paneMemo(id);
+  const memo = activeMemo(id) || addPaneMemo(id);
+  if (!memo) return;
+  const cur = memo.body || "";
   if (cur === add || cur.endsWith("\n" + add)) return;
-  setPaneMemo(id, cur ? cur.replace(/\n+$/, "") + "\n" + add : add);
+  setMemoBody(id, memo.id, cur ? cur.replace(/\n+$/, "") + "\n" + add : add);
   if (memoPopover && Number(memoPopover.dataset.ptyId) === id) {
+    renderMemoList(id);
     const ta = memoPopover.querySelector(".memo-text");
-    if (ta && document.activeElement !== ta) { ta.value = paneMemo(id); ta.scrollTop = ta.scrollHeight; }
+    if (ta && document.activeElement !== ta && memoPopover.dataset.memoId === memo.id) {
+      ta.value = memo.body;
+      ta.scrollTop = ta.scrollHeight;
+    }
   }
 }
 let memoSaveTimer = null;
@@ -7356,7 +9658,7 @@ function markMemoIndicator(id) {
   const btn = t && t.commandShortcutsEl
     ? t.commandShortcutsEl.querySelector(".pane-command-memo")
     : null;
-  if (btn) btn.classList.toggle("has-memo", !!paneMemo(id));
+  if (btn) btn.classList.toggle("has-memo", paneMemos(id).some((m) => m.body.trim()));
 }
 function makeIconButton(className, icon, label, visibleText = "") {
   const button = document.createElement("button");
@@ -7372,9 +9674,8 @@ function makeIconButton(className, icon, label, visibleText = "") {
   }
   return button;
 }
-const memoCopyFeedback = new WeakMap();
 async function copyPaneMemo(id, feedbackButton = null) {
-  const body = paneMemo(id);
+  const body = activeMemo(id)?.body || "";
   if (!body) {
     toast("복사할 메모가 없습니다.");
     return false;
@@ -7385,31 +9686,58 @@ async function copyPaneMemo(id, feedbackButton = null) {
     return false;
   }
   toast("메모를 복사했습니다.");
-  if (feedbackButton) {
-    const previous = memoCopyFeedback.get(feedbackButton);
-    if (previous) clearTimeout(previous.timer);
-    const state = previous || {
-      html: feedbackButton.innerHTML,
-      title: feedbackButton.title,
-      label: feedbackButton.getAttribute("aria-label"),
-      timer: null,
-    };
-    feedbackButton.innerHTML = ICON.check;
-    feedbackButton.title = "메모 복사 완료";
-    feedbackButton.setAttribute("aria-label", "메모 복사 완료");
-    feedbackButton.classList.add("copy-success");
-    state.timer = setTimeout(() => {
-      memoCopyFeedback.delete(feedbackButton);
-      if (!feedbackButton.isConnected) return;
-      feedbackButton.innerHTML = state.html;
-      feedbackButton.title = state.title;
-      feedbackButton.setAttribute("aria-label", state.label);
-      feedbackButton.classList.remove("copy-success");
-    }, 1000);
-    memoCopyFeedback.set(feedbackButton, state);
-  }
+  if (feedbackButton) flashButtonSuccess(feedbackButton, "메모 복사 완료");
   return true;
 }
+// Export the current memo through the OS "Save as" dialog. The file name is
+// seeded from the memo's title; the backend makes it legal and writes UTF-8
+// with a BOM so Notepad reads Korean correctly.
+async function saveMemoAsTxt(id, feedbackButton = null) {
+  const memo = activeMemo(id);
+  if (!memo || !memo.body.trim()) {
+    toast("저장할 내용이 없습니다.", true);
+    return;
+  }
+  try {
+    const saved = await invoke("save_text_file_as", {
+      suggestedName: memoTitle(memo),
+      content: memo.body,
+    });
+    if (!saved) return; // cancelled
+    toast("저장했습니다: " + saved);
+    if (feedbackButton) flashButtonSuccess(feedbackButton, "저장 완료");
+  } catch (e) {
+    toast("메모 저장 실패: " + String(e), true);
+  }
+}
+
+// Briefly swap a tool button for a checkmark. Shared by copy and save so both
+// confirm in the same place the user just clicked.
+const buttonFlashState = new WeakMap();
+function flashButtonSuccess(button, label) {
+  const previous = buttonFlashState.get(button);
+  if (previous) clearTimeout(previous.timer);
+  const state = previous || {
+    html: button.innerHTML,
+    title: button.title,
+    label: button.getAttribute("aria-label"),
+    timer: null,
+  };
+  button.innerHTML = ICON.check;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.classList.add("copy-success");
+  state.timer = setTimeout(() => {
+    buttonFlashState.delete(button);
+    if (!button.isConnected) return;
+    button.innerHTML = state.html;
+    button.title = state.title;
+    button.setAttribute("aria-label", state.label);
+    button.classList.remove("copy-success");
+  }, 1000);
+  buttonFlashState.set(button, state);
+}
+
 // Type the memo into the pane's command line. run=false pastes it for review
 // (bracketed-paste safe, no Enter); run=true writes it raw and presses Enter.
 async function sendMemoToPane(id, text, run) {
@@ -7436,21 +9764,48 @@ let memoPopoverAnchorOffset = { x: 0, y: 0 };
 let memoPopoverDrag = null;
 let memoNativePaneHidden = false;
 let memoNativePaneTransitions = Promise.resolve();
-const MEMO_POPOVER_SIZE_KEY = "mymux.memoPopoverSize.v1";
+// v2: the single-textarea popover was 300×250. That is too narrow for a title
+// list beside a body, so the key is bumped rather than reused — an old saved
+// size would otherwise reopen the new layout at a width it cannot lay out in.
+const MEMO_POPOVER_SIZE_KEY = "mymux.memoPopoverSize.v2";
+const MEMO_SIDE_WIDTH_KEY = "mymux.memoSideWidth.v1";
+const MEMO_POPOVER_MIN = { width: 420, height: 260 };
+const MEMO_SIDE_MIN = 110;
 function savedMemoPopoverSize() {
   try {
     const value = JSON.parse(localStorage.getItem(MEMO_POPOVER_SIZE_KEY) || "null");
     if (value && Number.isFinite(value.width) && Number.isFinite(value.height)) return value;
   } catch {}
-  return { width: 300, height: 250 };
+  return { width: 560, height: 360 };
 }
 function clampMemoPopoverSize(size) {
   const maxWidth = Math.max(120, window.innerWidth - 16);
   const maxHeight = Math.max(120, window.innerHeight - 16);
   return {
-    width: Math.max(Math.min(260, maxWidth), Math.min(maxWidth, Math.round(size.width))),
-    height: Math.max(Math.min(180, maxHeight), Math.min(maxHeight, Math.round(size.height))),
+    width: Math.max(
+      Math.min(MEMO_POPOVER_MIN.width, maxWidth),
+      Math.min(maxWidth, Math.round(size.width))
+    ),
+    height: Math.max(
+      Math.min(MEMO_POPOVER_MIN.height, maxHeight),
+      Math.min(maxHeight, Math.round(size.height))
+    ),
   };
+}
+function savedMemoSideWidth() {
+  const value = Number(localStorage.getItem(MEMO_SIDE_WIDTH_KEY));
+  return Number.isFinite(value) && value > 0 ? value : 160;
+}
+// The list keeps a fixed width the user chose, but it can never grow past 60%
+// of the popover — past that the body it exists to navigate has no room left.
+function clampMemoSideWidth(width, popoverWidth) {
+  const max = Math.max(MEMO_SIDE_MIN, Math.round(popoverWidth * 0.6));
+  return Math.round(Math.min(max, Math.max(MEMO_SIDE_MIN, width)));
+}
+function applyMemoSideWidth(pop, width) {
+  const next = clampMemoSideWidth(width, pop.offsetWidth || MEMO_POPOVER_MIN.width);
+  pop.style.setProperty("--memo-side-w", `${next}px`);
+  return next;
 }
 function memoPopoverAnchorPosition(pop = memoPopover, anchor = memoPopoverAnchor) {
   if (!pop || !anchor || !anchor.isConnected) return null;
@@ -7508,24 +9863,8 @@ function cleanupMemoPopoverDrag() {
 function onMemoViewportResize() {
   normalizeMemoPopoverAnchorOffset();
 }
-function hideNativePaneForMemo() {
-  if (memoNativePaneHidden || !browserTabActive || browserMode !== "native") return;
-  memoNativePaneHidden = true;
-  // Serialize hide/restore operations so a rapid open-close-open cannot leave
-  // a late hide request winning after the final restore.
-  memoNativePaneTransitions = memoNativePaneTransitions.then(
-    () => invoke("browser_pane_hide").catch(() => {})
-  );
-}
-function restoreNativePaneAfterMemo() {
-  if (!memoNativePaneHidden) return;
-  memoNativePaneHidden = false;
-  memoNativePaneTransitions = memoNativePaneTransitions.then(async () => {
-    // A newer memo may have opened while this restore was queued.
-    if (memoNativePaneHidden) return;
-    if (browserTabActive && browserMode === "native") await openNativePane();
-  });
-}
+function hideNativePaneForMemo() {}
+function restoreNativePaneAfterMemo() {}
 function closeMemoPopover(restoreFocus = true, restoreNativePane = true) {
   const anchor = memoPopoverAnchor;
   cleanupMemoPopoverDrag();
@@ -7554,6 +9893,9 @@ function onMemoOutside(e) {
 }
 function onMemoKey(e) {
   if (e.key !== "Escape") return;
+  // This listener captures, so it would otherwise beat the rename box to the
+  // key and close the whole popover instead of cancelling the rename.
+  if (memoPopover && memoPopover.querySelector(".memo-rename")) return;
   e.preventDefault();
   e.stopPropagation();
   closeMemoPopover();
@@ -7587,19 +9929,56 @@ function openMemoPopover(id, anchorEl) {
   title.appendChild(titleText);
   const xBtn = makeIconButton("memo-x", ICON.close, "메모 닫기");
   head.append(title, xBtn);
+
+  const body = document.createElement("div");
+  body.className = "memo-body";
+
+  // Left: search over titles+bodies, ＋ new memo, then the title list. Fixed
+  // width, draggable wider; each title is one ellipsised line so the list
+  // shows exactly as much as the panel is wide.
+  const side = document.createElement("div");
+  side.className = "memo-side";
+  const searchRow = document.createElement("div");
+  searchRow.className = "memo-search-row";
+  searchRow.innerHTML = ICON.search;
+  const search = document.createElement("input");
+  search.className = "memo-search";
+  search.type = "search";
+  search.placeholder = "검색";
+  search.setAttribute("aria-label", "메모 검색");
+  searchRow.appendChild(search);
+  const addBtn = makeIconButton("memo-add", ICON.plus, "새 메모 추가", "새 메모");
+  const list = document.createElement("ul");
+  list.className = "memo-list";
+  list.setAttribute("role", "listbox");
+  list.setAttribute("aria-label", "메모 목록");
+  side.append(searchRow, addBtn, list);
+
+  const splitter = document.createElement("div");
+  splitter.className = "memo-splitter";
+  splitter.setAttribute("role", "separator");
+  splitter.setAttribute("aria-orientation", "vertical");
+  splitter.setAttribute("aria-label", "목록 너비 조절");
+
+  // Right: the selected memo's body plus the actions that operate on it.
+  const main = document.createElement("div");
+  main.className = "memo-main";
   const ta = document.createElement("textarea");
   ta.className = "memo-text";
-  ta.setAttribute("aria-label", "세션 메모 내용");
+  ta.setAttribute("aria-label", "메모 내용");
   ta.placeholder = "붙여넣기(Ctrl+V) 하거나, 터미널에서 드래그하면 자동으로 쌓입니다.";
-  ta.value = paneMemo(id);
   const tools = document.createElement("div");
   tools.className = "memo-tools";
-  const copyBtn = makeIconButton("memo-btn memo-copy", ICON.copy, "전체 메모 복사", "복사");
+  const copyBtn = makeIconButton("memo-btn memo-copy", ICON.copy, "이 메모 복사", "복사");
   const typeBtn = makeIconButton("memo-btn memo-type", ICON.keyboard, "명령줄에 입력 (검토 후 직접 실행)", "입력");
   const runBtn = makeIconButton("memo-btn memo-run", ICON.play, "명령줄에 입력하고 바로 실행", "실행");
-  const clearBtn = makeIconButton("memo-btn memo-clear", ICON.trash, "메모 비우기", "비우기");
-  tools.append(copyBtn, typeBtn, runBtn, clearBtn);
-  pop.append(head, ta, tools);
+  const saveBtn = makeIconButton("memo-btn memo-save", ICON.save, "이 메모를 txt 파일로 저장", "txt");
+  const delBtn = makeIconButton("memo-btn memo-delete", ICON.trash, "이 메모 삭제", "삭제");
+  tools.append(copyBtn, typeBtn, runBtn, saveBtn, delBtn);
+  main.append(ta, tools);
+
+  body.append(side, splitter, main);
+  pop.append(head, body);
   document.body.appendChild(pop);
   // Restore the user's last resize before positioning. The whole editor is
   // resizable; the textarea flexes to fill the remaining space.
@@ -7610,10 +9989,13 @@ function openMemoPopover(id, anchorEl) {
   memoPopoverAnchor = anchorEl;
   memoPopoverAnchorOffset = { x: 0, y: 0 };
   positionMemoPopover();
+  applyMemoSideWidth(pop, savedMemoSideWidth());
   memoPopoverResizeObserver = new ResizeObserver(() => {
     if (!memoPopover || memoPopover !== pop) return;
     const next = clampMemoPopoverSize({ width: pop.offsetWidth, height: pop.offsetHeight });
     normalizeMemoPopoverAnchorOffset();
+    // Shrinking the popover can push the list past its 60% ceiling.
+    applyMemoSideWidth(pop, savedMemoSideWidth());
     try { localStorage.setItem(MEMO_POPOVER_SIZE_KEY, JSON.stringify(next)); } catch {}
   });
   memoPopoverResizeObserver.observe(pop);
@@ -7653,7 +10035,45 @@ function openMemoPopover(id, anchorEl) {
     document.addEventListener("pointercancel", finish);
     window.addEventListener("blur", onBlur);
   });
-  ta.addEventListener("input", () => setPaneMemo(id, ta.value));
+  // Drag the divider. The width is stored, not the ratio: the user picked a
+  // width that fits their titles, and it should survive resizing the popover.
+  splitter.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startWidth = side.offsetWidth;
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      const next = applyMemoSideWidth(pop, startWidth + (moveEvent.clientX - startX));
+      try { localStorage.setItem(MEMO_SIDE_WIDTH_KEY, String(next)); } catch {}
+    };
+    const finish = (finishEvent) => {
+      if (finishEvent.pointerId !== pointerId) return;
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      pop.classList.remove("memo-splitting");
+    };
+    pop.classList.add("memo-splitting");
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", finish);
+    document.addEventListener("pointercancel", finish);
+  });
+
+  search.addEventListener("input", () => renderMemoList(id));
+  addBtn.addEventListener("click", () => {
+    if (!addPaneMemo(id)) return;
+    search.value = ""; // a brand-new memo would not match the current filter
+    renderMemoList(id);
+    ta.focus();
+  });
+  ta.addEventListener("input", () => {
+    const current = memoPopover?.dataset.memoId;
+    if (!current) return;
+    setMemoBody(id, current, ta.value);
+    renderMemoList(id); // the title tracks the first line
+  });
   xBtn.addEventListener("click", () => closeMemoPopover());
   copyBtn.addEventListener("click", () => copyPaneMemo(id, copyBtn));
   typeBtn.addEventListener("click", () => { sendMemoToPane(id, ta.value, false); closeMemoPopover(false); });
@@ -7665,20 +10085,291 @@ function openMemoPopover(id, anchorEl) {
     }
     closeMemoPopover(false);
   });
-  clearBtn.addEventListener("click", () => { ta.value = ""; setPaneMemo(id, ""); ta.focus(); });
+  saveBtn.addEventListener("click", () => saveMemoAsTxt(id, saveBtn));
+  // Two-step delete. A confirm() dialog would block the WebView's event loop
+  // (and the CDP checks that drive this UI), so the button asks for itself.
+  let deleteArmedTimer = null;
+  const disarmDelete = () => {
+    clearTimeout(deleteArmedTimer);
+    deleteArmedTimer = null;
+    delBtn.classList.remove("armed");
+    delBtn.querySelector("span").textContent = "삭제";
+  };
+  delBtn.addEventListener("click", () => {
+    const current = memoPopover?.dataset.memoId;
+    if (!current) return;
+    if (!deleteArmedTimer) {
+      delBtn.classList.add("armed");
+      delBtn.querySelector("span").textContent = "삭제?";
+      deleteArmedTimer = setTimeout(disarmDelete, 3000);
+      return;
+    }
+    disarmDelete();
+    deletePaneMemo(id, current);
+    renderMemoList(id);
+    ta.focus();
+  });
+
+  renderMemoList(id);
   setTimeout(() => ta.focus(), 0);
   document.addEventListener("mousedown", onMemoOutside, true);
   document.addEventListener("keydown", onMemoKey, true);
   window.addEventListener("resize", onMemoViewportResize);
 }
 
+// Redraw the title list and load the current memo into the editor. The popover
+// keeps the memo it is showing in `dataset.memoId` so the textarea's `input`
+// handler always writes back to the right one.
+function renderMemoList(id) {
+  const pop = memoPopover;
+  if (!pop || Number(pop.dataset.ptyId) !== id) return;
+  const list = pop.querySelector(".memo-list");
+  const ta = pop.querySelector(".memo-text");
+  const query = (pop.querySelector(".memo-search")?.value || "").trim().toLowerCase();
+
+  let memos = paneMemos(id);
+  if (!memos.length) {
+    addPaneMemo(id);
+    memos = paneMemos(id);
+  }
+  const current = activeMemo(id);
+  pop.dataset.memoId = current ? current.id : "";
+  if (ta && ta.value !== (current?.body || "")) ta.value = current?.body || "";
+
+  const shown = query
+    ? memos.filter(
+        (m) =>
+          memoTitle(m).toLowerCase().includes(query) ||
+          (m.body || "").toLowerCase().includes(query)
+      )
+    : memos;
+
+  list.textContent = "";
+  if (!shown.length) {
+    const empty = document.createElement("li");
+    empty.className = "memo-empty";
+    empty.textContent = "검색 결과 없음";
+    list.appendChild(empty);
+    return;
+  }
+  for (const memo of shown) {
+    const row = document.createElement("li");
+    const name = memoTitle(memo);
+    // One ellipsised line: the list shows exactly as much of each title as the
+    // panel is wide, and widening it reveals more.
+    row.className = "memo-item" + (current && memo.id === current.id ? " active" : "");
+    row.textContent = name;
+    row.title = name + "\n(더블클릭하면 이름을 바꿉니다)";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(!!current && memo.id === current.id));
+    row.addEventListener("click", () => {
+      setActiveMemo(id, memo.id);
+      renderMemoList(id);
+      ta?.focus();
+    });
+    row.addEventListener("dblclick", () => startMemoRename(id, memo, row));
+    list.appendChild(row);
+  }
+}
+
+// Rename in place. Committing an empty name hands the title back to the first
+// body line, which is how a memo gets its name in the first place.
+function startMemoRename(id, memo, row) {
+  if (row.querySelector("input")) return;
+  const input = document.createElement("input");
+  input.className = "memo-rename";
+  input.value = memo.title || memoTitle(memo);
+  input.setAttribute("aria-label", "메모 이름");
+  row.textContent = "";
+  row.appendChild(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = (save) => {
+    if (done) return;
+    done = true;
+    if (save) setMemoTitle(id, memo.id, input.value);
+    renderMemoList(id);
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); commit(true); }
+    else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); commit(false); }
+  });
+  input.addEventListener("blur", () => commit(true));
+}
+
 // Rebuild the full session list, grouped by tab.
+async function openSessionsWindow(dragPoint = null) {
+  if (sessionsWindowOpening) return;
+  sessionsWindowOpening = true;
+  try {
+    const Window = window.__TAURI__?.webviewWindow?.WebviewWindow;
+    if (!Window) throw Error("Separate Sessions windows are unavailable in this runtime.");
+    let popup = await Window.getByLabel("sessions");
+    if (!popup) {
+      popup = new Window("sessions", {
+        url: "sessions-window.html",
+        title: "Mymux Sessions",
+        width: 390,
+        height: 760,
+        minWidth: 280,
+        minHeight: 360,
+        resizable: true,
+        ...(dragPoint ? { x: Math.round(dragPoint.x - 190), y: Math.round(dragPoint.y - 20) } : { center: true }),
+      });
+      await new Promise((resolve, reject) => {
+        popup.once("tauri://created", resolve);
+        popup.once("tauri://error", (event) => reject(event?.payload || event));
+      });
+    }
+    sessionsWindowOpen = true;
+    sessionPanel.classList.add("sessions-detached");
+    await popup.show().catch(() => {});
+    await popup.setFocus();
+    scheduleSessionsWindowSnapshot();
+  } catch (error) {
+    toast(`Could not open Sessions window: ${error}`, true);
+  } finally {
+    sessionsWindowOpening = false;
+  }
+}
+
+async function closeSessionsWindow() {
+  try {
+    const Window = window.__TAURI__?.webviewWindow?.WebviewWindow;
+    const popup = await Window?.getByLabel?.("sessions");
+    if (popup) await popup.close();
+  } catch (error) {
+    console.warn("Could not close Sessions window", error);
+  }
+  sessionsWindowOpen = false;
+  sessionPanel?.classList.remove("sessions-detached");
+}
+
+async function setupSessionsWindowBridge() {
+  try {
+    const events = window.__TAURI__?.event;
+    if (!events?.listen) return;
+    await events.listen("mymux:sessions-window-ready", () => {
+      sessionsWindowOpen = true;
+      sessionPanel?.classList.add("sessions-detached");
+      scheduleSessionsWindowSnapshot();
+    });
+    await events.listen("mymux:sessions-window-closed", () => {
+      sessionsWindowOpen = false;
+      sessionPanel?.classList.remove("sessions-detached");
+    });
+    await events.listen("mymux:sessions-window-dock", closeSessionsWindow);
+    await events.listen("mymux:sessions-window-action", (event) => handleSessionsWindowAction(event.payload || {}));
+    await events.listen("mymux:sessions-window-drag", (event) => updateSessionsDockTarget(event.payload || {}));
+    await events.listen("mymux:sessions-window-drop", (event) => finishSessionsWindowDrop(event.payload || {}));
+    setupSessionsDetachDrag();
+  } catch (error) {
+    console.warn("Sessions window event bridge unavailable", error);
+  }
+}
+
+function setupSessionsDetachDrag() {
+  const handle = document.getElementById("sessions-drag-handle");
+  if (!handle) return;
+  let drag = null;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || sessionsWindowOpen || event.target.closest("button")) return;
+    drag = { pointerId: event.pointerId, startX: event.screenX, startY: event.screenY, outside: false };
+    handle.setPointerCapture?.(event.pointerId);
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY) < 8) return;
+    if (event.clientX < 0 || event.clientY < 0 || event.clientX > innerWidth || event.clientY > innerHeight) {
+      drag.outside = true;
+      sessionPanel?.classList.add("sessions-dragging");
+    }
+  });
+  const finish = (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const shouldDetach = drag.outside && (event.clientX < 0 || event.clientY < 0 || event.clientX > innerWidth || event.clientY > innerHeight);
+    drag = null;
+    sessionPanel?.classList.remove("sessions-dragging");
+    if (shouldDetach) openSessionsWindow({ x: event.screenX, y: event.screenY });
+  };
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+}
+
+function updateSessionsDockTarget(point) {
+  const tabs = document.getElementById("terminal-tabs");
+  if (!tabs || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+  const rect = tabs.getBoundingClientRect();
+  const left = window.screenX + rect.left;
+  const top = window.screenY + rect.top;
+  const inside = point.x >= left && point.x <= left + rect.width && point.y >= top && point.y <= top + rect.height;
+  tabs.classList.toggle("sessions-dock-target", inside);
+  window.__TAURI__?.event?.emitTo?.("sessions", "mymux:sessions-window-dock-target", { inside }).catch(() => {});
+}
+
+function finishSessionsWindowDrop(point) {
+  const tabs = document.getElementById("terminal-tabs");
+  const rect = tabs?.getBoundingClientRect();
+  const left = window.screenX + (rect?.left || 0);
+  const top = window.screenY + (rect?.top || 0);
+  const inside = !!rect && point.x >= left && point.x <= left + rect.width && point.y >= top && point.y <= top + rect.height;
+  tabs?.classList.remove("sessions-dock-target");
+  if (inside) closeSessionsWindow();
+}
+
+function handleSessionsWindowAction(action) {
+  const ptyId = Number(action.ptyId);
+  const t = Number.isFinite(ptyId) ? terminals.get(ptyId) : null;
+  const row = Number.isFinite(ptyId) ? sessionListEl?.querySelector(`.session-item[data-pty-id="${ptyId}"]`) : null;
+  if (action.type === "connect-favorite" || action.type === "remove-favorite") {
+    const item = document.querySelectorAll("#ssh-fav-list .ssh-fav-item")[Number(action.favoriteIndex)];
+    if (action.type === "remove-favorite") item?.querySelector(".ssh-fav-x")?.click();
+    else item?.click();
+    return;
+  }
+  if (action.type === "focus" && t) { focusSession(ptyId); return; }
+  if (action.type === "agent-detail" && t) { showAgentDetail(ptyId, action.agentId); return; }
+  if (action.type === "rename-tab") {
+    const group = sessionListEl?.querySelector(`.session-group[data-tab-idx="${Number(action.tabIdx)}"]`);
+    group?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    return;
+  }
+  if (!row) return;
+  if (action.type === "close") row.querySelector(".session-close")?.click();
+  else if (action.type === "rename") row.querySelector(".session-name")?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  else if (action.type === "favorite") row.querySelector(".session-fav")?.click();
+  else if (action.type === "toggle-agents") row.querySelector(".session-agents-toggle,.session-agent-more")?.click();
+}
+
+function scheduleSessionsWindowSnapshot() {
+  if (!sessionsWindowOpen) return;
+  clearTimeout(sessionsWindowSnapshotTimer);
+  sessionsWindowSnapshotTimer = setTimeout(async () => {
+    const events = window.__TAURI__?.event;
+    if (!events?.emitTo) return;
+    const value = (status) => document.querySelector(`[data-attention-status="${status}"] b`)?.textContent || "0";
+    try {
+      await events.emitTo("sessions", "mymux:sessions-window-update", {
+        sessions: sessionListEl?.innerHTML || "",
+        favorites: document.getElementById("ssh-fav-list")?.innerHTML || "",
+        attention: document.getElementById("attention-items")?.innerHTML || "",
+        counts: { working: value("working"), blocked: value("blocked"), done: value("done") },
+        theme: document.documentElement.dataset.theme || "dark",
+        accent: document.documentElement.dataset.accent || "blue",
+      });
+    } catch (error) { console.debug("Sessions window update skipped", error); }
+  }, 60);
+}
+
 function refreshSessionList() {
   if (!sessionListEl) return;
   sessionListEl.innerHTML = "";
 
   if (terminals.size === 0) {
     sessionListEl.innerHTML = `<li class="session-empty">No active sessions.</li>`;
+    refreshAttentionQueue();
     return;
   }
 
@@ -7687,28 +10378,24 @@ function refreshSessionList() {
 
     const group = document.createElement("li");
     group.className = "session-group";
+    group.dataset.tabIdx = String(tabIdx);
     group.textContent = tab.label || `Tab ${tabIdx + 1}`;
     group.title = "Double-click to rename · drop a session here to move it to this tab";
     group.addEventListener("dblclick", () => startRenameTab(tabIdx, group));
-    group.addEventListener("dragover", (e) => { e.preventDefault(); group.classList.add("drop-target"); });
-    group.addEventListener("dragleave", () => group.classList.remove("drop-target"));
-    group.addEventListener("drop", (e) => {
-      e.preventDefault();
-      group.classList.remove("drop-target");
-      const pid = Number(e.dataTransfer.getData("text/plain"));
-      if (pid) movePaneToTab(pid, tabIdx);
-    });
+    // Dropping a session on this header moves it into the tab — handled by
+    // startPaneDrag's hit-testing, not by HTML5 drop events (see below).
     sessionListEl.appendChild(group);
 
     tab.panes.forEach((ptyId, i) => {
       const t = terminals.get(ptyId);
       if (!t) return;
-      const dot = t.type === "ssh" ? ICON.globe : "▸";
+      const dot = isRemotePane(t) ? ICON.globe : "▸";
 
       const li = document.createElement("li");
       li.className = "session-item" + (ptyId === focusedPaneId ? " active" : "");
       if (t.unseen) li.classList.add("unseen");
       li.dataset.ptyId = ptyId;
+      li.dataset.sessionKey = t.sessionKey || "";
 
       const dotEl = document.createElement("span");
       dotEl.className = "session-dot";
@@ -7729,23 +10416,9 @@ function refreshSessionList() {
 
       const actionsEl = document.createElement("span");
       actionsEl.className = "session-actions";
-      actionsEl.draggable = false;
       actionsEl.setAttribute("role", "group");
       actionsEl.setAttribute("aria-label", "세션 작업 버튼");
       actionsEl.append(renameBtn);
-      // A draggable parent can suppress a button click after even a tiny mouse
-      // movement. Suspend row dragging for the full action-button press.
-      actionsEl.addEventListener("pointerdown", (e) => {
-        if (e.button !== 0) return;
-        li.draggable = false;
-        const restoreRowDrag = () => {
-          li.draggable = true;
-          document.removeEventListener("pointerup", restoreRowDrag, true);
-          document.removeEventListener("pointercancel", restoreRowDrag, true);
-        };
-        document.addEventListener("pointerup", restoreRowDrag, true);
-        document.addEventListener("pointercancel", restoreRowDrag, true);
-      });
 
       // SSH panes: star saves this connection as a one-click favorite.
       if (t.type === "ssh" && t.session && t.session.kind === "ssh") {
@@ -7760,46 +10433,29 @@ function refreshSessionList() {
       actionsEl.append(closeBtn);
       li.append(dotEl, nameEl, paneNo, actionsEl);
 
-      // Drag a session: reorder it within its own tab, or drop it onto another
-      // tab's session (or that tab's group header) to move it to that tab.
-      li.draggable = true;
-      li.addEventListener("dragstart", (e) => {
-        if (e.target.closest(".session-actions")) {
-          e.preventDefault();
-          return;
-        }
-        e.dataTransfer.setData("text/plain", String(ptyId));
-        e.dataTransfer.effectAllowed = "move";
-      });
-      li.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        const rect = li.getBoundingClientRect();
-        const after = (e.clientY - rect.top) > rect.height / 2;
-        li.classList.toggle("drop-below", after);
-        li.classList.toggle("drop-above", !after);
-      });
-      li.addEventListener("dragleave", (e) => {
-        if (li.contains(e.relatedTarget)) return;
-        li.classList.remove("drop-above", "drop-below");
-      });
-      li.addEventListener("drop", (e) => {
-        e.preventDefault();
-        li.classList.remove("drop-above", "drop-below");
-        const dragId = Number(e.dataTransfer.getData("text/plain"));
-        if (!dragId || dragId === ptyId) return;
-        const srcTab = findTabForPane(dragId);
-        const dstTab = findTabForPane(ptyId);
-        if (!srcTab || !dstTab) return;
-        if (srcTab.tabIdx === dstTab.tabIdx) {
-          const rect = li.getBoundingClientRect();
-          const after = (e.clientY - rect.top) > rect.height / 2;
-          reorderSessionWithin(dstTab, dragId, ptyId, after); // same tab → reorder
-        } else {
-          movePaneToTab(dragId, dstTab.tabIdx);               // other tab → move
-        }
+      // Drag a session: reorder it within its own tab, drop it on another tab's
+      // session row (or that tab's group header, or the tab header at the top)
+      // to move it there, or drop it on a pane edge to re-tile.
+      //
+      // Mouse-driven, NOT HTML5 drag-and-drop. `dragDropEnabled` has to stay on
+      // in tauri.conf.json for the explorer's OS file drop, and with it on the
+      // webview hands every drag to the OS handler and delivers no `dragstart`
+      // /`drop` of its own — which is exactly how the list's HTML5 drag died
+      // when v0.1.43 turned the flag back on. startPaneDrag hit-tests targets
+      // on each mouse move, so it is unaffected either way, and it is the same
+      // engine the pane grip already uses.
+      li.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        if (e.target.closest(".session-actions") || e.target.closest("input")) return;
+        startPaneDrag(ptyId, e);
       });
 
-      li.addEventListener("click", () => focusSession(ptyId));
+      li.addEventListener("click", () => {
+        // A completed drag is followed by a click on the row it started from.
+        // Focusing on that click would fight the move that just happened.
+        if (consumePaneDragClick()) return;
+        focusSession(ptyId);
+      });
       nameEl.addEventListener("dblclick", (e) => { e.stopPropagation(); startRenameSession(ptyId, nameEl); });
       renameBtn.addEventListener("click", (e) => { e.stopPropagation(); startRenameSession(ptyId, nameEl); });
       closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closePane(ptyId); });
@@ -7808,10 +10464,13 @@ function refreshSessionList() {
     });
   }
 
-  // Rebuilding dropped the ctx pills — re-attach them for sessions that have one.
+  // Rebuilding dropped the ctx pills and the agent rows — put both back.
   for (const [pid, tt] of terminals) {
     if (tt.ctxPct != null || tt.codexDetected || tt.aiMode) updateCtxUi(pid, tt);
+    if (tt.agents && tt.agents.length) renderAgentRows(pid);
   }
+  refreshAttentionQueue();
+  scheduleSessionsWindowSnapshot();
 }
 
 // Lightweight: just move the active highlight without rebuilding.
@@ -7820,6 +10479,449 @@ function updateSessionActive() {
   sessionListEl.querySelectorAll(".session-item").forEach((el) => {
     el.classList.toggle("active", Number(el.dataset.ptyId) === focusedPaneId);
   });
+  scheduleSessionsWindowSnapshot();
+}
+
+// ── Subagents under their session ───────────────────────────────────────────
+// When the AI CLI in a pane hands work to a subagent, that agent shows up as a
+// child row under the pane's session in the list: which agent, what it was
+// asked to do, and whether it is still running.
+//
+// The data comes from Claude Code's own session transcript, read by the Rust
+// `claude_agent_activity` command — see crates/mycli-desktop/src/agents.rs for
+// how a transcript is matched to a pane. Scraping the pane was the alternative
+// and is a worse one: a TUI repaint re-wraps and truncates the line an agent
+// launch prints, and it never states plainly that an agent has finished.
+//
+// Codex panes are skipped (it has no subagents), and so are SSH panes: their
+// transcript lives on the remote host, not in this machine's ~/.claude.
+const AGENT_POLL_MS = 2500;
+// Newest agent rows to draw under one session once it is fully expanded. The
+// full list stays in `t.agents`; this only bounds how tall one session can get.
+const AGENT_ROWS_MAX = 24;
+// …and how many are drawn BEFORE the user asks for more. A single session can
+// launch a dozen agents, and a dozen three-line rows buries every other session
+// in the sidebar — so the default is a short preview with the rest one click
+// away. Agents that are still running are always shown on top of this, because
+// a preview that hides live work is worse than a long list.
+const AGENT_ROWS_PREVIEW = 3;
+
+const AGENT_STATUS = {
+  running: { icon: "◐", label: "실행 중" },
+  done: { icon: "✓", label: "완료" },
+  failed: { icon: "✕", label: "실패" },
+  cancelled: { icon: "⊘", label: "취소됨" },
+  // Launched, but the transcript never recorded how it ended and the session
+  // that owned it is gone — what an agent-team teammate normally leaves behind.
+  ended: { icon: "◌", label: "종료됨" },
+};
+
+function agentStatusOf(agent) {
+  return AGENT_STATUS[agent.status] || AGENT_STATUS.running;
+}
+
+function paneRunsClaude(t) {
+  return !!t && !!t.aiMode && !t.codexDetected && t.ctxSource !== "codex" && !isRemotePane(t);
+}
+
+function agentPollTargets() {
+  const targets = [];
+  for (const [id, t] of terminals) {
+    if (!paneRunsClaude(t)) continue;
+    const cwd = t.cwd || (t.session && t.session.cwd) || null;
+    if (!cwd) continue;
+    targets.push({
+      paneId: id,
+      cwd,
+      sinceMs: t.aiSince || null,
+      transcript: t.agentTranscript || null,
+    });
+  }
+  return targets;
+}
+
+// `id:status` per agent — everything a row's shape depends on. Elapsed time is
+// deliberately left out: a running row is retimed in place instead of rebuilt.
+function agentListSignature(agents) {
+  return (agents || []).map((a) => `${a.id}:${a.status}`).join("|");
+}
+
+// Attention Queue is truthful to the transcript source: it reports spawned
+// Claude agents and their recorded completion. Claude does not expose a
+// reliable pending-approval/input state in these records, so Blocked stays
+// explicitly unavailable instead of guessing from terminal text.
+function attentionQueueRows() {
+  const rows = [];
+  for (const [paneId, t] of terminals) {
+    for (const agent of t.agents || []) {
+      rows.push({ paneId, session: sessionLabelFor(t), agent });
+    }
+  }
+  return rows;
+}
+
+function attentionQueueCounts(rows) {
+  return {
+    working: rows.filter((r) => r.agent.status === "running").length,
+    // null means the source has no trustworthy blocked/prompt-wait signal.
+    blocked: null,
+    done: rows.filter((r) => r.agent.status === "done").length,
+  };
+}
+
+function refreshAttentionQueue() {
+  const host = document.getElementById("attention-items");
+  const rows = attentionQueueRows();
+  const counts = attentionQueueCounts(rows);
+  for (const [status, count] of Object.entries(counts)) {
+    const button = document.querySelector(`[data-attention-status="${status}"]`);
+    const value = button && button.querySelector("b");
+    if (value) value.textContent = count == null ? "—" : String(count);
+  }
+  if (!host) return;
+  host.replaceChildren();
+  const visibleRows = [
+    ...rows.filter((r) => r.agent.status === "running"),
+    ...rows.filter((r) => r.agent.status === "done"),
+  ];
+  for (const row of visibleRows.slice(0, 8)) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `attention-item ${row.agent.status === "running" ? "is-working" : "is-done"}`;
+    button.dataset.ownerPty = String(row.paneId);
+    button.title = `${row.session} · ${row.agent.description || row.agent.name} — 클릭하여 세션으로 이동`;
+    const state = document.createElement("span");
+    state.className = "attention-state";
+    state.textContent = row.agent.status === "running" ? "Working" : "Done";
+    const label = document.createElement("span");
+    label.className = "attention-label";
+    label.textContent = row.agent.description || row.agent.name || row.session;
+    const session = document.createElement("small");
+    session.textContent = row.session;
+    button.append(state, label, session);
+    button.addEventListener("click", () => focusSession(row.paneId));
+    item.appendChild(button);
+    host.appendChild(item);
+  }
+  if (!rows.length) {
+    const empty = document.createElement("li");
+    empty.className = "attention-empty";
+    empty.textContent = "Tracked Claude agents will appear here";
+    host.appendChild(empty);
+  } else if (rows.length > 8) {
+    const more = document.createElement("li");
+    more.className = "attention-empty";
+    more.textContent = `+${rows.length - 8} more in Sessions`;
+    host.appendChild(more);
+  }
+  scheduleSessionsWindowSnapshot();
+}
+
+// The first poll after a session is picked up reads a whole transcript, which
+// can outlast the interval. Never let a second poll start on top of it.
+let agentPollInFlight = false;
+
+async function pollAgentActivity() {
+  if (agentPollInFlight) return;
+  const targets = agentPollTargets();
+  if (targets.length === 0) return;
+  let rows;
+  agentPollInFlight = true;
+  try {
+    rows = await invoke("claude_agent_activity", { panes: targets });
+  } catch (e) {
+    // No transcript for this folder yet, or it could not be read. The session
+    // simply shows no agents; there is nothing for the user to act on.
+    console.debug("claude_agent_activity failed", e);
+    return;
+  } finally {
+    // Must run on the failure path too, or one bad read stops every later poll.
+    agentPollInFlight = false;
+  }
+  for (const row of rows || []) {
+    const t = terminals.get(row.paneId);
+    if (!t) continue;
+    t.agentTranscript = row.transcript || null;
+    const before = agentListSignature(t.agents);
+    t.agents = row.agents || [];
+    if (agentListSignature(t.agents) !== before) renderAgentRows(row.paneId);
+  }
+  refreshAttentionQueue();
+  tickAgentElapsed();
+}
+
+// A running agent's row shows how long it has been going, so its meta line has
+// to move even on the polls where nothing about the list changed.
+function tickAgentElapsed() {
+  if (!sessionListEl) return;
+  for (const [ptyId, t] of terminals) {
+    if (!t.agents) continue;
+    for (const agent of t.agents) {
+      if (agent.status !== "running") continue;
+      // Tool-use ids are `toolu_` plus base62, so they need no escaping here.
+      const meta = sessionListEl.querySelector(
+        `.session-agent[data-owner-pty="${ptyId}"][data-agent-id="${agent.id}"] .session-agent-meta`,
+      );
+      if (meta) meta.textContent = agentMetaText(agent);
+    }
+  }
+}
+
+function formatAgentDuration(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}초`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}분 ${seconds % 60}초`;
+  return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분`;
+}
+
+function formatAgentTokens(total) {
+  if (total == null || !Number.isFinite(total)) return "";
+  return total < 1000 ? `${total} 토큰` : `${(total / 1000).toFixed(1)}k 토큰`;
+}
+
+// One line of status under the agent's name: elapsed time while it runs, and
+// what it cost once it is done.
+function agentMetaText(agent) {
+  const parts = [];
+  if (agent.status === "running") {
+    const elapsed = agent.startedMs ? formatAgentDuration(Date.now() - agent.startedMs) : "";
+    parts.push(elapsed ? `실행 중 · ${elapsed}` : "실행 중");
+    if (agent.background) parts.push("백그라운드");
+  } else {
+    parts.push(agentStatusOf(agent).label);
+    const spent = formatAgentDuration(agent.durationMs);
+    if (spent) parts.push(spent);
+    if (agent.toolUses != null) parts.push(`도구 ${agent.toolUses}회`);
+    const tokens = formatAgentTokens(agent.totalTokens);
+    if (tokens) parts.push(tokens);
+  }
+  return parts.join(" · ");
+}
+
+// Count pill on the session row that folds the agent rows away. Lives next to
+// the action buttons and disappears with the last agent.
+function updateAgentToggle(row, ptyId, agents) {
+  let toggle = row.querySelector(".session-agents-toggle");
+  if (agents.length === 0) {
+    if (toggle) toggle.remove();
+    return;
+  }
+  if (!toggle) {
+    toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "session-agents-toggle";
+    // Pressing the pill must fold the list, not pick the row up for a drag or
+    // move the focus to the session.
+    toggle.addEventListener("mousedown", (e) => e.stopPropagation());
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const t = terminals.get(ptyId);
+      if (!t) return;
+      t.agentsCollapsed = !t.agentsCollapsed;
+      renderAgentRows(ptyId);
+    });
+    const actions = row.querySelector(".session-actions");
+    if (actions) actions.before(toggle);
+    else row.appendChild(toggle);
+  }
+  const t = terminals.get(ptyId);
+  const running = agents.filter((a) => a.status === "running").length;
+  const collapsed = !!(t && t.agentsCollapsed);
+  toggle.textContent = `${collapsed ? "▸" : "▾"} ${running > 0 ? `${running}/${agents.length}` : agents.length}`;
+  toggle.classList.toggle("has-running", running > 0);
+  toggle.setAttribute(
+    "aria-label",
+    running > 0
+      ? `agent ${agents.length}개 중 ${running}개 실행 중 — 목록 접기/펴기`
+      : `agent ${agents.length}개 — 목록 접기/펴기`,
+  );
+  toggle.title = `${toggle.getAttribute("aria-label")}\n${
+    collapsed ? "펴면" : "접으면"
+  } 이 세션의 agent 줄이 ${collapsed ? "다시 보입니다" : "모두 숨습니다"}`;
+}
+
+// Rebuild the agent rows that belong to one session. They are siblings of the
+// session row rather than nested children, because the session list is one flat
+// <ul> and a row has to stay a direct <li> of it for the drag hit-testing.
+// Which of a session's agents to actually draw. Everything still running, plus
+// enough of the newest finished ones to reach the preview size — unless the
+// user asked for the whole list, which is still capped so one busy session
+// cannot fill the sidebar on its own.
+function visibleAgents(agents, expanded) {
+  if (expanded) return agents.slice(-AGENT_ROWS_MAX);
+  const running = agents.filter((a) => a.status === "running");
+  const room = Math.max(0, AGENT_ROWS_PREVIEW - running.length);
+  // `slice(-0)` is `slice(0)`, which is the WHOLE array — so once the running
+  // agents alone fill the preview, taking "the last 0 finished ones" would
+  // quietly show every agent there is. Ask for none explicitly instead.
+  const recent = room === 0 ? [] : agents.filter((a) => a.status !== "running").slice(-room);
+  // Keep the launch order rather than grouping by status: the list reads as a
+  // history, and a row must not jump when an agent finishes.
+  const keep = new Set([...running, ...recent]);
+  return agents.filter((a) => keep.has(a));
+}
+
+function renderAgentRows(ptyId) {
+  if (!sessionListEl) return;
+  sessionListEl
+    .querySelectorAll(`li[data-owner-pty="${ptyId}"]`)
+    .forEach((el) => el.remove());
+  const row = sessionListEl.querySelector(`.session-item[data-pty-id="${ptyId}"]`);
+  if (!row) return;
+  const t = terminals.get(ptyId);
+  const agents = (t && t.agents) || [];
+  updateAgentToggle(row, ptyId, agents);
+  row.classList.toggle("session-has-agents", agents.length > 0 && !(t && t.agentsCollapsed));
+  if (agents.length === 0 || (t && t.agentsCollapsed)) return;
+
+  const expanded = !!(t && t.agentsExpanded);
+  const shown = visibleAgents(agents, expanded);
+  const hidden = agents.length - shown.length;
+  const hasTail = hidden > 0 || expanded;
+  let anchor = row;
+  for (const agent of shown) {
+    const li = document.createElement("li");
+    li.className = `session-agent status-${agent.status}`;
+    li.dataset.ownerPty = String(ptyId);
+    li.dataset.agentId = agent.id;
+
+    const dot = document.createElement("span");
+    dot.className = "session-agent-dot";
+    dot.textContent = agentStatusOf(agent).icon;
+
+    const name = document.createElement("span");
+    name.className = "session-agent-name";
+    name.textContent = agent.name;
+
+    const desc = document.createElement("span");
+    desc.className = "session-agent-desc";
+    desc.textContent = agent.description || "(설명 없음)";
+
+    const meta = document.createElement("span");
+    meta.className = "session-agent-meta";
+    meta.textContent = agentMetaText(agent);
+
+    const body = document.createElement("span");
+    body.className = "session-agent-body";
+    body.append(name, desc, meta);
+
+    li.append(dot, body);
+    li.title = `${agent.name} — ${agent.description || "(설명 없음)"}\n클릭하면 프롬프트 전문을 봅니다`;
+    li.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showAgentDetail(ptyId, agent.id);
+    });
+    anchor.after(li);
+    anchor = li;
+  }
+  if (!hasTail && anchor !== row) anchor.classList.add("session-agent-last");
+
+  // Tail row: reveal the agents the preview left out, or fold them away again.
+  if (!hasTail) return;
+  const more = document.createElement("li");
+  more.className = "session-agent-more session-agent-last";
+  more.dataset.ownerPty = String(ptyId);
+  const capped = expanded && agents.length > AGENT_ROWS_MAX;
+  more.textContent = expanded ? "접기" : `+${hidden}개 더 보기`;
+  more.title = capped
+    ? `가장 최근 ${AGENT_ROWS_MAX}개만 표시합니다 (전체 ${agents.length}개)`
+    : expanded
+      ? "최근 몇 개만 남기고 접습니다"
+      : `숨겨진 agent ${hidden}개를 모두 폅니다`;
+  more.addEventListener("mousedown", (e) => e.stopPropagation());
+  more.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const target = terminals.get(ptyId);
+    if (!target) return;
+    target.agentsExpanded = !target.agentsExpanded;
+    renderAgentRows(ptyId);
+  });
+  anchor.after(more);
+}
+
+// Drop everything we know about a pane's agents — the CLI that produced them is
+// gone, so the list would only be stale history for a session that no longer
+// exists.
+function clearPaneAgents(ptyId, t) {
+  if (!t) return;
+  t.agents = null;
+  t.agentTranscript = null;
+  t.agentsExpanded = false;
+  t.aiSince = 0;
+  const row = sessionListEl && sessionListEl.querySelector(`.session-item[data-pty-id="${ptyId}"]`);
+  if (row) {
+    row.classList.remove("session-has-agents");
+    row.querySelector(".session-agents-toggle")?.remove();
+  }
+  sessionListEl
+    ?.querySelectorAll(`li[data-owner-pty="${ptyId}"]`)
+    .forEach((el) => el.remove());
+  refreshAttentionQueue();
+}
+
+// Full detail for one agent: what it was asked, what it cost, and the prompt
+// it was handed — none of which fits on a sidebar row.
+function showAgentDetail(ptyId, agentId) {
+  const t = terminals.get(ptyId);
+  const agent = ((t && t.agents) || []).find((a) => a.id === agentId);
+  const modal = document.getElementById("agent-modal");
+  if (!agent || !modal) return;
+
+  const titleEl = document.getElementById("agent-modal-title");
+  const descEl = document.getElementById("agent-modal-desc");
+  const metaEl = document.getElementById("agent-modal-meta");
+  const promptEl = document.getElementById("agent-modal-prompt");
+  if (titleEl) titleEl.textContent = agent.name;
+  if (descEl) descEl.textContent = agent.description || "(설명 없음)";
+
+  if (metaEl) {
+    metaEl.innerHTML = "";
+    const rows = [
+      ["상태", agentMetaText(agent)],
+      ["모델", agent.model || ""],
+      ["실행 방식", agent.background ? "백그라운드" : "전면"],
+      ["시작", agent.startedMs ? new Date(agent.startedMs).toLocaleString() : ""],
+      ["결과 요약", agent.summary || ""],
+      ["세션", sessionLabelFor(t)],
+    ];
+    for (const [label, value] of rows) {
+      if (!value) continue;
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      metaEl.append(dt, dd);
+    }
+  }
+  if (promptEl) promptEl.textContent = agent.prompt || "(프롬프트가 기록되지 않았습니다)";
+
+  const copyBtn = document.getElementById("agent-modal-copy");
+  if (copyBtn) {
+    copyBtn.onclick = async () => {
+      const copied = await clipboardWrite(agent.prompt || "");
+      toast(copied ? "프롬프트를 복사했습니다." : "복사하지 못했습니다.", !copied);
+    };
+  }
+  modal.classList.remove("hidden");
+}
+
+function hideAgentDetail() {
+  document.getElementById("agent-modal")?.classList.add("hidden");
+}
+
+function setupAgentActivity() {
+  document.getElementById("agent-modal-close")?.addEventListener("click", hideAgentDetail);
+  document.getElementById("agent-modal-ok")?.addEventListener("click", hideAgentDetail);
+  // Click outside the box closes it, the same as the app's other modals.
+  document.getElementById("agent-modal")?.addEventListener("click", (e) => {
+    if (e.target && e.target.id === "agent-modal") hideAgentDetail();
+  });
+  // One timer for the whole app: it returns immediately while no pane is
+  // running a Claude CLI, so there is nothing to start and stop.
+  setInterval(pollAgentActivity, AGENT_POLL_MS);
 }
 
 // Click a session → switch to its tab (if needed) and move the cursor to it.
@@ -7840,7 +10942,7 @@ function showExplorerForSession(ptyId) {
   const t = terminals.get(ptyId);
   if (!t) return;
   const generation = ++explorerFocusGeneration;
-  if (t.type === "ssh") {
+  if (isRemotePane(t)) {
     if (t.sftpId == null) {
       showExplorerBlockedForSession(ptyId, t);
       if (t.sftpStatus === "unsupported") showSftpUnsupportedModal();
@@ -7851,8 +10953,9 @@ function showExplorerForSession(ptyId) {
       if (t.session) t.session.remotePath = currentExplorerPath;
       return;
     }
-    const rememberedPath = t.remotePath || t.session?.remotePath ||
-      t.cwd || t.session?.cwd;
+    // `cwd` belongs to the local PTY process and is not a valid remote path.
+    // Until SFTP has resolved a remote path, ask the server for its home dir.
+    const rememberedPath = t.remotePath || t.session?.remotePath;
     if (rememberedPath) {
       explorerGo(rememberedPath, t.sftpId);
       return;
@@ -7882,11 +10985,14 @@ function showExplorerBlockedForSession(ptyId, terminal) {
   explorerLoadGeneration++;
   currentSftpId = null;
   currentExplorerPath = "";
+  const needsPassword = terminal?.sftpStatus === "needs-password";
   const status = terminal?.sftpStatus === "connecting"
     ? "SFTP 연결 중…"
     : terminal?.sftpStatus === "unsupported"
       ? "SFTP 미지원"
-      : "SFTP 연결 안 됨";
+      : needsPassword
+        ? "비밀번호 필요"
+        : "SFTP 연결 안 됨";
   if (explorerPath) {
     explorerPath.textContent = status;
     explorerPath.title = "이 SSH 세션에는 현재 업로드할 수 없습니다.";
@@ -7897,8 +11003,26 @@ function showExplorerBlockedForSession(ptyId, terminal) {
     item.className = "explorer-blocked-message";
     item.textContent = terminal?.sftpStatus === "connecting"
       ? "SFTP 연결이 완료되면 이 세션의 원격 파일이 표시됩니다."
-      : "이 SSH 세션의 SFTP 연결을 사용할 수 없어 업로드가 차단되었습니다.";
+      : needsPassword
+        ? "이 서버의 파일을 보려면 비밀번호가 한 번 필요합니다."
+        : "이 SSH 세션의 SFTP 연결을 사용할 수 없어 업로드가 차단되었습니다.";
     fileListEl.appendChild(item);
+    // A pane whose ssh command we adopted, but which authenticates with a
+    // password we do not have. One click opens the existing SSH modal so the
+    // user can type it once.
+    if (needsPassword && terminal.adoptedSsh) {
+      const { host, port, user } = terminal.adoptedSsh;
+      const connect = document.createElement("li");
+      const button = document.createElement("button");
+      button.className = "explorer-connect-remote";
+      button.textContent = `${host} 열기`;
+      button.title = "이 서버의 파일을 보려면 비밀번호가 한 번 필요합니다";
+      button.addEventListener("click", () => {
+        openSshModal({ host, port, username: user, forPaneId: ptyId });
+      });
+      connect.appendChild(button);
+      fileListEl.appendChild(connect);
+    }
   }
   if (explorerMode) {
     explorerMode.querySelectorAll("option[data-sftp-blocked]").forEach((option) => option.remove());
@@ -8073,6 +11197,7 @@ function setTheme(mode) {
   try { localStorage.setItem("mycli-theme", mode); } catch {}
   if (btnTheme) btnTheme.innerHTML = mode === "dark" ? ICON.moon : ICON.sun;
   applyTerminalTheme();
+  scheduleSessionsWindowSnapshot();
 }
 
 function setAccent(accent) {
@@ -8082,6 +11207,7 @@ function setAccent(accent) {
     sw.classList.toggle("active", sw.dataset.accent === accent);
   });
   applyTerminalTheme();
+  scheduleSessionsWindowSnapshot();
 }
 
 function initTheme() {
@@ -8374,7 +11500,8 @@ function renderPaneCommandShortcuts(ptyId) {
   bindPaneCommandDockDrag(ptyId, handle);
   host.appendChild(handle);
   const memoBtn = makeIconButton(
-    "pane-command-tool pane-command-memo" + (paneMemo(ptyId) ? " has-memo" : ""),
+    "pane-command-tool pane-command-memo" +
+      (paneMemos(ptyId).some((m) => m.body.trim()) ? " has-memo" : ""),
     ICON.memo,
     "이 세션의 메모 열기 및 편집"
   );
@@ -8433,7 +11560,116 @@ function renderAllPaneCommandShortcuts() {
 function setPaneAiMode(t, active) {
   if (!t || t.aiMode === active) return;
   t.aiMode = active;
+  // When the AI CLI came up is what lets the transcript lookup pick THIS pane's
+  // session out of the several a project folder can hold (see agents.rs).
+  if (active) t.aiSince = Date.now();
   renderPaneCommandShortcuts(t.id);
+}
+
+const HARNESS_TEAMS_KEY = "mymux.harnessTeams.v1";
+function readHarnessTeams() {
+  try {
+    const value = JSON.parse(localStorage.getItem(HARNESS_TEAMS_KEY) || "[]");
+    return Array.isArray(value) ? value.filter((team) => team && typeof team.name === "string" && Array.isArray(team.commandIds)) : [];
+  } catch { return []; }
+}
+function renderHarnessTeams() {
+  const host = document.getElementById("harness-teams");
+  if (!host) return;
+  host.replaceChildren();
+  for (const team of readHarnessTeams()) {
+    const row = document.createElement("div");
+    row.className = "harness-team-row";
+    const run = document.createElement("button");
+    run.type = "button";
+    run.className = "harness-team-run";
+    run.textContent = team.name;
+    run.title = `Launch named team: ${team.name}`;
+    run.addEventListener("click", () => launchHarnessTeam(team));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "harness-team-delete";
+    remove.textContent = "×";
+    remove.title = `Delete team ${team.name}`;
+    remove.addEventListener("click", () => {
+      localStorage.setItem(HARNESS_TEAMS_KEY, JSON.stringify(readHarnessTeams().filter((item) => item.id !== team.id)));
+      renderHarnessTeams();
+    });
+    row.append(run, remove);
+    host.appendChild(row);
+  }
+}
+function createHarnessTeam() {
+  if (!savedCmds.length) { toast("Save Claude and collaborator CLI commands first.", true); return; }
+  const name = window.prompt("Name this team (for example, Mymux team):")?.trim();
+  if (!name) return;
+  const options = savedCmds.map((cmd) => `${cmd.name} [${cmd.command}]`).join("\n");
+  const chosen = window.prompt(`Enter the saved command names in launch order, separated by commas. Start with Claude Code.\n\n${options}`, "Claude Code, Codex");
+  if (chosen == null) return;
+  const names = chosen.split(",").map((part) => part.trim().toLocaleLowerCase()).filter(Boolean);
+  const commands = names.map((value) => savedCmds.find((cmd) => cmd.name.trim().toLocaleLowerCase() === value || (cmd.alias || "").trim().toLocaleLowerCase() === value)).filter(Boolean);
+  if (commands.length < 2 || commands.length !== names.length) {
+    toast("Choose at least two saved commands by name or alias.", true); return;
+  }
+  if (!/\bclaude(?:\.exe)?\b/i.test(commands[0].command)) {
+    toast("The first team command must launch Claude Code as team lead.", true); return;
+  }
+  if (!commands.slice(1).some((cmd) => /\bcodex(?:\.exe)?\b/i.test(cmd.command))) {
+    toast("Add at least one saved Codex CLI command as a team worker.", true); return;
+  }
+  const teams = readHarnessTeams();
+  if (teams.some((team) => team.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+    toast("A team with that name already exists.", true); return;
+  }
+  teams.push({ id: crypto.randomUUID(), name, commandIds: commands.map((cmd) => cmd.id) });
+  localStorage.setItem(HARNESS_TEAMS_KEY, JSON.stringify(teams));
+  renderHarnessTeams();
+  toast(`Saved team: ${name}`);
+}
+function quoteHarnessArg(value, shellKind) {
+  const text = String(value);
+  if (shellKind === "powershell") return "'" + text.replace(/'/g, "''") + "'";
+  if (shellKind === "cmd") return '"' + text.replace(/"/g, '\\"') + '"';
+  return "'" + text.replace(/'/g, "'\\''") + "'";
+}
+function teamLeadCommand(base, configPath, shellKind) {
+  const allowed = "mcp__mymux_team__list_workers,mcp__mymux_team__delegate_task,mcp__mymux_team__collect_results";
+  const kickoff = "You are the lead of this named Mymux coding team. Use the configured Mymux team MCP tools to delegate independent coding work to workers, then collect and review every result before reporting. Keep every message to workers and every task/result exchange in English. Give workers bounded, non-overlapping scopes. Preserve unrelated work; do not commit, push, or deploy unless the user explicitly asks.";
+  return `${base} --mcp-config ${quoteHarnessArg(configPath, shellKind)} --allowedTools ${quoteHarnessArg(allowed, shellKind)} ${quoteHarnessArg(kickoff, shellKind)}`;
+}
+async function launchHarnessTeam(team) {
+  const commands = team.commandIds.map((id) => savedCmds.find((cmd) => cmd.id === id)).filter(Boolean);
+  if (commands.length !== team.commandIds.length) { toast("A saved team command is missing. Edit the team after restoring its saved commands.", true); return; }
+  if (commands.length < 2 || !/\bclaude(?:\.exe)?\b/i.test(commands[0].command)) { toast("Team lead command must be Claude Code and include at least one worker.", true); return; }
+  const workers = commands.slice(1).filter((cmd) => /\bcodex(?:\.exe)?\b/i.test(cmd.command)).map((cmd) => {
+    const match = cmd.command.match(/(?:--model(?:=|\s+))(?:"([^"]+)"|'([^']+)'|([^\s]+))/i);
+    return { name: cmd.name, model: match ? (match[1] || match[2] || match[3]) : null };
+  });
+  if (!workers.length) { toast("Automatic dispatch currently needs at least one saved Codex CLI command in this team.", true); return; }
+  if (browserTabActive) setBrowserView(false);
+  if (viewerActive) setViewerView(false);
+
+  const teamCwd = commands[0].cwd || undefined;
+  let configPath;
+  try {
+    configPath = await invoke("prepare_harness_mcp", { teamId: team.id, cwd: teamCwd || await invoke("explorer_home_dir"), workers });
+  } catch (error) {
+    toast(`Could not prepare team coordinator: ${error}`, true);
+    return;
+  }
+  const leadId = await spawnTerminal(undefined, teamCwd);
+  if (leadId == null) return;
+  const tabIdx = activeTabIdx;
+  const tab = tabs.get(tabIdx);
+  if (tab) {
+    tab.label = team.name;
+    const tabButton = terminalTabs.querySelector(`.tab[data-id="${tabIdx}"] span:first-child`);
+    if (tabButton) tabButton.textContent = team.name;
+  }
+  const shellKind = paneShellKind(terminals.get(leadId));
+  const command = teamLeadCommand(commands[0].command, configPath, shellKind);
+  sendCommandWhenReady(leadId, command, { ...commands[0], favoriteTarget: "ai", favorite_target: "ai" });
+  toast(`Launched ${team.name}; Claude Code is ready to coordinate ${workers.length} Codex worker(s).`, false);
 }
 
 function renderCmdList(cmds) {
@@ -8551,7 +11787,7 @@ function openModal(cmd) {
   }
   // The native browser webview is a native overlay above all HTML, so it would
   // cover this modal — hide it while the modal is open.
-  if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
+  // External browser windows cannot cover Mymux dialogs.
   modalOverlay.classList.remove("hidden");
   inputName.focus();
 }
@@ -8560,10 +11796,6 @@ function closeModal() {
   modalOverlay.classList.add("hidden");
   form.reset();
   editingId = null;
-  if (browserTabActive && browserMode === "native") {
-    // openNativePane honors the memo-owned hide guard.
-    openNativePane();
-  }
 }
 
 async function handleSave(e) {
@@ -8677,7 +11909,7 @@ function rememberCommand(command) {
   saveCommandHistory();
 }
 
-function handleTerminalInput(data, ptyId) {
+function handleTerminalInput(data, ptyId, submittedLine = "") {
   const tInfo = terminals.get(ptyId);
   if (tInfo && typeof tInfo.acInput !== "string") tInfo.acInput = "";
   const getInput = () => (tInfo ? tInfo.acInput : currentInput);
@@ -8685,24 +11917,44 @@ function handleTerminalInput(data, ptyId) {
     currentInput = value;
     if (tInfo) tInfo.acInput = value;
   };
+  // Ctrl+D at an empty prompt ends the shell — for an adopted pane that means
+  // the ssh session is over and the Explorer belongs to the local disk again.
+  if (data === "\x04" && !getInput()) releaseTypedSsh(ptyId);
   // Track what user types to build current input line
   if (data === "\r" || data === "\n") {
     // Enter pressed — detect cd command and sync explorer
     const typedRaw = getInput();
     const typed = typedRaw.trim();
-    presetCtxSourceFromCmd(ptyId, tInfo, typed);
-    syncExplorerOnCd(typed, ptyId);
+    // Keystrokes are exactly what this pane sent, so they win whenever we have
+    // them. The screen covers the case the keystroke buffer structurally cannot
+    // see: a line recalled with ↑, or completed by the shell — `acInput` is
+    // empty there, which is why the Explorer used to ignore those outright.
+    //
+    // The order matters the other way too. Inside an ssh session the pane's OSC
+    // 133 marks still belong to the local shell that scrolled away, so the
+    // screen reads back the remote prompt with the command glued to it.
+    // Preferring that would stop `exit` from ever matching and the Explorer
+    // would never come home.
+    const submitted = typed || submittedLine;
+    presetCtxSourceFromCmd(ptyId, tInfo, submitted);
+    syncExplorerOnCd(submitted, ptyId);
+    // `ssh …` typed at a local prompt — adopt it so the Explorer follows.
+    // `exit`/`logout` gives the pane back. Both are fire-and-forget.
+    if (/^ssh\s/.test(submitted)) adoptTypedSsh(submitted, ptyId);
+    else if (/^(exit|logout)$/i.test(submitted)) releaseTypedSsh(ptyId);
     setInput("");
     hideAutocomplete();
     // Alias typed at the prompt: erase it and run the full combo instead
-    // (cd into the saved directory, then the command — one Enter).
+    // (cd into the saved directory, then the command — one Enter). Matched on
+    // the literal keystrokes, because the backspace count below has to equal
+    // what this pane actually typed.
     const aliasCmd = typed && savedCmds.find((c) => c.alias && c.alias === typed);
     if (aliasCmd) {
       invoke("pty_write", { id: ptyId, data: "\x7f".repeat(typedRaw.length) });
       runCommandCombo(aliasCmd, ptyId);
       return "consumed";
     }
-    rememberCommand(typed);
+    rememberCommand(submitted);
     return;
   }
 
@@ -8772,7 +12024,7 @@ function handleTerminalInput(data, ptyId) {
 
 function showAutocomplete(input, ptyId) {
   const lower = input.toLowerCase();
-  let matches = savedCmds.filter(
+  let matches = (savedCommandSuggestionsEnabled ? savedCmds : []).filter(
     (c) =>
       (c.alias && c.alias.toLowerCase().startsWith(lower)) ||
       c.name.toLowerCase().includes(lower) ||
@@ -8895,7 +12147,7 @@ function hideAutocomplete() {
 
 async function resolveRemotePaneDir(ptyId, rawPath) {
   const t = terminals.get(ptyId);
-  if (!t || t.type !== "ssh" || t.sftpId == null) return null;
+  if (!t || !isRemotePane(t) || t.sftpId == null) return null;
   const sftpId = t.sftpId;
   let path = String(rawPath == null ? "" : rawPath).trim();
   path = path.replace(/^["']|["']$/g, "").trim();
@@ -8910,7 +12162,7 @@ async function resolveRemotePaneDir(ptyId, rawPath) {
   } else if (path.startsWith("/")) {
     candidate = path;
   } else {
-    const base = t.remotePath || t.cwd ||
+    const base = t.remotePath ||
       await invoke("sftp_home_dir", { sessionId: sftpId });
     candidate = `${String(base).replace(/\/+$/, "")}/${path}`;
   }
@@ -8931,7 +12183,7 @@ async function resolveRemotePaneDir(ptyId, rawPath) {
 
 function syncExplorerOnCd(input, ptyId) {
   const t = terminals.get(ptyId);
-  if (t && t.type === "ssh") {
+  if (t && isRemotePane(t)) {
     if (t.sftpId == null) return;
     const match = String(input || "").match(/^cd(?:\s+--)?(?:\s+(.+))?$/i);
     if (!match) return;
@@ -8950,6 +12202,32 @@ function syncLocalExplorerOnCd(input, ptyId) {
   const tInfo = terminals.get(ptyId);
   if (!tInfo) return;
   const baseCwd = tInfo.cwd || currentExplorerPath;
+
+  // POSIX paths must keep '/' and resolve against this pane, not whichever
+  // folder the shared Explorer happens to show. The resulting cwd also selects
+  // Claude's transcript directory for the agent rows.
+  if (!IS_WINDOWS) {
+    const match = String(input || "").trim().match(/^(?:cd|pushd)(?:\s+--)?(?:\s+(.+))?$/);
+    if (!match) return;
+    const sequence = tInfo.localCdSequence = (tInfo.localCdSequence || 0) + 1;
+    setTimeout(async () => {
+      try {
+        const raw = match[1] || "";
+        const home = !raw || /^(?:~|\$HOME)(?:\/|$)/.test(raw.replace(/^["']|["']$/g, ""))
+          ? await invoke("explorer_home_dir") : null;
+        const targetPath = posixCdTarget(raw, baseCwd, home);
+        if (!targetPath) return;
+        await invoke("explorer_list_local", { path: targetPath });
+        const live = terminals.get(ptyId);
+        if (live !== tInfo || live.localCdSequence !== sequence || isRemotePane(live)) return;
+        explorerGo(targetPath, null);
+        setPaneCwd(ptyId, targetPath);
+      } catch {
+        // Invalid paths leave the last known directory in place.
+      }
+    }, 300);
+    return;
+  }
 
   let targetPath = null;
 
@@ -9005,6 +12283,34 @@ function syncLocalExplorerOnCd(input, ptyId) {
       // Path doesn't exist or error, don't update
     }
   }, 300);
+}
+
+// Lexical POSIX normalization keeps `cd ./src/../project/` on the same
+// transcript slug as the shell's cwd. No shell expressions are evaluated here.
+function posixCdTarget(rawPath, baseCwd, home) {
+  let path = String(rawPath || "").trim();
+  let quote = "";
+  if ((path.startsWith('"') && path.endsWith('"')) || (path.startsWith("'") && path.endsWith("'"))) {
+    quote = path[0];
+    path = path.slice(1, -1);
+    if (!path) return null;
+  }
+  if (path === "-") return null;
+  if (!path || (!quote && path === "~") || (quote !== "'" && path === "$HOME")) path = home || "";
+  else if (!quote && path.startsWith("~/")) path = home ? `${home}/${path.slice(2)}` : "";
+  else if (quote !== "'" && path.startsWith("$HOME/")) path = home ? `${home}/${path.slice(6)}` : "";
+  if (!path) return null;
+  if (!path.startsWith("/")) {
+    if (!baseCwd || !baseCwd.startsWith("/")) return null;
+    path = `${baseCwd}/${path}`;
+  }
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return "/" + parts.join("/");
 }
 
 // ── Auto-update: reveal the "Update" button when a newer release exists ──
@@ -9075,7 +12381,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const closeUpdateModal = () => {
       if (modal) modal.classList.add("hidden");
       // Restore the native browser overlay only if we're still on the browser view.
-      if (browserTabActive && browserMode === "native") openNativePane();
+      if (browserTabActive && browserMode === "native") showBrowserStart("external");
     };
     if (modalOk) modalOk.addEventListener("click", () => { closeUpdateModal(); runInstall(); });
     if (modalCancel) modalCancel.addEventListener("click", closeUpdateModal);
@@ -9096,7 +12402,7 @@ window.addEventListener("DOMContentLoaded", () => {
             : "업데이트를 진행하면 앱이 재시작됩니다. 계속하시겠습니까?";
         }
         // The native browser overlay floats above all HTML; hide it so the modal shows.
-        if (browserTabActive && browserMode === "native") invoke("browser_pane_hide").catch(() => {});
+        // External browser windows cannot cover Mymux dialogs.
         modal.classList.remove("hidden");
         if (modalOk) modalOk.focus();
         return;
@@ -9185,7 +12491,7 @@ async function openStartupGuide(showClaude, showCodex) {
 
   const rootContainer = document.createElement("div");
   rootContainer.className = "pane-container horizontal";
-  rootContainer.style.cssText = "flex:1;";
+  rootContainer.style.cssText = "flex:1 1 0;min-width:0;min-height:0;";
   tabEl.appendChild(rootContainer);
   terminalContainer.appendChild(tabEl);
 

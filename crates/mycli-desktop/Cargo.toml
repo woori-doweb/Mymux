@@ -1,6 +1,6 @@
 [package]
 name = "mycli-desktop"
-version = "0.1.50"
+version = "0.3.8"
 edition = "2024"
 
 # The executable (and therefore the OS process / Task Manager name) is "Mymux".
@@ -16,6 +16,10 @@ tauri-plugin-shell = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+# Persists the main window's size/position/maximized state across runs. Restores
+# on window creation and constrains a saved position that no longer lands on a
+# connected monitor, so we do not have to reimplement either.
+tauri-plugin-window-state = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
@@ -26,7 +30,7 @@ cap-fs-ext = "4"
 portable-pty = "0.9"
 russh = "0.58"
 russh-sftp = "2.1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "time", "io-util", "net"] }
 async-trait = "0.1"
 # Encode a clipboard image to PNG for the terminal image-paste path.
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -34,9 +38,16 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # reqwest is already in the tree (via tauri-plugin-updater) with json + rustls
 # enabled, so this adds no new build-toolchain requirement.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# Read Chrome/Edge History and Login Data, which are SQLite files. `bundled`
+# compiles SQLite from the amalgamation so there is no system-sqlite dependency;
+# it needs the C toolchain the build already requires (MSVC).
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Decrypt Chrome/Edge saved passwords (the v10 scheme: an AES-256-GCM key that
+# DPAPI unwraps). aes-gcm is pure Rust, so it adds no build-toolchain dependency.
+aes-gcm = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Storage_FileSystem", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp"] }
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

@@ -26,6 +26,18 @@ jobs:
       - name: Check macOS WebKit source invariants
         run: node scripts/check-macos-gotchas.mjs
 
+  # vendor/tao is a patched copy of a crates.io crate. Re-vendoring it to bump the
+  # version would drop the reentrancy fix silently: the app still builds, and only
+  # freezes for good when a focus change lands mid-IME-input. Cheap, runs first —
+  # see issue #36.
+  vendored-tao:
+    name: vendored tao guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check vendored tao deadlock fix is intact
+        run: node scripts/check-vendored-tao.mjs
+
   build:
     name: build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -71,9 +83,14 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace
 
-      # Logic tests live in mycli-core / mycli-tui (fuzzy match, params, etc.).
-      - name: Test (core + tui)
-        run: cargo test -p mycli-core -p mycli-tui
+      # Every crate, not just core/tui. mycli-desktop owns the security
+      # regression guards (ACL manifest coverage, capability scope, the pinned
+      # xterm bundle) plus the PTY/SFTP/statusline logic, and while those were
+      # excluded here a guard sat broken on main for a week without anything
+      # noticing. The workspace is already built above, so this only links and
+      # runs the test binaries.
+      - name: Test workspace
+        run: cargo test --workspace
 
       - name: Clippy (core + tui)
         run: cargo clippy -p mycli-core -p mycli-tui

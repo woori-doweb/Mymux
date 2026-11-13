@@ -1,13 +1,5 @@
 # Changelog
 
-All notable changes to **Mymux** are documented here.
-Mymux의 주요 변경 사항을 기록합니다.
-
-For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/releases).
-설치 파일은 [GitHub Releases](https://github.com/ChoiGyber/Mymux/releases)에서 받으세요.
-
----
-
 ## Unreleased
 
 ### Added / 추가
@@ -32,6 +24,16 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
   "Claude"로 하드코딩되지 않습니다.
 
 ### Fixed / 버그 수정
+- **Console: scattered zsh input line under systemd / 콘솔: systemd 실행 시 zsh 입력줄 흩어짐 수정.**
+  The server inherits no `TERM` under systemd, so zsh could not move the
+  cursor and left autosuggestion hints behind as text. Every console session
+  on Unix now starts with `TERM=xterm-256color`, matching the desktop fix
+  merged from upstream v0.3.8.
+
+  systemd 아래에서는 `TERM`이 상속되지 않아 zsh가 커서 이동을 못 하고
+  자동완성 힌트를 텍스트로 남겼습니다. 이제 Unix의 모든 콘솔 세션은
+  `TERM=xterm-256color`로 시작합니다(원본 v0.3.8 데스크톱 수정과 동일).
+
 - **Console: split-pane focus stuck on one side / 콘솔: 분할 패인 포커스 고착 수정.**
   In the web console (`mymux-server`), clicking the other pane after a split
   could leave focus stuck on the pane running Claude Code: xterm routes
@@ -100,6 +102,763 @@ For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/rel
   적용됐고, 배포 후에도 며칠 묵은 `app.js`가 계속 서빙되어 수정이 "여전히
   안 되는" 것처럼 보였습니다. 이제 정적 파일과 API 응답에
   `Cache-Control: no-cache`(재사용 전 재검증, 304로 저렴)를 붙입니다.
+
+---
+
+## v0.3.8 - 2026-11-09
+
+### Improved
+
+- Open the managed browser view immediately and move blocking browser work off the UI thread.
+- Keep PTY output history bounded while allowing independent readers to replay output from their own offsets.
+- Make the Sessions panel toggle work with a detached Sessions window, and make new terminal tabs open directly without showing the command picker.
+
+All notable changes to **Mymux** are documented here.
+Mymux의 주요 변경 사항을 기록합니다.
+
+For installers, see the [GitHub Releases](https://github.com/ChoiGyber/Mymux/releases).
+설치 파일은 [GitHub Releases](https://github.com/ChoiGyber/Mymux/releases)에서 받으세요.
+
+---
+
+## v0.3.7 — 2026-11-04
+
+### Added
+
+- **Named Claude-led harness teams.** Save a team name and its Claude Code/Codex commands, then launch the team by selecting that name. Claude can delegate bounded tasks to configured Codex workers through a team-scoped MCP server, run up to three tasks concurrently, and collect their results. Agent instructions and result handoffs are in English.
+
+### Improved
+
+- **Claude 5-hour reset countdown.** Show a live countdown beside the account-wide 5h usage percentage.
+- **Browser toolbar responsiveness.** Defer browser startup until after the click handler returns and prevent duplicate toggle requests.
+
+## v0.3.6 — 2026-11-03
+
+### Fixed / 수정
+
+- **Prevent duplicate Hangul IME input.** Distinguish xterm's deferred keydown fallback from the actual `input` event even when WebView keeps `window.event` stale, so one commit is not sent twice while genuine repeated Hangul remains intact.
+
+- **브라우저 응답성을 개선합니다 / Improve browser responsiveness.** Remove a redundant UI-thread dispatch around native WebView creation and navigation, serialize address lookups, and preserve an address while the user is editing it.
+
+---
+
+### Fixed / 수정
+
+- **브라우저 가져오기에 진행 모달을 표시합니다 / Show a progress modal while importing browser data.** The modal names the selected browser, profile, and data types while the import runs, then switches to results or an error message.
+
+- **브라우저 주소 이동 피드백을 표시하고 현재 주소 재입력을 새로고침으로 처리합니다 / Show browser navigation feedback and reload when the current address is entered again.** The status reports when the navigation request is accepted; page-load completion is not tracked.
+
+---
+
+## v0.3.5 — 2026-11-03
+
+### Added / 추가
+
+- **Sessions 창을 탭처럼 분리하고 다시 붙일 수 있습니다 / Detach and reattach
+  the Sessions panel like a tab.** Drag the Sessions heading outside the main
+  window to open a separate live view, then drag its heading onto the main tab
+  bar to dock it again. Session and agent lists remain available in the detached
+  window.
+
+- **브라우저 첫 실행 안내와 나중에 가져오기를 추가했습니다 / Added a first-run
+  browser import prompt with a Later option.** The browser icon opens a managed
+  browser that local CLI tools can control; browser profile import remains
+  available from the Browser panel.
+
+### Fixed / 수정
+
+- **CLI 브라우저 제어 대상에서 빈 탭을 제외합니다 / Exclude blank tabs from CLI
+  browser targets.** This aligns target selection with the regression test and
+  avoids treating an uninitialized page as an agent-controlled website.
+
+- **백그라운드 세션 유지 권한을 등록합니다 / Register permissions for background
+  session handoff.** The close flow can now invoke the PTY server handoff and
+  shutdown commands through the app's explicit command manifest.
+
+---
+
+## v0.3.4 — 2026-10-30
+
+### Added / 추가
+
+- **내장 브라우저를 터미널 탭에서 열고 CLI로 제어합니다 / Open and control the
+  built-in browser from terminal sessions.** Added browser navigation and tabs,
+  plus a local browser-control helper for CLI workflows. The helper targets the
+  selected browser page and keeps the browser debugging connection on loopback.
+
+- **새 터미널에서 저장된 명령을 고를 수 있습니다 / Choose a saved command for a
+  new terminal.** The Commands panel is shown when a new terminal is created so
+  configured AI CLI commands are easy to select.
+
+### Fixed / 수정
+
+- **한글 조합 위치와 Codex 포커스 전환 입력을 보정했습니다 / Improved Korean
+  IME composition positioning and Codex focus-switch input handling.** Added
+  targeted regression checks for composition geometry and terminal focus
+  reporting. These checks do not replace native Windows IME acceptance.
+
+- **음성 입력 관리 상태와 로컬 설정 흐름을 보완했습니다 / Improved voice-input
+  setup and managed status reporting.**
+
+---
+
+## v0.3.3 — 2026-10-20
+
+### Fixed / 버그 수정
+
+- **세션 패널의 폭을 조절한 뒤에도 접기가 동작합니다 / The session panel folds
+  again after it has been resized.** 패널 폭을 드래그했거나 이전에 저장된 폭이
+  있으면, 접어도 폭은 그대로이고 목록만 사라져서 아이콘이 넓은 헤더 가운데에
+  남았습니다. 폭을 인라인 스타일로 지정해서 접힘 규칙(34px)보다 먼저 적용되었기
+  때문입니다. 이제 폭을 CSS 변수로 보관하므로 접으면 34px 로 줄어들고, 다시
+  펼치면 조절해 둔 폭으로 돌아옵니다.
+
+  A panel whose width had been dragged or saved kept that width when folded and
+  only hid the list, leaving the icon in the middle of a wide header. The width
+  was an inline style, which outranks the folded rule (34px). It is now kept in a
+  CSS variable: folding shrinks the panel to 34px, and unfolding restores the
+  width you set.
+
+- **Windows 에서 세션을 추가하거나 전환할 때 Codex 입력창에 `[I` 가 쌓이던 문제를
+  고쳤습니다 / Fixed `[I` piling up in the Codex prompt on Windows when adding or
+  switching sessions.** Windows 의 ConPTY 는 패인을 만들 때마다 포커스 리포팅
+  모드(DECSET 1004)를 켭니다. v0.2.2 의 정리는 OSC 133 을 보내는 셸(PowerShell,
+  Git Bash)에서만 동작해서, CMD·ssh·WSL 패인은 이 모드가 계속 켜져 있었습니다.
+  거기에 대체 화면을 쓰는 Codex 는 실행 중에 정리 시점이 없어서, 포커스가 움직일
+  때마다 보내진 `ESC[I` 가 입력창에 `[I` 글자로 남았습니다. 이제 패인이 처음
+  출력을 내는 즉시 이 모드를 끕니다. 정리는 한 번만 실행하므로 이후에 프로그램이
+  요청하는 경우에는 영향이 없습니다. 콘솔 포커스 이벤트를 기다리는 앱은 CMD·ssh·WSL
+  패인에서도 그 이벤트를 받지 못하게 됩니다(PowerShell 패인은 v0.2.2 부터
+  동일합니다).
+
+  ConPTY switches focus reporting (DECSET 1004) on for every new pane. The v0.2.2
+  cleanup only ran for shells that emit OSC 133 (PowerShell, Git Bash), so CMD,
+  ssh and WSL panes kept it on. Codex stays on the alternate screen and never
+  reaches a cleanup point, so each focus change typed a stray `[I` into its
+  prompt. The mode is now cleared as soon as a pane produces its first output.
+  The cleanup runs once, so it never overrides a later request from a program.
+  Apps that wait for console focus events no longer receive them in CMD, ssh and
+  WSL panes either (PowerShell panes have behaved this way since v0.2.2).
+
+---
+
+## v0.3.2 — 2026-10-02
+
+### Fixed / 버그 수정
+
+- **Windows 에서 Claude 를 끈 뒤 같은 패인에서 켠 Codex 의 휠이 정상 동작합니다
+  / Codex started after Claude in the same pane keeps its mouse wheel on
+  Windows (#40).** v0.3.1 의 Claude Code 휠 우회(휠 → PgUp/PgDn)는 화면으로
+  패인 주인을 짐작했는데, CMD·SSH 에서는 Claude 가 끝난 걸 알 수 없어 그다음에
+  켠 Codex 까지 Claude 로 보고 휠을 바꿨습니다. 이제 패인 셸 아래에서 실제로
+  실행 중인 프로세스를 보고 판단합니다. 덤으로 SSH 로 원격 서버의 Claude 를 쓸
+  때(원격에선 휠이 정상)는 더 이상 휠을 바꾸지 않고, 셸 별칭으로 띄운 Claude 도
+  인식합니다. macOS·Linux 는 바뀌지 않습니다.
+
+  v0.3.1's Claude Code wheel workaround (wheel → PgUp/PgDn) guessed the pane's
+  owner from the screen, and in CMD or SSH sessions it could not tell that
+  Claude had exited — so Codex started next in the same pane lost its wheel
+  too. The owner is now read from the processes actually running under the
+  pane's shell. As a bonus, Claude on a remote server over SSH (where the wheel
+  already works) is left alone, and Claude launched through a shell alias is
+  recognised. macOS and Linux are unchanged.
+
+---
+
+## v0.3.1 — 2026-10-01
+
+### Fixed / 버그 수정
+
+- **macOS·Linux 에서 Dock·런처로 띄운 Mymux 의 zsh 입력줄이 흩어지던 문제를
+  고쳤습니다 / Fixed scattered zsh input lines when Mymux is launched from the
+  Dock or a desktop launcher (macOS/Linux).** Dock·Finder·Linux 런처로 실행한
+  앱에는 `TERM` 환경변수가 없어, zsh 가 커서 이동을 못 하고 키를 칠 때마다 줄
+  처음부터 다시 그렸습니다. 그래서 입력한 명령이 탭 간격으로 흩어져 보이고
+  zsh-autosuggestions 의 회색 힌트가 글자처럼 남았으며, 세션 복원 때 이 잔해가
+  명령으로 다시 실행될 수 있었습니다. 이제 모든 패인이 `TERM=xterm-256color`
+  로 시작합니다(다른 터미널에서 물려받은 값도 교체). Windows 는 바뀌지 않습니다.
+
+  An app started from the Dock, Finder or a Linux launcher has no `TERM`, so zsh
+  lost cursor movement and redrew every keystroke from column 0 — typed commands
+  looked scattered with tab-wide gaps, zsh-autosuggestions' grey hint was left
+  behind as text, and a restored session could re-run that debris. Every pane
+  now starts with `TERM=xterm-256color` (an inherited value is replaced too).
+  Windows is unchanged.
+
+- **Windows 에서 Claude Code fullscreen 패인의 마우스 휠이 동작합니다 / The mouse
+  wheel now scrolls Claude Code's fullscreen view on Windows (#40).** Claude Code
+  의 fullscreen 렌더러(`tui: fullscreen`, 최근 설치의 기본값)는 Windows 에서
+  휠에 반응하지 않습니다 — Windows Terminal 을 포함한 모든 터미널에서 같은
+  Claude Code 쪽 문제입니다. Mymux 가 Claude Code 패인에서만 휠을 PgUp/PgDn 으로
+  바꿔 보내, 반 화면씩 스크롤됩니다. Codex·macOS·Linux 는 바뀌지 않습니다.
+
+  Claude Code's fullscreen renderer (`tui: fullscreen`, the default for recent
+  installs) ignores the wheel on native Windows in every terminal, Windows
+  Terminal included — an upstream Claude Code issue. In a Claude Code pane Mymux
+  now turns the wheel into PgUp/PgDn, which scrolls the view half a screen at a
+  time. Codex, macOS and Linux are unchanged.
+
+---
+
+## v0.3.0 — 2026-09-16
+
+### Added / 새로 추가
+
+- **AI 세션이 띄운 agent 작업이 세션 하위에 표시됩니다 / A session's AI agents now
+  appear beneath it.** 패인에서 Claude Code 가 서브에이전트(코드 리뷰·검토·탐색
+  등)를 띄우면, 그 목록이 세션 행 아래에 종류·설명·진행 상태와 함께 나타납니다.
+  기본은 실행 중인 것과 최신 몇 개만 보여 주고, `+N개 더 보기`로 전체를 펴거나
+  세션 옆 개수 배지로 통째로 접을 수 있습니다. 항목을 누르면 프롬프트 전문과
+  소요 시간·토큰이 담긴 상세 창이 열립니다. 화면을 긁지 않고 Claude Code 의
+  세션 기록(transcript)에서 직접 읽어 정확합니다.
+
+  When Claude Code in a pane spawns subagents, they show up as child rows under
+  that session — agent type, description and status. The list previews the
+  running ones plus the newest few, with `+N more` to expand and a count badge
+  to fold the whole group; clicking a row opens its full prompt, duration and
+  token totals. Read straight from Claude Code's session transcript, not scraped
+  from the screen.
+
+- **크롬·엣지의 북마크·방문 기록·저장된 비밀번호를 가져올 수 있습니다 / Import
+  Chrome/Edge bookmarks, history and saved passwords.** 브라우저 패널의 새
+  “크롬·엣지에서 가져오기”에서 프로필을 골라 읽어옵니다. 북마크·기록은 클릭하면
+  Mymux 내장 브라우저에서 열리고, 비밀번호는 가린 채 표시하며 눈 버튼으로만
+  잠깐 드러냅니다. 원본 프로필은 읽기만 하고 바꾸지 않으며, 명시적 동의를 받은
+  뒤에만 실행합니다. 최신 크롬·엣지의 App-Bound Encryption 으로 잠긴 비밀번호는
+  브라우저 밖에서 읽을 수 없어 “읽을 수 없음”으로 정직하게 표시합니다.
+
+  A new "Import from Chrome/Edge" control in the browser panel reads a chosen
+  profile. Bookmarks and history open in the in-app browser on click; passwords
+  stay masked behind a reveal toggle. The source profile is read-only and
+  nothing runs without explicit consent. Passwords locked by the newest
+  Chrome/Edge App-Bound Encryption cannot be read outside the browser and are
+  shown as such rather than guessed.
+
+### Fixed / 버그 수정
+
+- **터미널 안의 링크를 그냥 클릭하면 내장 브라우저에서 열립니다 / A plain click on a
+  terminal link opens it in the in-app browser.** 이전에는 Ctrl+클릭만 열렸습니다.
+  이제 링크 클릭이 곧바로 Mymux 브라우저로 들어갑니다. 다만 vim·htop 처럼 마우스를
+  쓰는 프로그램이 켜져 있을 때는 클릭이 그 프로그램의 것이므로, 그 경우에만
+  Ctrl+클릭으로 엽니다.
+
+  Previously only Ctrl+Click opened a link. A plain click now goes straight to
+  the Mymux browser — except while a mouse-using program (vim, htop) owns the
+  click, where Ctrl+Click still applies.
+
+- **세션 드래그로 탭을 옮기는 기능이 실제로 동작합니다 / Dragging a session between
+  tabs actually works now.** v0.2.6 에 이 기능 코드가 들어갔지만, 탐색기 파일
+  드롭을 위해 켠 설정 하나 때문에 Windows 에서 세션 드래그가 전부 죽어 있었습니다.
+  두 기능이 공존하도록 세션 드래그를 포인터 기반으로 다시 구현해, 탭간 이동과 같은
+  탭 안 순서 변경이 모두 동작합니다.
+
+  v0.2.6 shipped the code for this, but a setting enabled for the explorer's file
+  drop silently killed every session drag on Windows. Session dragging is now
+  pointer-based so both features coexist — cross-tab moves and same-tab
+  reordering both work.
+
+---
+
+## v0.2.6 — 2026-09-11
+
+### Added / 새로 추가
+
+- **세션을 드래그해서 다른 탭으로 옮길 수 있습니다 / Drag a session into another tab.**
+  세션 리스트 행을 상단 탭 헤더에 떨구면 해당 탭으로 이동합니다. 세션창 하단 바를
+  드래그한 채 다른 탭 헤더나 세션 행·그룹에 떨궈도 이동합니다.
+
+  Drop a session-list row onto a top tab header to move it there. Dragging the
+  session pane's bottom bar onto another tab's header (or its session rows)
+  moves it too.
+
+### Fixed / 버그 수정
+
+- **균등화 뒤 아래·옆으로 분리하면 pane이 안 보이던 문제를 고쳤습니다 / A pane no longer
+  vanishes after equalizing then splitting.** 너비·높이 균등화가 남긴 `width: 0` /
+  `height: 0` 핀이 새 분할 축까지 살아남아, 윗쪽 pane이 왼쪽 끝에 붙은 줄처럼
+  납작해졌습니다. 분할·방향전환·탭간 이동 경로에서 핀을 제거합니다.
+
+  Equalizing left `width: 0` / `height: 0` pins behind, and a later split on the
+  other axis collapsed the pane into an invisible strip. Those pins are now
+  cleared on every split, flip, and cross-tab move.
+
+- **Pane이 옆으로 좁아져도 X 버튼이 유지됩니다 / The close button stays visible in
+  narrow panes.** 세션 이름이 버튼들을 밖으로 밀어내 X가 잘리던 것을, 라벨
+  말줄임 + 버튼 점진적 숨김(닫기는 항상 표시)으로 바꿨습니다.
+
+  The session label used to push the action buttons out of view. It now
+  ellipsizes first, then split/flip buttons hide progressively — close is
+  never hidden.
+
+---
+
+## v0.2.5 — 2026-09-06
+
+### Fixed / 버그 수정
+
+- **Claude Code 패인에서 우클릭 붙여넣기가 두 번 되던 문제를 고쳤습니다 / One right-click pastes
+  once again in a Claude Code pane.** 드래그로 복사한 뒤 프롬프트 입력창에 마우스 오른쪽 버튼을
+  누르면 같은 내용이 두 번 입력됐습니다. 붙여넣는 주체가 둘이었기 때문입니다. Claude Code 가
+  우클릭을 받으면 스스로 클립보드를 읽어 넣고, Mymux 의 우클릭 붙여넣기도 함께 돌았습니다.
+
+  이제 프로그램이 클릭만 요청한 경우에 한해 우클릭을 터미널이 가져가고, 붙여넣기는 Mymux 한
+  쪽에서만 일어납니다. 선택해 둔 상태로 우클릭하면 복사 대신 붙여넣기가 되던 것도 함께
+  사라졌습니다. vim 이나 htop 처럼 드래그까지 요청한 프로그램의 우클릭은 예전 그대로 프로그램에
+  전달되고, Ctrl 을 누른 우클릭도 그대로 전달됩니다.
+
+  One right-click was pasting twice because two things pasted: Claude Code reads the OS
+  clipboard itself when it receives a right-button report, and Mymux pasted as well. The
+  terminal now keeps that report to itself in click-only tracking modes, so Mymux is the
+  single paste path. Right-clicking with a selection copies again instead of pasting.
+  Motion-tracking programs (vim, htop) and modifier-held right-clicks are unchanged.
+
+---
+
+## v0.2.4 — 2026-09-01
+
+### Fixed / 버그 수정
+
+- **Claude Code 패인에서 답변을 드래그해도 선택이 안 되던 문제를 고쳤습니다 / Dragging over a
+  Claude Code answer selects text again.** 같은 앱인데 Codex 패인은 드래그 복사가 잘 되고 Claude
+  Code 패인만 드래그 자체가 되지 않았습니다. 특정 PC 에서만 그런 것처럼 보였지만, PC 차이가 아니라
+  그 순간 Claude Code 가 마우스 트래킹을 켰는지의 차이였습니다.
+
+  프로그램이 마우스 트래킹을 켜면 터미널은 모든 버튼 동작을 그 프로그램에 넘깁니다. 그래서 드래그가
+  선택을 만들지 못했고, 선택이 없으니 자동 복사도 돌지 않았습니다. 게다가 그 드래그는 프로그램에
+  시작 지점과 끝 지점이 다른 **엉뚱한 클릭 한 번**으로 전달되고 있었습니다. 이제 프로그램이 클릭만
+  요청한 경우(모션은 요청하지 않은 경우)에 한해 드래그를 터미널이 되찾아 선택으로 씁니다. vim 이나
+  htop 처럼 드래그 자체를 요청한 프로그램은 예전 그대로 동작하고, 클릭은 어느 경우에도 프로그램에
+  그대로 전달되므로 Claude Code 메뉴 선택도 계속 됩니다.
+
+  A program that turns on mouse tracking receives every button action, so a drag produced no
+  selection — and with no selection the auto-copy never ran. Worse, that drag reached the program
+  as a stray click whose press and release were at different columns. The terminal now reclaims
+  the drag, but only when the program asked for clicks alone and never for motion. Programs that
+  did ask for motion (vim's mouse visual select, htop) are untouched, and clicks still reach the
+  program in every case, so picking a Claude Code menu option keeps working.
+
+  맥에서는 텍스트를 강제로 선택하는 키가 Shift 가 아니라 Option 이고 그 동작이 기본으로 꺼져 있어,
+  같은 증상이 있으면서 우회 방법조차 없었습니다. 이번에 함께 켜서 맥에서도 드래그 선택이 되고,
+  Option+드래그로 직접 선택하는 것도 가능해졌습니다 — 다만 맥에서는 이제 vim 같은 화면에서도
+  Option+드래그가 터미널 선택이 됩니다.
+
+  On macOS the modifier that forces a selection is Option, not Shift, and it was off by default —
+  so the Mac had the same symptom with no workaround at all. It is now enabled, which both fixes
+  the drag and gives Mac users Option+drag to select directly, at the cost of Option+drag no
+  longer reaching a motion-tracking TUI there.
+
+  ([#45](https://github.com/ChoiGyber/Mymux/issues/45))
+
+---
+
+## v0.2.3 — 2026-08-29
+
+### Fixed / 버그 수정
+
+- **터미널의 링크를 눌렀을 때 아무 일도 안 일어나던 문제를 고쳤습니다 / Clicking a link in the
+  terminal no longer does nothing.** Ctrl+클릭을 해도 내장 브라우저도, 밖의 브라우저도, 오류 안내도
+  뜨지 않았습니다.
+
+  터미널에서 링크가 만들어지는 길은 두 개입니다. 하나는 화면에 찍힌 URL 글자를 찾아내는 길이고,
+  다른 하나는 프로그램이 스스로 "여기부터 여기까지가 링크다" 라고 표시하는 길(OSC 8)입니다.
+  요즘 CLI 는 뒤쪽을 씁니다. Mymux 는 앞쪽에만 처리기를 달아 둔 탓에, 뒤쪽 링크는 터미널
+  라이브러리의 기본 동작으로 흘렀고 그 기본 동작은 이 앱에서 뜨지 않는 확인 창을 여는 것이어서
+  클릭이 통째로 사라졌습니다. 이제 두 길이 같은 처리기를 지나갑니다.
+
+  A terminal has two independent paths for links: one finds bare URL text on screen, the other
+  is a hyperlink the program marks out itself (OSC 8). Modern CLIs use the latter. Mymux had a
+  handler on the first path only, so the second fell through to the terminal library's own
+  default — a confirmation dialog this app never shows — and the click vanished entirely.
+  Both paths now go through the same handler.
+
+  평범한 클릭은 여전히 실행 중인 프로그램의 몫이고, 링크를 여는 것은 Ctrl+클릭입니다.
+  A plain click still belongs to the running program; Ctrl+Click opens the link.
+
+  ([#42](https://github.com/ChoiGyber/Mymux/issues/42))
+
+---
+
+## v0.2.2 — 2026-08-28
+
+### Fixed / 버그 수정
+
+- **codex 입력창에 저절로 찍히던 `[I` 가 사라졌습니다 / No more stray `[I` typed into the
+  codex prompt.** Switching away to another window — or moving between sessions — and coming
+  back would leave characters in the codex input box that nobody typed. They were the remains
+  of a terminal *focus report*: an escape sequence the terminal sends to say "the window got
+  focus again". codex never asked for those reports (its binary does not even contain the
+  sequence that turns them on), but it was receiving them anyway, and it printed what it could
+  not interpret straight into the prompt.
+
+  The reports were switched on by ConPTY, the Windows console layer, at the moment each pane
+  is created — so every pane was born with them enabled and nothing ever switched them back
+  off. Mymux now turns them off when the shell prompt takes the pane back, and again when a
+  full-screen program leaves the alternate screen. Programs that genuinely ask for focus
+  reports keep receiving them exactly as before.
+
+  창을 다른 곳으로 옮겼다 돌아오거나 세션 사이를 오가면, 입력한 적 없는 글자가 codex 입력창에
+  남아 있었습니다. 터미널이 "창이 다시 포커스를 받았다" 고 알리는 *포커스 리포트* 의 잔해였습니다.
+  codex 는 그 리포트를 요청한 적이 없는데(그걸 켜는 시퀀스가 실행 파일에 아예 없습니다) 계속
+  받고 있었고, 해석하지 못한 부분을 그대로 입력창에 찍었습니다.
+
+  리포트를 켜는 것은 Windows 콘솔 계층인 ConPTY 였고, 패인이 만들어지는 순간에 켰습니다. 그래서
+  모든 패인이 켜진 상태로 태어났고 아무도 다시 끄지 않았습니다. 이제 셸 프롬프트가 패인을 되찾을
+  때, 그리고 전체 화면 프로그램이 대체 화면에서 나올 때 정리합니다. 포커스 리포트를 정말로
+  요청한 프로그램은 예전과 똑같이 받습니다.
+
+  ([#38](https://github.com/ChoiGyber/Mymux/issues/38))
+
+---
+
+## v0.2.1 — 2026-08-28
+
+### Fixed / 버그 수정
+
+- **The app no longer freezes for good while you type Korean / 한글을 입력하다 앱이 영구히
+  멈추는 일이 없어졌습니다.** If the focus moved while an IME composition was in flight —
+  Alt-Tab, another window stealing focus, waking the PC from sleep — Mymux could lock up
+  permanently. The window stayed on screen and the shells inside the panes kept running,
+  so it looked like the app alone had died, and nothing short of killing the process
+  brought it back. One report had it wedged for over seven hours overnight.
+
+  The cause was in Tauri's windowing layer, not in Mymux: `tao 0.35.3` held two
+  process-wide locks across a `PeekMessage` call, and that call hands focus messages
+  straight back to the same window procedure. The window procedure then tried to take a
+  lock the very same thread was already holding, and stopped there forever — no CPU use,
+  no error, no recovery. Upstream fixed this in a later `tao`, but the Tauri release we
+  build on pins the older one, so a patched copy now lives in `vendor/tao` and a guard in
+  CI refuses to publish a build that has lost it.
+
+  IME 로 한글을 조합하는 도중 포커스가 바뀌면 — Alt-Tab, 다른 창이 포커스를 가져갈 때,
+  절전에서 복귀할 때 — Mymux 가 영구히 멈출 수 있었습니다. 창은 그대로 떠 있고 패인 안의
+  셸도 계속 살아 있어서 앱만 죽은 것처럼 보였고, 프로세스를 강제 종료하는 것 말고는 돌아올
+  방법이 없었습니다. 실제로 밤사이 7시간 넘게 잠긴 사례가 있었습니다.
+
+  원인은 Mymux 가 아니라 Tauri 의 창 라이브러리였습니다. `tao 0.35.3` 이 프로세스 전역 락
+  두 개를 `PeekMessage` 호출을 건너 쥐고 있었는데, 이 호출은 포커스 메시지를 같은 창
+  프로시저로 그대로 되돌려 줍니다. 창 프로시저는 자기 스레드가 이미 쥐고 있는 락을 다시
+  잠그려 하다 그대로 멈췄습니다 — CPU 도 안 쓰고, 에러도 없고, 회복도 없었습니다.
+  업스트림 `tao` 는 이후 버전에서 고쳤지만 우리가 쓰는 Tauri 릴리즈가 옛 버전을 고정하고
+  있어, 수정한 사본을 `vendor/tao` 에 두고 그 수정이 사라진 빌드는 게시되지 않도록 CI 에
+  검사를 걸었습니다.
+
+---
+
+## v0.2.0 — 2026-08-27
+
+### Fixed / 버그 수정
+
+- **The window remembers its size again / 창 크기를 다시 기억합니다.** Mymux opened at
+  the same small default every single time, and that default was tight enough that the
+  two side panels left the terminal about 300px. Split that pane and each half came out
+  at 18 columns, so the shell wrapped its output into a vertical sliver — and once a line
+  was drawn that narrow, enlarging the window did not bring it back. Size, position and
+  the maximized state now carry over between runs, and a saved position that no longer
+  lands on a connected monitor is pulled back into view.
+
+  Mymux 는 실행할 때마다 같은 작은 기본 크기로 떴고, 그 크기에서는 좌우 사이드바가 폭을
+  차지하고 나면 터미널에 300px 남짓만 남았습니다. 그 상태로 패인을 나누면 각 패인이 18칸이
+  되어 셸 출력이 세로로 한 글자씩 쌓였고, 한 번 그렇게 그려진 줄은 창을 키워도 돌아오지
+  않았습니다. 이제 크기·위치·최대화 상태가 실행 사이에 유지되고, 저장된 위치가 지금 연결된
+  모니터 밖이면 보이는 자리로 당겨 옵니다.
+
+- **Closing the window actually quits / 창을 닫으면 앱도 끝납니다.** The main window
+  going away did not end the process: a hidden companion window kept it alive, so
+  `Mymux.exe` stayed in the background with nothing on screen. That leftover process also
+  held its own copy of the window geometry, and a later shutdown could write the stale
+  size back over a newer one. An update that is downloading is the one case that still
+  holds the app open — killing it mid-install can leave a Linux AppImage with no
+  executable at all.
+
+  main 창이 사라져도 프로세스는 끝나지 않았습니다. 숨겨진 보조 창이 앱을 붙들고 있어서
+  화면에 아무것도 없는 채로 `Mymux.exe` 가 백그라운드에 남았습니다. 그렇게 남은 프로세스는
+  자기 세대의 창 크기를 들고 있어서, 나중에 종료될 때 낡은 값이 최신 크기를 덮어쓸 수도
+  있었습니다. 업데이트를 내려받는 중일 때만 예외로 앱을 붙들어 둡니다 — 설치 도중에 죽이면
+  리눅스 AppImage 는 실행 파일이 통째로 사라질 수 있기 때문입니다.
+
+### Added / 새 기능
+
+- **The Commands panel folds and moves / Commands 패널을 접고 옮길 수 있습니다.** A
+  compact toggle shrinks the panel to its essentials, and the panel can be dragged to a
+  spot that suits your layout. A floating panel now reappears where you left it without
+  needing a tab click first.
+
+  컴팩트 토글로 패널을 최소 형태로 줄일 수 있고, 원하는 자리로 끌어다 놓을 수 있습니다.
+  플로팅 상태로 둔 패널은 탭을 한 번 눌러 주지 않아도 두었던 자리에 그대로 다시 나타납니다.
+
+### Changed / 개선
+
+- **A first-run window no longer opens larger than the screen / 첫 실행 창이 화면을 넘지
+  않습니다.** The configured size is in logical pixels, so on a display scaled to 150%
+  the default could be taller than the desktop itself — reachable title bar, off-screen
+  bottom edge. The window is now measured against the monitor's work area on first run
+  and shrunk to fit, taskbar excluded. It is only ever made smaller, and a size you
+  chose yourself is left alone.
+
+  설정의 창 크기는 논리 픽셀이라, 배율이 150% 인 화면에서는 기본값이 바탕화면보다 커질 수
+  있었습니다. 제목 표시줄은 잡히는데 아래쪽이 화면 밖으로 나가는 상태입니다. 이제 첫 실행에
+  한해 모니터의 작업 영역(작업표시줄 제외)과 견주어 넘치면 맞춰 줄입니다. 늘리는 일은 없고,
+  직접 정한 크기는 건드리지 않습니다.
+
+- **Internal upkeep / 내부 정리.** The Electron runtime and its packaging tooling moved to
+  current stable releases, and an IPC permission the frontend never used was removed from
+  the app's capability set.
+
+  Electron 런타임과 패키징 도구를 현재 안정 버전으로 올렸고, 프런트엔드가 쓰지 않는 IPC 권한
+  하나를 앱 권한 목록에서 뺐습니다.
+
+---
+
+## v0.1.59 — 2026-08-25
+
+### Changed / 개선
+
+- **Command suggestions now have two switches / 명령 제안 스위치가 두 개로.** The
+  Commands panel used to offer one checkbox, and it only silenced the typing
+  history — your saved commands kept filling the popup with no way to stop them.
+  There is a second checkbox now: turn off **Saved command suggestions** and the
+  saved list (built-in shortcuts included) stays out of the autocomplete popup,
+  and with both off the popup never appears at all. The panel itself is
+  untouched — the list still runs on click, and an alias plus Enter still runs
+  its full command. Both switches are remembered across restarts. The two labels
+  and their tooltips are English only now.
+
+  Commands 패널에는 체크박스가 하나뿐이었고 그 하나는 입력 히스토리만 껐습니다.
+  처음부터 들어 있던 `cl`·`cy` 같은 저장된 명령은 끌 방법이 없어 타이핑할 때마다
+  팝업이 계속 떴습니다. 이제 체크박스가 하나 더 있습니다 — **Saved command
+  suggestions** 를 끄면 저장된 명령이 자동완성 팝업에서 빠지고, 둘 다 끄면 팝업이
+  아예 뜨지 않습니다. 패널 자체는 그대로입니다. 목록은 여전히 클릭으로 실행되고,
+  약어 + Enter 도 전체 명령을 그대로 실행합니다. 두 스위치 모두 재시작해도
+  유지됩니다. 두 라벨과 툴팁은 영어로만 표시됩니다.
+
+---
+
+## v0.1.58 — 2026-08-22
+
+### Added / 새 기능
+
+- **Session memos hold more than one note / 세션 메모를 여러 개로.** The 🗒 popover
+  now has a title list on the left and the selected note's body on the right,
+  with a search box above a "new memo" button and a divider you can drag to
+  whatever width your titles need. Titles come from the first line on their own,
+  or double-click to name one. Each memo saves to a `.txt` through the normal
+  Windows Save dialog. Existing notes are carried over as your first memo.
+
+  🗒 팝오버가 왼쪽 제목 목록 · 오른쪽 본문으로 나뉩니다. 검색창과 ＋ 새 메모 버튼이
+  위에 있고, 가운데 구분선을 끌어 제목이 보이는 만큼 목록 폭을 넓힐 수 있습니다.
+  제목은 본문 첫 줄에서 자동으로 붙고 더블클릭하면 직접 이름을 줍니다. 메모마다
+  Windows 기본 저장 대화상자로 `.txt` 저장이 됩니다. 쓰던 메모는 첫 번째 메모로
+  그대로 옮겨집니다.
+
+- **Local voice input says what to install / 음성입력 설치 안내.** Choosing local
+  faster-whisper now shows the exact steps and links for either route — a single
+  standalone executable with no Python, or `pip install faster-whisper` with the
+  wrapper script bundled in the app. An "설치 확인" button runs your setup and
+  reports what is missing. Recording is converted to WAV in the app, so no
+  separate ffmpeg is needed.
+
+  로컬 faster-whisper 를 고르면 무엇을 설치해야 하는지와 링크가 그대로 나옵니다.
+  Python 이 필요 없는 단독 실행 파일, 또는 `pip install faster-whisper` 두 경로를
+  고를 수 있고 래퍼 스크립트는 앱에 동봉돼 있습니다. [설치 확인] 버튼이 실제로
+  실행해 보고 빠진 것을 알려줍니다. 녹음은 앱이 WAV 로 바꿔 넘기므로 ffmpeg 를
+  따로 깔지 않아도 됩니다.
+
+- **Dragging a session puts the pane where you dropped it / 세션을 끌면 그 자리로.**
+  A vertical stack takes the session as an equal sibling at the drop point; a
+  horizontal row splits the pane you dropped on and puts the arrival underneath.
+  Works across tabs too, and the list order now always matches the screen.
+
+  세로로 쌓인 곳에 놓으면 그 자리에 균등하게 끼워지고, 가로로 늘어선 곳에 놓으면
+  놓은 패인 아래로 들어갑니다. 다른 탭에서 끌어와도 같고, 목록 순서와 화면 위치가
+  이제 항상 일치합니다.
+
+### Fixed / 버그 수정
+
+- **The Explorer ignored `ssh` recalled with ↑ / ↑ 로 부른 `ssh` 를 놓치던 문제.**
+  Typing `ssh host` made the Explorer follow the session, but pressing ↑ to reuse
+  the command did nothing at all — adoption only watched literal keystrokes, and
+  an arrow key clears that buffer. It now reads the submitted line off the screen
+  when no keystrokes were seen.
+
+  `ssh host` 를 직접 치면 탐색기가 따라왔지만, ↑ 로 같은 명령을 불러 실행하면
+  아무 일도 일어나지 않았습니다. 감지가 눌린 키만 보고 있었고 방향키는 그 버퍼를
+  비우기 때문입니다. 이제 키 입력이 없으면 화면에서 제출된 명령줄을 읽습니다.
+
+- **Per-host SSH keys were never tried / 호스트별 SSH 키를 안 쓰던 문제.** Key
+  auto-detection only looked for `id_ed25519`, `id_ecdsa` and `id_rsa`, so a key
+  named for its host (`id_ed25519_myserver`) was never offered and the connection
+  failed with no explanation. Any key in `~/.ssh` with a matching `.pub` is now
+  tried as well, and a connection that fails after the host was resolved says why.
+
+  키 자동 탐지가 `id_ed25519`·`id_ecdsa`·`id_rsa` 세 이름만 봐서, 호스트 이름을 붙인
+  키(`id_ed25519_myserver`)는 아예 시도되지 않고 이유 없이 실패했습니다. 이제
+  `~/.ssh` 안에서 `.pub` 짝이 있는 키도 함께 시도하고, 접속에 실패하면 이유를
+  알려줍니다.
+
+---
+
+## v0.1.57 — 2026-08-14
+
+### Fixed
+- **SFTP stopped working entirely, without saying so.** Every SFTP command
+  (`connect`, `list_dir`, `home_dir`, `read`/`write`, upload) was an async Tauri
+  command that then called `block_on` on its own tokio runtime. Tauri already
+  runs those on a runtime thread, so the nesting panicked — and a panicked
+  command's promise never resolves or rejects, leaving the Explorer stuck on
+  "SFTP 연결 중…" with no error at all. The commands are now `async fn` and
+  await directly. A connection that used to hang past three minutes completes in
+  under a second. SSH authentication failures now say which key failed and why
+  instead of one generic message. /
+  SSH 탐색기 기능 전체가 아무 말 없이 멈춰 있던 문제를 수정했습니다. SFTP 명령이
+  런타임 중첩으로 패닉하면서 그 요청이 영원히 끝나지 않아, 오류 하나 없이 "SFTP
+  연결 중…"에 갇혔습니다. 이제 정상적으로 연결되며, 실패할 때는 어떤 키가 왜
+  거부됐는지 알려줍니다. (#11)
+- **Per-session usage was blank without oh-my-claudecode.** Claude Code hands
+  context-window numbers only to its statusline command, so a PC with no
+  statusline configured showed the global usage but never the per-session badge,
+  model or effort. Mymux now installs its own statusline when — and only when —
+  none is configured; an OMC or other user-chosen statusline is left untouched.
+  The Codex badge no longer falls back to the rollout's cumulative token total,
+  which exceeds the context window and pinned the badge at 100%. /
+  OMC 플러그인이 없는 PC에서 세션별 사용량·모델·effort가 비어 있던 문제를
+  수정했습니다. statusline이 아예 없을 때만 Mymux 것을 설치하며, 이미 설정된
+  statusline은 건드리지 않습니다. Codex 배지가 100%로 굳던 문제도 함께
+  고쳤습니다. (#9, #8)
+
+### Added
+- **The Explorer follows an `ssh` you typed yourself.** Until now only sessions
+  opened with the `+ SSH` button counted as remote, so connecting by typing
+  `ssh user@host` at the prompt left the Explorer on the local disk. Mymux now
+  recognises the command — including `-p`, `-i` and `~/.ssh/config` aliases —
+  and opens the same SFTP view beside it. `exit` gives the pane back to the
+  local disk, and if the server wants a password the Explorer offers a one-click
+  connect instead. /
+  패인에 직접 입력한 `ssh`도 탐색기가 따라갑니다. `-p`·`-i`·`~/.ssh/config`
+  별칭을 인식하며, `exit`하면 로컬로 돌아옵니다. 비밀번호가 필요한 서버는
+  탐색기에서 한 번 클릭으로 연결할 수 있습니다. (#7)
+
+---
+
+## v0.1.56 — 2026-08-13
+
+### Fixed
+- **Splitting a pane no longer shrinks the existing pane to a sliver.** On some
+  PCs, adding a pane collapsed the pane you were working in to a barely visible
+  strip in the top-left corner while the new pane came up as a black, empty
+  area. WebView2 exposes the new flex tree over several layout frames while
+  fonts and the window scale are still settling, so xterm could measure a pane
+  that was momentarily 0×0 and hand that size straight to the PTY; a second
+  split starting before the first finished could land on the same half-built
+  tree. Splitting is now single-flight, the split container is normalized
+  before the new pane is created rather than only after, and the refit waits
+  (up to eight frames) until both branches actually have a rectangle. /
+  일부 PC에서 패인을 추가하면 작업 중이던 패인이 좌측 상단에 거의 보이지 않는
+  크기로 찌그러지고 새 패인은 검은 빈 화면으로 뜨던 문제를 수정했습니다.
+  WebView2가 글꼴과 창 배율이 자리 잡는 동안 새 레이아웃을 여러 프레임에 걸쳐
+  내놓기 때문에 크기가 아직 0인 패인을 그대로 측정하는 경로가 있었습니다. 이제
+  분할은 한 번에 하나만 진행되고, 양쪽 가지가 실제 크기를 가질 때까지 기다린
+  뒤에만 크기를 다시 맞춥니다. (#10)
+
+---
+
+## v0.1.55 — 2026-08-11
+
+### Fixed
+- **New panes no longer inherit a stale account pin.** Mymux is a long-running
+  parent process, so a multi-account proxy pin that was set when the app started
+  (`TC_ACCT`, or an account-scoped `ANTHROPIC_BASE_URL` such as
+  `http://localhost:3456/tc-acct/<account>`) was handed to every pane opened
+  afterwards — including panes opened long after that account had been removed
+  or the Claude login changed, because neither touches the environment of a
+  process that is already running. Those panes kept asking for an account that
+  no longer existed and every call failed with `404 Unknown account pin` instead
+  of falling back to the proxy's account rotation. The pin is now cleared at the
+  single point where a pane is spawned, so it applies to PowerShell, Git Bash,
+  CMD, SSH and custom shells alike. A real endpoint, a company gateway, the
+  proxy's own root URL and an account-scoped address on a remote host are all
+  left untouched, and a pin you export yourself inside a pane still works
+  there. / 앱 실행 중에 계정을 삭제하거나 로그인을 바꿔도 새 패인이 예전 계정
+  pin을 그대로 물려받아 `404 Unknown account pin`이 반복되던 문제를
+  수정했습니다. 이제 패인이 시작하는 환경에서만 pin을 정리하므로 모든 셸에
+  동일하게 적용되고, 일반 주소나 패인 안에서 직접 설정한 pin은 그대로
+  유지됩니다.
+
+---
+
+## v0.1.54 — 2026-08-11
+
+### Added
+- **Per-session usage without oh-my-claudecode.** The pane badge and the
+  session-list `%` are read from `ctx:NN%` printed into the pane, and Claude
+  Code hands those context-window numbers to its statusline command only — so a
+  PC with no statusline set up showed the toolbar's account usage while every
+  session stayed blank. Mymux can now be that statusline: the 🔔 settings modal
+  gained a row to switch it on. It writes `settings.json` only when no
+  statusline is configured, leaves another tool's statusline (OMC HUD and the
+  like) untouched, backs the file up first, and can be switched back off. /
+  OMC 없이도 세션별 사용량이 표시되도록 Mymux가 Claude statusline 역할을
+  대신합니다 (🔔 설정에서 켜기·끄기).
+- **Usage source at a glance.** The same row reports Codex too. Codex has no
+  statusline — its per-session usage comes from the session rollout — so it
+  shows whether that data is available instead of offering an install.
+
+### Fixed
+- **Vendored xterm guard.** The test pinning the bundled xterm build still
+  asserted 6.0.0 after the macOS input-drift fix pinned it back to 5.5.0, so the
+  desktop test suite was failing. It now matches the pinned assets and covers
+  the canvas addon.
+
+---
+
+## v0.1.53 — 2026-08-11
+
+### Fixed
+- **Blank space after closing a stacked session.** Closing one half of a
+  vertical split left the freed area empty instead of letting the remaining
+  session grow into it. Collapsing the split overwrote the surviving pane's
+  whole inline style, which also erased its own flex-column layout; the pane
+  fell back to block layout and its terminal kept the old, shorter height.
+  Side-by-side splits were unaffected because block layout still fills the
+  width. / 세로로 나눈 세션 중 하나를 닫으면 그 자리가 빈 공간으로 남고 남은
+  세션이 채우지 못하던 문제를 수정했습니다.
+- **Panes disappearing when closing a sibling.** In a tab holding three or more
+  sessions side by side, closing one dropped every sibling but the first out of
+  the view while their terminals stayed open. Collapsing now only unwraps a
+  split that really has a single child, and re-lays the dividers otherwise.
+- **Split dividers and tab roots.** Collapsing a split no longer removes a
+  nested split's divider by mistake, and no longer detaches the tab's own root
+  container from the page.
+
+---
+
+## v0.1.52 — 2026-08-03
+
+### Fixed
+- **Vertical split layout stability.** Strengthened zero-basis flex sizing and
+  minimum-size constraints across the terminal layout, restored sessions, and
+  re-tiled panes so the existing session keeps its full area and remains
+  clickable when opening a session below it.
+- **Post-split terminal measurement.** Refit panes across the first layout
+  frames after creating a split so a newly mounted terminal cannot cover its
+  sibling while xterm is measuring.
+
+---
+
+## v0.1.51 — 2026-08-03
+
+### Fixed
+- **Vertical split pane visibility.** Prevented terminal panes and nested split
+  containers from retaining an intrinsic minimum size that could cover the
+  existing tmux pane and leave it black or unclickable after adding/removing a
+  session.
+- **macOS zsh input alignment.** Added a managed zsh startup wrapper with a
+  compact prompt and terminal prompt markers so long directories do not make
+  typed text, Backspace, or the cursor appear offset.
+- **Terminal focus and IME handling.** Updated the bundled xterm.js assets and
+  focus restoration guards used during pane/window changes.
+
+---
+
 ## v0.1.50 — 2026-08-02
 
 ### Security

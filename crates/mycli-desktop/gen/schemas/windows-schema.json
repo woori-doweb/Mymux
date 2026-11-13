@@ -405,6 +405,18 @@
           "markdownDescription": "Enables the browser_close_tab command without any pre-configured scope."
         },
         {
+          "description": "Enables the browser_control_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-control-info",
+          "markdownDescription": "Enables the browser_control_info command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_import_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-import-data",
+          "markdownDescription": "Enables the browser_import_data command without any pre-configured scope."
+        },
+        {
           "description": "Enables the browser_import_profile command without any pre-configured scope.",
           "type": "string",
           "const": "allow-browser-import-profile",
@@ -531,6 +543,30 @@
           "markdownDescription": "Enables the claude_account_usage command without any pre-configured scope."
         },
         {
+          "description": "Enables the claude_agent_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-claude-agent-activity",
+          "markdownDescription": "Enables the claude_agent_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the claude_statusline_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-claude-statusline-install",
+          "markdownDescription": "Enables the claude_statusline_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the claude_statusline_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-claude-statusline-remove",
+          "markdownDescription": "Enables the claude_statusline_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the claude_statusline_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-claude-statusline-status",
+          "markdownDescription": "Enables the claude_statusline_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the codex_consume_reset_credit command without any pre-configured scope.",
           "type": "string",
           "const": "allow-codex-consume-reset-credit",
@@ -621,6 +657,18 @@
           "markdownDescription": "Enables the pick_key_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the prepare_harness_mcp command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-harness-mcp",
+          "markdownDescription": "Enables the prepare_harness_mcp command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pty_ai_process command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pty-ai-process",
+          "markdownDescription": "Enables the pty_ai_process command without any pre-configured scope."
+        },
+        {
           "description": "Enables the pty_close command without any pre-configured scope.",
           "type": "string",
           "const": "allow-pty-close",
@@ -655,6 +703,12 @@
           "type": "string",
           "const": "allow-read-text-file",
           "markdownDescription": "Enables the read_text_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_text_file_as command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-text-file-as",
+          "markdownDescription": "Enables the save_text_file_as command without any pre-configured scope."
         },
         {
           "description": "Enables the session_clear command without any pre-configured scope.",
@@ -753,6 +807,24 @@
           "markdownDescription": "Enables the sftp_write_text_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the ssh_resolve_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ssh-resolve-command",
+          "markdownDescription": "Enables the ssh_resolve_command command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terminal_background_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terminal-background-handoff",
+          "markdownDescription": "Enables the terminal_background_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terminal_shutdown command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terminal-shutdown",
+          "markdownDescription": "Enables the terminal_shutdown command without any pre-configured scope."
+        },
+        {
           "description": "Enables the tool_installed command without any pre-configured scope.",
           "type": "string",
           "const": "allow-tool-installed",
@@ -777,10 +849,34 @@
           "markdownDescription": "Enables the update_install command without any pre-configured scope."
         },
         {
+          "description": "Enables the voice_check_local command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-voice-check-local",
+          "markdownDescription": "Enables the voice_check_local command without any pre-configured scope."
+        },
+        {
           "description": "Enables the voice_deepgram_token command without any pre-configured scope.",
           "type": "string",
           "const": "allow-voice-deepgram-token",
           "markdownDescription": "Enables the voice_deepgram_token command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the voice_managed_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-voice-managed-status",
+          "markdownDescription": "Enables the voice_managed_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the voice_pick_runner command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-voice-pick-runner",
+          "markdownDescription": "Enables the voice_pick_runner command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the voice_setup_local command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-voice-setup-local",
+          "markdownDescription": "Enables the voice_setup_local command without any pre-configured scope."
         },
         {
           "description": "Enables the voice_store_deepgram_key command without any pre-configured scope.",
@@ -823,6 +919,18 @@
           "type": "string",
           "const": "deny-browser-close-tab",
           "markdownDescription": "Denies the browser_close_tab command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_control_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-control-info",
+          "markdownDescription": "Denies the browser_control_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_import_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-import-data",
+          "markdownDescription": "Denies the browser_import_data command without any pre-configured scope."
         },
         {
           "description": "Denies the browser_import_profile command without any pre-configured scope.",
@@ -951,6 +1059,30 @@
           "markdownDescription": "Denies the claude_account_usage command without any pre-configured scope."
         },
         {
+          "description": "Denies the claude_agent_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-claude-agent-activity",
+          "markdownDescription": "Denies the claude_agent_activity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the claude_statusline_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-claude-statusline-install",
+          "markdownDescription": "Denies the claude_statusline_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the claude_statusline_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-claude-statusline-remove",
+          "markdownDescription": "Denies the claude_statusline_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the claude_statusline_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-claude-statusline-status",
+          "markdownDescription": "Denies the claude_statusline_status command without any pre-configured scope."
+        },
+        {
           "description": "Denies the codex_consume_reset_credit command without any pre-configured scope.",
           "type": "string",
           "const": "deny-codex-consume-reset-credit",
@@ -1041,6 +1173,18 @@
           "markdownDescription": "Denies the pick_key_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the prepare_harness_mcp command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-harness-mcp",
+          "markdownDescription": "Denies the prepare_harness_mcp command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pty_ai_process command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pty-ai-process",
+          "markdownDescription": "Denies the pty_ai_process command without any pre-configured scope."
+        },
+        {
           "description": "Denies the pty_close command without any pre-configured scope.",
           "type": "string",
           "const": "deny-pty-close",
@@ -1075,6 +1219,12 @@
           "type": "string",
           "const": "deny-read-text-file",
           "markdownDescription": "Denies the read_text_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_text_file_as command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-text-file-as",
+          "markdownDescription": "Denies the save_text_file_as command without any pre-configured scope."
         },
         {
           "description": "Denies the session_clear command without any pre-configured scope.",
@@ -1173,6 +1323,24 @@
           "markdownDescription": "Denies the sftp_write_text_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the ssh_resolve_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ssh-resolve-command",
+          "markdownDescription": "Denies the ssh_resolve_command command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terminal_background_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terminal-background-handoff",
+          "markdownDescription": "Denies the terminal_background_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terminal_shutdown command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terminal-shutdown",
+          "markdownDescription": "Denies the terminal_shutdown command without any pre-configured scope."
+        },
+        {
           "description": "Denies the tool_installed command without any pre-configured scope.",
           "type": "string",
           "const": "deny-tool-installed",
@@ -1197,10 +1365,34 @@
           "markdownDescription": "Denies the update_install command without any pre-configured scope."
         },
         {
+          "description": "Denies the voice_check_local command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-voice-check-local",
+          "markdownDescription": "Denies the voice_check_local command without any pre-configured scope."
+        },
+        {
           "description": "Denies the voice_deepgram_token command without any pre-configured scope.",
           "type": "string",
           "const": "deny-voice-deepgram-token",
           "markdownDescription": "Denies the voice_deepgram_token command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the voice_managed_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-voice-managed-status",
+          "markdownDescription": "Denies the voice_managed_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the voice_pick_runner command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-voice-pick-runner",
+          "markdownDescription": "Denies the voice_pick_runner command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the voice_setup_local command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-voice-setup-local",
+          "markdownDescription": "Denies the voice_setup_local command without any pre-configured scope."
         },
         {
           "description": "Denies the voice_store_deepgram_key command without any pre-configured scope.",
@@ -3505,6 +3697,48 @@
           "type": "string",
           "const": "updater:deny-install",
           "markdownDescription": "Denies the install command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures what kind of\noperations are available from the window state plugin.\n\n#### Granted Permissions\n\nAll operations are enabled by default.\n\n\n#### This default permission set includes:\n\n- `allow-filename`\n- `allow-restore-state`\n- `allow-save-window-state`",
+          "type": "string",
+          "const": "window-state:default",
+          "markdownDescription": "This permission set configures what kind of\noperations are available from the window state plugin.\n\n#### Granted Permissions\n\nAll operations are enabled by default.\n\n\n#### This default permission set includes:\n\n- `allow-filename`\n- `allow-restore-state`\n- `allow-save-window-state`"
+        },
+        {
+          "description": "Enables the filename command without any pre-configured scope.",
+          "type": "string",
+          "const": "window-state:allow-filename",
+          "markdownDescription": "Enables the filename command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restore_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "window-state:allow-restore-state",
+          "markdownDescription": "Enables the restore_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_window_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "window-state:allow-save-window-state",
+          "markdownDescription": "Enables the save_window_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the filename command without any pre-configured scope.",
+          "type": "string",
+          "const": "window-state:deny-filename",
+          "markdownDescription": "Denies the filename command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restore_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "window-state:deny-restore-state",
+          "markdownDescription": "Denies the restore_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_window_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "window-state:deny-save-window-state",
+          "markdownDescription": "Denies the save_window_state command without any pre-configured scope."
         }
       ]
     },

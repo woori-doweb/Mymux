@@ -22,6 +22,12 @@
 2. **입력/포커스/클립보드/IME를 건드리는 변경은 전부 "macOS 고위험"**으로 취급.
    커밋 전에 반드시 mac에서 확인.
 3. Windows 기준으로만 짜고 "mac도 되겠지" 하고 릴리즈하지 말 것. 매번 그래서 터졌다.
+4. **xterm.js를 6.0.0 이상으로 올리지 말 것 — 고정: `xterm@5.5.0` + `addon-canvas@0.7.0`.**
+   xterm 6.0.0(2025-12)이 **Canvas 렌더러를 아예 삭제**([PR #5105](https://github.com/xtermjs/xterm.js/pull/5105))해서,
+   macOS 입력 드리프트(§4.1)를 고치는 유일한 정수-셀 렌더러가 사라진다. WebGL 애드온도
+   6.0.0용 **정식판이 없다**(0.20.0-beta 뿐). vendor 벤더 파일(`xterm.min.js`/`xterm.min.css`,
+   `addon-fit/search/web-links`)을 재다운로드·업그레이드할 때 **버전 세트를 통째로 5.x로 유지**하고,
+   `addon-canvas.min.js`를 반드시 함께 둘 것. (이게 매번 재발하는 지뢰 — §7 자동 가드가 잡는다.)
 
 ---
 
@@ -91,8 +97,37 @@ macOS의 Claude Code는 OAuth 자격증명을 **`~/.claude/.credentials.json` �
 
 ## 4. 렌더링 / 폰트 / 클립보드 (macOS 특이점 모음)
 
+### 4.1 입력 밀림(input drift) — 타이핑하면 글자가 옆으로 번지며 깨짐
+
+#### 증상
+shell에서 타이핑하면 입력한 글자·명령 조각이 **한 줄 안에서 오른쪽으로 계속 밀리며
+큰 간격으로 흩뿌려진다**(예: `cd projectd    project    d project    lss s  s s s`).
+Backspace가 공백을 찍는 것처럼 보이기도 한다. Windows(WebView2)에선 멀쩡 → **macOS 전용**.
+
+#### 근본 원인
+xterm의 **기본 DOM 렌더러**는 각 행의 글리프를 브라우저 자체 텍스트 레이아웃으로 그린다.
+macOS/WebKit에선 폰트의 실제 advance width와 xterm의 정수 셀 그리드 사이 오차가 글리프마다
+누적돼, 한 줄쯤 지나면 커서 컬럼이 shell(zsh)의 ZLE 모델과 어긋난다. 그러면 ZLE가 라인을
+다시 그릴 때마다 밀린 컬럼에 찍혀 위 증상이 된다. `letterSpacing 0` 강제(§4 아래 항목)는
+드리프트를 줄일 뿐 없애지 못한다.
+
+#### 해결 (현재 코드)
+**Canvas 렌더러**로 모든 셀을 정확한 정수 픽셀 위치에 그린다 → 폰트 메트릭과 무관하게
+컬럼 드리프트가 원천 불가.
+- `frontend/index.html`: `addon-canvas.min.js` `<script>` 로드.
+- `frontend/app.js` `createPane()`: `term.open()` **직후** `term.loadAddon(new CanvasAddon.CanvasAddon())`
+  (2D 컨텍스트 실패 시 DOM 렌더러로 폴백).
+
+#### ⚠️ 버전 제약 (매번 재발하는 지뢰 — §0-4 규칙)
+Canvas 렌더러는 **xterm 5.x에만 존재**한다. xterm 6.0.0이 이를 삭제([PR #5105](https://github.com/xtermjs/xterm.js/pull/5105))
+했으므로 **`xterm@5.5.0` + `addon-canvas@0.7.0` 고정**. vendor 파일 업그레이드 시 세트를
+통째로 5.x로 유지할 것. (§7 자동 가드가 검사)
+
+### 4.2 기타 렌더링/폰트/클립보드
+
 - **letter-spacing:** WebKit은 CSS `letter-spacing`을 셀 폭 측정에 안 접어서 글자가
-  셀을 밀고 커서가 어긋난다 → macOS는 `effectiveLetterSpacing()`로 0 강제.
+  셀을 밀고 커서가 어긋난다 → macOS는 `effectiveLetterSpacing()`로 0 강제. (드리프트를
+  줄이는 보조 조치일 뿐, 근본 해결은 위 §4.1 Canvas 렌더러다.)
 - **폰트:** macOS는 `SF Mono`/`Menlo` 우선(D2Coding은 너무 넓어 보임).
 - **클립보드:** `withGlobalTauri:true` + `capabilities/default.json`에
   `clipboard-manager:allow-read/write-text` 필요. 전역은
@@ -101,6 +136,23 @@ macOS의 Claude Code는 OAuth 자격증명을 **`~/.claude/.credentials.json` �
   `hdiutil detach /Volumes/Mymux*`, `/Volumes/dmg.*` 후 재빌드.
 
 ---
+
+### 4.3 zsh 프롬프트 폭과 경로의 `%` (macOS/Linux 공통)
+
+`terminal.rs`의 zsh 초기화는 경로를 직접 `${#p}`로 잘라 `PROMPT_SUBST`에
+넣지 않는다. 글자 수와 표시 셀 수가 다른 한글 경로는 40열에 70셀 프롬프트를
+만들었고, `%{`가 있는 폴더명은 ZLE의 보이지 않는 영역 표시로 해석되었다.
+둘 다 셸의 커서 계산을 실제 표시와 어긋나게 할 수 있다.
+또한 `precmd`에서만 폭을 계산하면, ASCII 경로도 프롬프트를 찍은 뒤 패인을
+줄였을 때 이전 폭을 유지한다. 실제 zsh 확장 검사에서 120열에서 40열로 줄이면
+45셀 프롬프트가 그대로 남는 것을 확인했다.
+
+현재는 zsh 자체 `%~`와 표시 셀 기준 truncation으로 경로를 출력한다. 폭 계산은
+매 프롬프트 확장 시 수행하므로, 명령 입력 중 패인 폭을 줄여도 오래된 폭을 쓰지 않는다.
+`node scripts/check-zsh-prompt.mjs [zsh 실행 파일]`은 실제 zsh로 ASCII/한글/`%`
+경로와 폭 변경을 검사한다. 이 검사는 **프롬프트 확장 검사**이며 macOS/Linux의
+실제 키 입력 재현이나 bash 검증을 대체하지 않는다. 일반 ASCII 경로에서 연속 입력이
+흩어지는 모든 원인이 이 문제라고 단정하면 안 된다.
 
 ## 5. 릴리즈 전 macOS 입력 스모크 테스트 (필수 관문)
 
@@ -146,7 +198,8 @@ CI에도 걸려 있어 따로 안 돌려도 된다:
 
 검사 항목: §1 IME fix 블록 + xterm 파이프라인 경유, §3 focus keeper mac skip +
 `imeComposing` 가드, §4 letter-spacing 0 / SF Mono / 클립보드 capability /
-`withGlobalTauri`, §2 Keychain fallback.
+`withGlobalTauri`, §2 Keychain fallback, **§4.1 xterm 5.x 고정(6.x 금지) +
+Canvas 렌더러 로드·wiring**.
 
 **한계:** 정적 검사라 "코드가 있는데도 WKWebView 동작이 달라져 깨지는" 경우
 (WebKit 업데이트, xterm 업그레이드)는 못 잡는다 → §5 수동 스모크는 그대로 관문.

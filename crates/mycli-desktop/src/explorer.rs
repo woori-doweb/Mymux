@@ -415,6 +415,55 @@ pub fn explorer_list_drives() -> Vec<String> {
 
 // ── SFTP remote filesystem ──
 
+/// sshd counts every public-key signature against `MaxAuthTries` (6 by
+/// default) and disconnects once the budget is gone. An explicit key and a
+/// password attempt can each take one, so auto-detection keeps well under it
+/// rather than burning the budget on keys this server will never accept.
+const MAX_AUTO_KEY_ATTEMPTS: usize = 4;
+
+/// The three names `ssh` itself looks for. Tried first because a key named
+/// this way is almost always the account's default.
+/// `id_dsa` is intentionally omitted because DSA is obsolete/weak.
+const CANONICAL_KEY_NAMES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+
+/// Private keys to offer when the caller gave us no explicit key, best first.
+///
+/// Restricting this to the canonical three silently breaks every per-host key
+/// — `id_ed25519_clp`, `id_rsa_work` and friends are ordinary setups, and the
+/// resulting failure looks like "SFTP just doesn't work" rather than an
+/// authentication problem. Anything with a matching `.pub` beside it is a
+/// private key; that pairing separates real keys from `config`, `known_hosts`
+/// and editor backups without guessing at names.
+fn auto_key_candidates(ssh_dir: &Path) -> Vec<PathBuf> {
+    let mut ordered: Vec<PathBuf> = CANONICAL_KEY_NAMES
+        .iter()
+        .map(|name| ssh_dir.join(name))
+        .filter(|path| path.is_file())
+        .collect();
+
+    let mut extra: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(ssh_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.ends_with(".pub") || CANONICAL_KEY_NAMES.contains(&name) {
+                continue;
+            }
+            if path.is_file() && ssh_dir.join(format!("{name}.pub")).is_file() {
+                extra.push(path);
+            }
+        }
+    }
+    // Directory order is not stable across platforms; a fixed order keeps the
+    // attempt budget spending itself the same way every time.
+    extra.sort();
+    ordered.extend(extra);
+    ordered.truncate(MAX_AUTO_KEY_ATTEMPTS);
+    ordered
+}
+
 async fn connect_sftp_session(
     host: &str,
     port: u16,
@@ -437,35 +486,51 @@ async fn connect_sftp_session(
 
     // Authenticate: explicit key > auto-detect keys > password
     let mut authenticated = false;
+    // Why each attempt failed. Swallowing these leaves the user with a generic
+    // "no valid key" message that is the same whether the file was missing,
+    // encrypted, or simply rejected by the server.
+    let mut attempts: Vec<String> = Vec::new();
 
     if let Some(key_file) = key_path {
-        if let Ok(key) = russh::keys::load_secret_key(key_file, None) {
-            let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-            if let Ok(result) = handle.authenticate_publickey(username, key_with_alg).await {
-                authenticated = result.success();
+        match russh::keys::load_secret_key(key_file, None) {
+            Ok(key) => {
+                let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+                match handle.authenticate_publickey(username, key_with_alg).await {
+                    Ok(result) => {
+                        authenticated = result.success();
+                        if !authenticated {
+                            attempts.push(format!("{key_file}: server rejected the key"));
+                        }
+                    }
+                    Err(e) => attempts.push(format!("{key_file}: {e}")),
+                }
             }
+            Err(e) => attempts.push(format!("{key_file}: cannot read key ({e})")),
         }
     }
 
-    if !authenticated {
-        // id_dsa intentionally omitted because DSA is obsolete/weak.
-        let key_names = ["id_ed25519", "id_ecdsa", "id_rsa"];
-        if let Some(ssh_dir) = auto_key_dir {
-            for name in &key_names {
-                let path = ssh_dir.join(name);
-                if !path.exists() {
-                    continue;
-                }
-                if let Ok(key) = russh::keys::load_secret_key(&path, None) {
+    if !authenticated
+        && let Some(ssh_dir) = auto_key_dir
+    {
+        for path in auto_key_candidates(&ssh_dir) {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("key")
+                .to_string();
+            match russh::keys::load_secret_key(&path, None) {
+                Ok(key) => {
                     let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
                     match handle.authenticate_publickey(username, key_with_alg).await {
                         Ok(result) if result.success() => {
                             authenticated = true;
                             break;
                         }
-                        _ => continue,
+                        Ok(_) => attempts.push(format!("{name}: server rejected the key")),
+                        Err(e) => attempts.push(format!("{name}: {e}")),
                     }
                 }
+                Err(e) => attempts.push(format!("{name}: cannot read key ({e})")),
             }
         }
     }
@@ -481,10 +546,13 @@ async fn connect_sftp_session(
     }
 
     if !authenticated {
-        return Err(
-            "Authentication failed. No valid key found in ~/.ssh/ and no password provided."
-                .to_string(),
-        );
+        if attempts.is_empty() {
+            return Err(
+                "Authentication failed. No key was found in ~/.ssh/ and no password was provided."
+                    .to_string(),
+            );
+        }
+        return Err(format!("Authentication failed. {}", attempts.join("; ")));
     }
 
     let channel = handle
@@ -507,8 +575,8 @@ async fn connect_sftp_session(
     })
 }
 
-#[tauri::command(async)]
-pub fn sftp_connect(
+#[tauri::command]
+pub async fn sftp_connect(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     host: String,
     port: u16,
@@ -518,137 +586,129 @@ pub fn sftp_connect(
 ) -> Result<u32, String> {
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        let home = dirs::home_dir();
-        let session = connect_sftp_session(
-            &host,
-            port,
-            &username,
-            password.as_deref(),
-            key_path.as_deref(),
-            home.as_ref()
-                .map(|path| path.join(".mycli").join("known_hosts")),
-            home.map(|path| path.join(".ssh")),
-        )
-        .await?;
-        let id = {
-            let mut next = state_clone.next_id.lock().await;
-            let id = *next;
-            *next += 1;
-            id
-        };
+    let home = dirs::home_dir();
+    let session = connect_sftp_session(
+        &host,
+        port,
+        &username,
+        password.as_deref(),
+        key_path.as_deref(),
+        home.as_ref()
+            .map(|path| path.join(".mycli").join("known_hosts")),
+        home.map(|path| path.join(".ssh")),
+    )
+    .await?;
+    let id = {
+        let mut next = state_clone.next_id.lock().await;
+        let id = *next;
+        *next += 1;
+        id
+    };
 
-        {
-            let mut sessions = state_clone.sftp_sessions.lock().await;
-            sessions.insert(id, Arc::new(session));
-        }
+    {
+        let mut sessions = state_clone.sftp_sessions.lock().await;
+        sessions.insert(id, Arc::new(session));
+    }
 
-        Ok(id)
-    })
+    Ok(id)
 }
 
-#[tauri::command(async)]
-pub fn sftp_list_dir(
+#[tauri::command]
+pub async fn sftp_list_dir(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
     path: String,
 ) -> Result<Vec<FileEntry>, String> {
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        let session = get_sftp_session(&state_clone, session_id).await?;
+    let session = get_sftp_session(&state_clone, session_id).await?;
 
-        let read_dir = session
-            .sftp
-            .read_dir(&path)
-            .await
-            .map_err(|e| format!("Cannot read {}: {}", path, e))?;
+    let read_dir = session
+        .sftp
+        .read_dir(&path)
+        .await
+        .map_err(|e| format!("Cannot read {}: {}", path, e))?;
 
-        let mut result: Vec<FileEntry> = Vec::new();
+    let mut result: Vec<FileEntry> = Vec::new();
 
-        for entry in read_dir {
-            let name = entry.file_name();
-            // Skip . and ..
-            if name == "." || name == ".." {
-                continue;
-            }
-            let full_path = if path.ends_with('/') {
-                format!("{}{}", path, name)
-            } else {
-                format!("{}/{}", path, name)
-            };
-            let mut is_dir = entry.file_type().is_dir();
-            let is_symlink = entry.file_type().is_symlink();
-            // read_dir lstats entries, so a symlink to a directory (e.g. macOS
-            // /Volumes/"Macintosh HD" -> /) reports as a plain link. Stat the
-            // target so such links open as folders in the explorer.
-            if is_symlink && !is_dir {
-                if let Ok(meta) = session.sftp.metadata(full_path.as_str()).await {
-                    if meta.is_dir() {
-                        is_dir = true;
-                    }
+    for entry in read_dir {
+        let name = entry.file_name();
+        // Skip . and ..
+        if name == "." || name == ".." {
+            continue;
+        }
+        let full_path = if path.ends_with('/') {
+            format!("{}{}", path, name)
+        } else {
+            format!("{}/{}", path, name)
+        };
+        let mut is_dir = entry.file_type().is_dir();
+        let is_symlink = entry.file_type().is_symlink();
+        // read_dir lstats entries, so a symlink to a directory (e.g. macOS
+        // /Volumes/"Macintosh HD" -> /) reports as a plain link. Stat the
+        // target so such links open as folders in the explorer.
+        if is_symlink && !is_dir {
+            if let Ok(meta) = session.sftp.metadata(full_path.as_str()).await {
+                if meta.is_dir() {
+                    is_dir = true;
                 }
             }
-            let size = entry.metadata().size.unwrap_or(0);
-
-            result.push(FileEntry {
-                name,
-                path: full_path,
-                is_dir,
-                size,
-                is_symlink,
-            });
         }
+        let size = entry.metadata().size.unwrap_or(0);
 
-        result.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        result.push(FileEntry {
+            name,
+            path: full_path,
+            is_dir,
+            size,
+            is_symlink,
         });
+    }
 
-        Ok(result)
-    })
+    result.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(result)
 }
 
-#[tauri::command(async)]
-pub fn sftp_home_dir(
+#[tauri::command]
+pub async fn sftp_home_dir(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
 ) -> Result<String, String> {
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        let session = get_sftp_session(&state_clone, session_id).await?;
+    let session = get_sftp_session(&state_clone, session_id).await?;
 
-        match session.sftp.canonicalize(".").await {
-            Ok(path) => Ok(path),
-            Err(_) => Ok("/".to_string()),
-        }
-    })
+    match session.sftp.canonicalize(".").await {
+        Ok(path) => Ok(path),
+        Err(_) => Ok("/".to_string()),
+    }
 }
 
 /// Canonicalize a remote path and verify that it is a directory. The frontend
 /// uses this before accepting an Explorer-driven or typed SSH `cd`, so the
 /// pane and Explorer only move after the server has confirmed the destination.
-#[tauri::command(async)]
-pub fn sftp_resolve_dir(
+#[tauri::command]
+pub async fn sftp_resolve_dir(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
     path: String,
 ) -> Result<String, String> {
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        let session = get_sftp_session(&state_clone, session_id).await?;
-        resolve_remote_dir_path(&session, &path).await
-    })
+    let session = get_sftp_session(&state_clone, session_id).await?;
+    resolve_remote_dir_path(&session, &path).await
 }
 
 /// Read a remote text/code file over SFTP for the in-app viewer. Mirrors
 /// `read_text_file`: returns Err("BINARY") for non-text files and Err for files
 /// larger than ~2 MB.
-#[tauri::command(async)]
-pub fn sftp_read_text_file(
+#[tauri::command]
+pub async fn sftp_read_text_file(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
     path: String,
@@ -656,39 +716,37 @@ pub fn sftp_read_text_file(
     use tokio::io::AsyncReadExt;
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        let session = get_sftp_session(&state_clone, session_id).await?;
+    let session = get_sftp_session(&state_clone, session_id).await?;
 
-        // Size guard (~2 MB) when the server reports it.
-        if let Ok(meta) = session.sftp.metadata(&path).await {
-            if let Some(sz) = meta.size {
-                if sz > 2_000_000 {
-                    return Err("File is too large (over 2 MB)".to_string());
-                }
+    // Size guard (~2 MB) when the server reports it.
+    if let Ok(meta) = session.sftp.metadata(&path).await {
+        if let Some(sz) = meta.size {
+            if sz > 2_000_000 {
+                return Err("File is too large (over 2 MB)".to_string());
             }
         }
+    }
 
-        let mut file = session
-            .sftp
-            .open(&path)
-            .await
-            .map_err(|e| format!("Cannot open {}: {}", path, e))?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)
-            .await
-            .map_err(|e| e.to_string())?;
+    let mut file = session
+        .sftp
+        .open(&path)
+        .await
+        .map_err(|e| format!("Cannot open {}: {}", path, e))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .await
+        .map_err(|e| e.to_string())?;
 
-        let sample = &buf[..buf.len().min(8000)];
-        if sample.contains(&0u8) {
-            return Err("BINARY".into());
-        }
-        Ok(String::from_utf8_lossy(&buf).to_string())
-    })
+    let sample = &buf[..buf.len().min(8000)];
+    if sample.contains(&0u8) {
+        return Err("BINARY".into());
+    }
+    Ok(String::from_utf8_lossy(&buf).to_string())
 }
 
 /// Save text back to a remote file over SFTP (creates/truncates). In-app editor.
-#[tauri::command(async)]
-pub fn sftp_write_text_file(
+#[tauri::command]
+pub async fn sftp_write_text_file(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
     path: String,
@@ -697,29 +755,27 @@ pub fn sftp_write_text_file(
     use tokio::io::AsyncWriteExt;
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        let session = get_sftp_session(&state_clone, session_id).await?;
+    let session = get_sftp_session(&state_clone, session_id).await?;
 
-        let mut file = session
-            .sftp
-            .create(&path)
-            .await
-            .map_err(|e| format!("Cannot write {}: {}", path, e))?;
-        file.write_all(content.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-        file.flush().await.ok();
-        file.shutdown().await.ok();
-        Ok(())
-    })
+    let mut file = session
+        .sftp
+        .create(&path)
+        .await
+        .map_err(|e| format!("Cannot write {}: {}", path, e))?;
+    file.write_all(content.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    file.flush().await.ok();
+    file.shutdown().await.ok();
+    Ok(())
 }
 
 /// Upload a local file or directory tree into an existing SFTP directory.
 ///
 /// The destination is never overwritten. This keeps a drag-and-drop upload
 /// recoverable and matches the local Explorer copy behavior.
-#[tauri::command(async)]
-pub fn sftp_upload_path(
+#[tauri::command]
+pub async fn sftp_upload_path(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
@@ -729,64 +785,60 @@ pub fn sftp_upload_path(
 ) -> Result<(), String> {
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        let session = get_sftp_session(&state_clone, session_id).await?;
-        let canonical_remote_dir = resolve_remote_dir_path(&session, &remote_dir).await?;
-        let cancellation = claim_upload_state(
-            &state_clone.active_uploads,
-            &upload_id,
-            session_id,
-            &canonical_remote_dir,
+    let session = get_sftp_session(&state_clone, session_id).await?;
+    let canonical_remote_dir = resolve_remote_dir_path(&session, &remote_dir).await?;
+    let cancellation = claim_upload_state(
+        &state_clone.active_uploads,
+        &upload_id,
+        session_id,
+        &canonical_remote_dir,
+    )
+    .await?;
+    let result = async {
+        let source = PathBuf::from(&local_path);
+        let manifest = open_secure_local_manifest(&source)?;
+        let remote_path = remote_join(&canonical_remote_dir, &manifest.name);
+        let total = manifest.total;
+        let progress = UploadProgress {
+            app: Some(&app),
+            upload_id: &upload_id,
+            transferred: AtomicU64::new(0),
+            total,
+        };
+        progress.emit();
+        upload_and_publish_entry(
+            &session.sftp,
+            manifest,
+            remote_path,
+            &progress,
+            &cancellation,
         )
         .await?;
-        let result = async {
-            let source = PathBuf::from(&local_path);
-            let manifest = open_secure_local_manifest(&source)?;
-            let remote_path = remote_join(&canonical_remote_dir, &manifest.name);
-            let total = manifest.total;
-            let progress = UploadProgress {
-                app: Some(&app),
-                upload_id: &upload_id,
-                transferred: AtomicU64::new(0),
-                total,
-            };
-            progress.emit();
-            upload_and_publish_entry(
-                &session.sftp,
-                manifest,
-                remote_path,
-                &progress,
-                &cancellation,
-            )
-            .await?;
-            progress.emit();
-            Ok(())
-        }
-        .await;
-        release_upload_state(&state_clone.active_uploads, &upload_id).await;
-        result
-    })
+        progress.emit();
+        Ok(())
+    }
+    .await;
+    release_upload_state(&state_clone.active_uploads, &upload_id).await;
+    result
 }
 
 /// Start one upload batch and bind it to the authenticated SFTP session and
 /// canonical destination directory. The identifier is generated by the backend.
-#[tauri::command(async)]
-pub fn sftp_begin_upload(
+#[tauri::command]
+pub async fn sftp_begin_upload(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
     remote_dir: String,
 ) -> Result<String, String> {
     let state_clone = Arc::clone(&*state);
-    state.runtime.block_on(async {
-        let session = get_sftp_session(&state_clone, session_id).await?;
-        let canonical_remote_dir = resolve_remote_dir_path(&session, &remote_dir).await?;
-        Ok(register_upload_state(
-            &state_clone.active_uploads,
-            session_id,
-            canonical_remote_dir,
-        )
-        .await)
-    })
+    let session = get_sftp_session(&state_clone, session_id).await?;
+    let canonical_remote_dir = resolve_remote_dir_path(&session, &remote_dir).await?;
+    Ok(register_upload_state(
+        &state_clone.active_uploads,
+        session_id,
+        canonical_remote_dir,
+    )
+    .await)
 }
 
 #[tauri::command(async)]
@@ -1141,7 +1193,10 @@ fn upload_local_entry<'a>(
     progress: &'a UploadProgress<'a>,
     cancellation: &'a AtomicBool,
     created: &'a mut Vec<CreatedRemoteEntry>,
-) -> Pin<Box<dyn Future<Output = Result<(), String>> + 'a>> {
+// `Send` matters here: the upload command is a Tauri async command, so its
+// whole future is spawned onto the runtime and must cross threads. Without the
+// bound this recursive boxed future silently makes the caller non-`Send`.
+) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
         ensure_upload_not_cancelled(cancellation)?;
         if remote_path_exists(sftp, &remote).await? {
@@ -1258,19 +1313,404 @@ fn created_entries_for_cleanup(
     created.iter().rev()
 }
 
-#[tauri::command(async)]
-pub fn sftp_disconnect(
+#[tauri::command]
+pub async fn sftp_disconnect(
     state: tauri::State<'_, Arc<ExplorerManager>>,
     session_id: u32,
 ) -> Result<(), String> {
     let state_clone = Arc::clone(&*state);
 
-    state.runtime.block_on(async {
-        cancel_session_uploads(&state_clone.active_uploads, session_id).await;
-        let mut sessions = state_clone.sftp_sessions.lock().await;
-        sessions.remove(&session_id);
-        Ok(())
-    })
+    cancel_session_uploads(&state_clone.active_uploads, session_id).await;
+    let mut sessions = state_clone.sftp_sessions.lock().await;
+    sessions.remove(&session_id);
+    Ok(())
+}
+
+/// A pane's `ssh` command, split into what we need to open an SFTP session
+/// beside it. `alias` is set when the target was a bare name that has to be
+/// looked up in `~/.ssh/config`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ParsedSsh {
+    pub alias: Option<String>,
+    pub user: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub key_path: Option<String>,
+}
+
+/// ssh options that consume the next argument. Everything else starting with
+/// `-` is a flag we can skip. From ssh(1).
+const SSH_OPTS_WITH_VALUE: &[char] = &[
+    'B', 'b', 'c', 'D', 'E', 'e', 'F', 'I', 'i', 'J', 'L', 'l', 'm', 'O', 'o', 'p', 'Q', 'R', 'S',
+    'W', 'w',
+];
+
+/// Parse a command line the user typed at the prompt. Returns `None` for
+/// anything that is not an interactive `ssh` login — a different program, a
+/// remote command (no shell opens), or no target at all.
+pub fn parse_ssh_command(command: &str) -> Option<ParsedSsh> {
+    let mut tokens = command.split_whitespace();
+    if tokens.next()? != "ssh" {
+        return None;
+    }
+
+    let mut parsed = ParsedSsh::default();
+    let mut target: Option<String> = None;
+    let mut tokens = tokens.peekable();
+
+    while let Some(token) = tokens.next() {
+        if let Some(rest) = token.strip_prefix('-') {
+            let Some(flag) = rest.chars().next() else {
+                return None; // a lone "-"
+            };
+            if !SSH_OPTS_WITH_VALUE.contains(&flag) {
+                continue; // -t, -C, -4 …
+            }
+            // The value is either glued on (-p2222) or the next token.
+            let value = if rest.len() > flag.len_utf8() {
+                rest[flag.len_utf8()..].to_string()
+            } else {
+                tokens.next()?.to_string()
+            };
+            match flag {
+                'p' => parsed.port = value.parse().ok(),
+                'i' => parsed.key_path = Some(value),
+                'l' => parsed.user = Some(value),
+                _ => {}
+            }
+            continue;
+        }
+        if target.is_some() {
+            return None; // a remote command follows — no interactive shell
+        }
+        target = Some(token.to_string());
+    }
+
+    let target = target?;
+    if let Some((user, host)) = target.split_once('@') {
+        if user.is_empty() || host.is_empty() {
+            return None;
+        }
+        parsed.user = Some(user.to_string());
+        parsed.host = Some(host.to_string());
+    } else if target.contains('.') || target.contains(':') {
+        parsed.host = Some(target); // looks like a hostname or an address
+    } else {
+        parsed.alias = Some(target); // a name to look up in ~/.ssh/config
+    }
+    Some(parsed)
+}
+
+/// The subset of `~/.ssh/config` we model. Anything else in the file is
+/// ignored; anything we cannot model correctly makes us give up entirely.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SshConfigEntry {
+    pub host_name: Option<String>,
+    pub user: Option<String>,
+    pub port: Option<u16>,
+    pub identity_file: Option<String>,
+}
+
+/// Look `alias` up in the contents of an ssh config file.
+///
+/// Only an exact `Host <alias>` block counts — we deliberately do not
+/// implement ssh's pattern matching, so a wildcard block never applies. An
+/// `Include` anywhere means the file we were given is incomplete, and a
+/// `ProxyJump` in the matched block means the connection we would open is not
+/// the one the terminal made. Both return `None` so the caller stays quiet.
+pub fn resolve_ssh_alias(alias: &str, config: &str) -> Option<SshConfigEntry> {
+    let mut entry: Option<SshConfigEntry> = None;
+    let mut in_block = false;
+
+    for line in config.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // A keyword with no value is malformed; skip that line rather than
+        // abandoning the whole file.
+        let Some((keyword, value)) = line.split_once(|c: char| c.is_whitespace() || c == '=')
+        else {
+            continue;
+        };
+        let keyword = keyword.to_ascii_lowercase();
+        let value = value.trim_start_matches(['=', ' ', '\t']).trim();
+
+        if keyword == "include" {
+            return None; // we cannot see the rest of the configuration
+        }
+        if keyword == "host" {
+            in_block = value.split_whitespace().any(|pattern| pattern == alias);
+            if in_block {
+                entry = Some(SshConfigEntry::default());
+            }
+            continue;
+        }
+        if keyword == "match" {
+            in_block = false;
+            continue;
+        }
+        if !in_block {
+            continue;
+        }
+        let Some(current) = entry.as_mut() else { continue };
+        match keyword.as_str() {
+            "hostname" => current.host_name = Some(value.to_string()),
+            "user" => current.user = Some(value.to_string()),
+            "port" => current.port = value.parse().ok(),
+            "identityfile" => current.identity_file = Some(value.to_string()),
+            "proxyjump" => return None, // not the connection we would open
+            _ => {}
+        }
+    }
+    entry
+}
+
+/// Everything `sftp_connect` needs, derived from a typed ssh command.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTarget {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub key_path: Option<String>,
+}
+
+/// Merge a parsed command line with `~/.ssh/config`. The command line wins —
+/// that is what ssh itself does — and anything still missing falls back to
+/// ssh's defaults (port 22, the current OS user).
+fn resolve_target(parsed: ParsedSsh, config: &str, os_user: &str) -> Option<SshTarget> {
+    let entry = match parsed.alias.as_deref() {
+        Some(alias) => Some(resolve_ssh_alias(alias, config)?),
+        None => None,
+    };
+    let from_config = |pick: fn(&SshConfigEntry) -> Option<String>| entry.as_ref().and_then(pick);
+
+    let host = parsed
+        .host
+        .or_else(|| from_config(|e| e.host_name.clone()))
+        // `Host box` with no HostName means the alias IS the hostname.
+        .or_else(|| parsed.alias.clone())?;
+    let port = parsed
+        .port
+        .or_else(|| entry.as_ref().and_then(|e| e.port))
+        .unwrap_or(22);
+    let user = parsed
+        .user
+        .or_else(|| from_config(|e| e.user.clone()))
+        .unwrap_or_else(|| os_user.to_string());
+    let key_path = parsed
+        .key_path
+        .or_else(|| from_config(|e| e.identity_file.clone()))
+        .map(|path| expand_home(&path));
+
+    Some(SshTarget { host, port, user, key_path })
+}
+
+/// `~/x` → `<home>/x`. Left alone when the home directory is unknown.
+fn expand_home(path: &str) -> String {
+    let Some(rest) = path.strip_prefix("~/") else {
+        return path.to_string();
+    };
+    match dirs::home_dir() {
+        Some(home) => home.join(rest).to_string_lossy().into_owned(),
+        None => path.to_string(),
+    }
+}
+
+/// Work out what a pane's typed `ssh` command connects to, so the Explorer can
+/// open an SFTP session beside it. Returns `None` for anything we do not
+/// model — the caller then stays quiet, because the user never asked for this.
+#[tauri::command]
+pub fn ssh_resolve_command(command: String) -> Option<SshTarget> {
+    let parsed = parse_ssh_command(&command)?;
+    // Read as bytes, not `read_to_string`. An ssh config with a comment in a
+    // non-UTF-8 encoding is common enough on Windows, and losing the whole
+    // file to a decode error would silently disable alias resolution.
+    let config = dirs::home_dir()
+        .map(|home| home.join(".ssh").join("config"))
+        .and_then(|path| std::fs::read(path).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default();
+    let os_user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_default();
+    resolve_target(parsed, &config, &os_user)
+}
+
+#[cfg(test)]
+mod ssh_command_tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_common_shapes() {
+        let p = parse_ssh_command("ssh me@10.0.0.5").unwrap();
+        assert_eq!(p.host.as_deref(), Some("10.0.0.5"));
+        assert_eq!(p.user.as_deref(), Some("me"));
+        assert_eq!(p.port, None);
+
+        let p = parse_ssh_command("ssh -p 2222 me@host").unwrap();
+        assert_eq!(p.port, Some(2222));
+
+        let p = parse_ssh_command("ssh me@host -p 2222").unwrap();
+        assert_eq!(p.port, Some(2222));
+
+        // The value can be glued to the flag.
+        let p = parse_ssh_command("ssh -p2222 me@host").unwrap();
+        assert_eq!(p.port, Some(2222));
+
+        let p = parse_ssh_command("ssh -i ~/.ssh/id_ed25519 me@host").unwrap();
+        assert_eq!(p.key_path.as_deref(), Some("~/.ssh/id_ed25519"));
+
+        // -l gives the user name instead of user@host.
+        let p = parse_ssh_command("ssh -l me host.example.com").unwrap();
+        assert_eq!(p.user.as_deref(), Some("me"));
+
+        // Flags that take no argument are skipped.
+        let p = parse_ssh_command("ssh -t -C me@host").unwrap();
+        assert_eq!(p.host.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn treats_a_bare_token_as_an_alias() {
+        let p = parse_ssh_command("ssh 미니맥").unwrap();
+        assert_eq!(p.alias.as_deref(), Some("미니맥"));
+        assert_eq!(p.host, None);
+
+        // Hyphens are ordinary alias characters — this shape is in real configs.
+        let p = parse_ssh_command("ssh clp-MS").unwrap();
+        assert_eq!(p.alias.as_deref(), Some("clp-MS"));
+        assert_eq!(p.host, None);
+    }
+
+    #[test]
+    fn rejects_what_is_not_an_interactive_login() {
+        // A remote command means no interactive shell opens.
+        assert!(parse_ssh_command("ssh host uptime").is_none());
+        // Not the program we handle.
+        assert!(parse_ssh_command("ssh-keygen -t ed25519").is_none());
+        assert!(parse_ssh_command("sshpass -p x ssh me@host").is_none());
+        assert!(parse_ssh_command("echo ssh me@host").is_none());
+        // No target.
+        assert!(parse_ssh_command("ssh").is_none());
+        assert!(parse_ssh_command("ssh -p 22").is_none());
+        // A malformed target is not a login either.
+        assert!(parse_ssh_command("ssh @host").is_none());
+        assert!(parse_ssh_command("ssh me@").is_none());
+    }
+}
+
+#[cfg(test)]
+mod ssh_config_tests {
+    use super::*;
+
+    const CONFIG: &str = "\
+Host 미니맥
+  HostName 192.168.0.21
+  User gyber
+  Port 2222
+  IdentityFile ~/.ssh/minimac
+
+host BOX
+  hostname box.internal
+
+Host wild*
+  HostName nope.example.com
+
+Host jump
+  HostName jump.example.com
+  ProxyJump bastion
+";
+
+    #[test]
+    fn reads_the_four_keys_we_support() {
+        let e = resolve_ssh_alias("미니맥", CONFIG).unwrap();
+        assert_eq!(e.host_name.as_deref(), Some("192.168.0.21"));
+        assert_eq!(e.user.as_deref(), Some("gyber"));
+        assert_eq!(e.port, Some(2222));
+        assert_eq!(e.identity_file.as_deref(), Some("~/.ssh/minimac"));
+    }
+
+    #[test]
+    fn keywords_are_case_insensitive() {
+        // ssh itself does not care about the case of Host/HostName.
+        let e = resolve_ssh_alias("BOX", CONFIG).unwrap();
+        assert_eq!(e.host_name.as_deref(), Some("box.internal"));
+    }
+
+    #[test]
+    fn ignores_keys_outside_the_subset_we_model() {
+        // A real config: RequestTTY/RemoteCommand still open an interactive
+        // shell, so the entry stays usable and the extra keys are ignored.
+        let config = "\
+Host clp-MS
+  HostName 49.247.202.200
+  User root
+  IdentityFile ~/.ssh/id_ed25519_clp
+  IdentitiesOnly yes
+  RequestTTY yes
+  RemoteCommand tmux attach -t MyStoryboard
+";
+        let e = resolve_ssh_alias("clp-MS", config).unwrap();
+        assert_eq!(e.host_name.as_deref(), Some("49.247.202.200"));
+        assert_eq!(e.user.as_deref(), Some("root"));
+        assert_eq!(e.identity_file.as_deref(), Some("~/.ssh/id_ed25519_clp"));
+    }
+
+    #[test]
+    fn gives_up_on_what_we_do_not_model() {
+        // Not present at all.
+        assert!(resolve_ssh_alias("missing", CONFIG).is_none());
+        // A wildcard block is out of scope — we do not pattern-match.
+        assert!(resolve_ssh_alias("wildcard", CONFIG).is_none());
+        // ProxyJump means the real connection is not the one we would open.
+        assert!(resolve_ssh_alias("jump", CONFIG).is_none());
+        // An Include we cannot follow makes the whole file unreliable.
+        assert!(resolve_ssh_alias("미니맥", "Include other\nHost 미니맥\n  HostName x\n").is_none());
+    }
+}
+
+#[cfg(test)]
+mod ssh_target_tests {
+    use super::*;
+
+    #[test]
+    fn fills_defaults_and_prefers_the_command_line() {
+        let config = "Host box\n  HostName box.internal\n  User configuser\n  Port 2222\n";
+
+        // An alias takes everything from the config.
+        let t = resolve_target(parse_ssh_command("ssh box").unwrap(), config, "osuser").unwrap();
+        assert_eq!(t.host, "box.internal");
+        assert_eq!(t.user, "configuser");
+        assert_eq!(t.port, 2222);
+
+        // The command line wins over the config, exactly as ssh does.
+        let parsed = parse_ssh_command("ssh -p 2200 me@box").unwrap();
+        let t = resolve_target(parsed, config, "osuser").unwrap();
+        assert_eq!(t.host, "box");
+        assert_eq!(t.user, "me");
+        assert_eq!(t.port, 2200);
+
+        // Nothing anywhere: ssh's own defaults.
+        let t = resolve_target(parse_ssh_command("ssh host.example.com").unwrap(), "", "osuser")
+            .unwrap();
+        assert_eq!(t.port, 22);
+        assert_eq!(t.user, "osuser");
+    }
+
+    #[test]
+    fn a_host_block_without_a_hostname_is_the_hostname() {
+        let config = "Host box\n  User configuser\n";
+        let t = resolve_target(parse_ssh_command("ssh box").unwrap(), config, "osuser").unwrap();
+        assert_eq!(t.host, "box");
+        assert_eq!(t.user, "configuser");
+    }
+
+    #[test]
+    fn an_unresolvable_alias_yields_nothing() {
+        let parsed = parse_ssh_command("ssh unknown").unwrap();
+        assert!(resolve_target(parsed, "", "osuser").is_none());
+    }
 }
 
 #[cfg(test)]
@@ -2438,5 +2878,99 @@ mod tests {
 
         drop(manifest);
         std::fs::remove_dir_all(temp_dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod auto_key_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Build a throwaway `.ssh` directory. `files` are created empty; the test
+    /// only cares which paths are picked, never their contents.
+    fn ssh_dir_with(files: &[&str]) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("mymux-autokey-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in files {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        dir
+    }
+
+    fn names(paths: &[PathBuf]) -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn finds_per_host_keys_not_just_the_canonical_names() {
+        // The shape that made clp unreachable: the default key exists but is a
+        // different key, and the one that works has a host suffix.
+        let dir = ssh_dir_with(&[
+            "id_ed25519",
+            "id_ed25519.pub",
+            "id_ed25519_clp",
+            "id_ed25519_clp.pub",
+            "id_rsa_safetyabc",
+            "id_rsa_safetyabc.pub",
+        ]);
+        let found = names(&auto_key_candidates(&dir));
+        assert_eq!(
+            found,
+            vec!["id_ed25519", "id_ed25519_clp", "id_rsa_safetyabc"],
+            "canonical name first, then per-host keys in a stable order"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ignores_everything_that_is_not_a_private_key() {
+        let dir = ssh_dir_with(&[
+            "config",
+            "config.bak_bom_fix",
+            "known_hosts",
+            "known_hosts.old",
+            "authorized_keys",
+            "id_ed25519.pub", // a public key with no private half
+        ]);
+        assert!(
+            auto_key_candidates(&dir).is_empty(),
+            "no file here has a private/.pub pair"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_canonical_key_counts_even_without_a_public_half() {
+        // `ssh` itself tries these by name, so a missing .pub must not hide one.
+        let dir = ssh_dir_with(&["id_rsa"]);
+        assert_eq!(names(&auto_key_candidates(&dir)), vec!["id_rsa"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stays_within_the_server_auth_try_budget() {
+        let mut files: Vec<String> = Vec::new();
+        for index in 0..10 {
+            files.push(format!("id_ed25519_host{index:02}"));
+            files.push(format!("id_ed25519_host{index:02}.pub"));
+        }
+        let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+        let dir = ssh_dir_with(&refs);
+        assert_eq!(auto_key_candidates(&dir).len(), MAX_AUTO_KEY_ATTEMPTS);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_directory_yields_nothing() {
+        let dir = std::env::temp_dir().join("mymux-autokey-does-not-exist");
+        assert!(auto_key_candidates(&dir).is_empty());
     }
 }

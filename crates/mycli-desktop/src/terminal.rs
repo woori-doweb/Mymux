@@ -4,16 +4,91 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Upper bound on retained output per session (decoded UTF-8 bytes). Whole
+/// chunks are evicted from the front, so retention may undershoot by one chunk.
+pub(crate) const OUTPUT_HISTORY_MAX_BYTES: usize = 1024 * 1024;
+
+/// Bounded, non-destructive PTY output history addressed by a monotonically
+/// increasing byte offset into the decoded UTF-8 stream. Offset 0 is the first
+/// byte the session ever produced; `base` is the offset of the oldest retained
+/// byte and `end` is the offset the next byte will get.
+#[derive(Default)]
+pub(crate) struct OutputHistory {
+    chunks: std::collections::VecDeque<(u64, String)>,
+    base: u64,
+    end: u64,
+    retained: usize,
+}
+
+pub(crate) struct ReadResult {
+    pub chunks: Vec<String>,
+    /// Offset to pass to the next read (the stream end at read time).
+    pub next: u64,
+    pub exited: bool,
+    /// The requested offset was older than the retained history (or past the
+    /// stream end, which means the caller's cursor belongs to another stream).
+    pub truncated: bool,
+}
+
+impl OutputHistory {
+    pub(crate) fn push(&mut self, data: String) {
+        if data.is_empty() {
+            return;
+        }
+        let len = data.len();
+        let start = self.end;
+        self.end = self.end.saturating_add(len as u64);
+        self.retained = self.retained.saturating_add(len);
+        self.chunks.push_back((start, data));
+        // Always keep the newest chunk, even if it alone exceeds the cap.
+        while self.retained > OUTPUT_HISTORY_MAX_BYTES && self.chunks.len() > 1 {
+            if let Some((_, old)) = self.chunks.pop_front() {
+                self.retained -= old.len();
+            }
+        }
+        self.base = self.chunks.front().map(|(s, _)| *s).unwrap_or(self.end);
+    }
+
+    pub(crate) fn read_after(&self, offset: u64) -> (Vec<String>, u64, bool) {
+        let truncated = offset < self.base || offset > self.end;
+        let from = if truncated { self.base } else { offset };
+        let mut out = Vec::new();
+        for (start, text) in &self.chunks {
+            let chunk_end = start.saturating_add(text.len() as u64);
+            if chunk_end <= from {
+                continue;
+            }
+            if *start >= from {
+                out.push(text.clone());
+            } else {
+                // Cursor lands inside this chunk: slice at a char boundary.
+                let mut rel = ((from - *start) as usize).min(text.len());
+                while rel < text.len() && !text.is_char_boundary(rel) {
+                    rel += 1;
+                }
+                if rel < text.len() {
+                    out.push(text[rel..].to_string());
+                }
+            }
+        }
+        (out, self.end, truncated)
+    }
+}
+
 pub struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
-    output_buf: Arc<Mutex<Vec<String>>>,
+    output_buf: Arc<Mutex<OutputHistory>>,
     exited: Arc<Mutex<bool>>,
+    /// The pane's shell — the root `pty_ai_process` walks down from.
+    shell_pid: Option<u32>,
 }
 
 pub struct TerminalManager {
-    sessions: Mutex<HashMap<u32, PtySession>>,
-    next_id: Mutex<u32>,
+    pub(crate) sessions: Mutex<HashMap<u32, PtySession>>,
+    pub(crate) next_id: Mutex<u32>,
+    pub(crate) session_keys: Mutex<HashMap<String, u32>>,
+    pub(crate) background_keys: Mutex<std::collections::HashSet<String>>,
 }
 
 impl TerminalManager {
@@ -21,6 +96,8 @@ impl TerminalManager {
         Self {
             sessions: Mutex::new(HashMap::new()),
             next_id: Mutex::new(1),
+            session_keys: Mutex::new(HashMap::new()),
+            background_keys: Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
@@ -284,6 +361,61 @@ fn login_shell(shell: std::path::PathBuf) -> CommandBuilder {
     c
 }
 
+/// macOS's default zsh prompt can wrap a long cwd in a narrow split pane.
+/// zsh then keeps its logical cursor on the wrapped line while xterm paints
+/// the next input against a different visual column; Backspace consequently
+/// looks like it inserts a space or moves like Tab.  Use a small ZDOTDIR
+/// wrapper that sources the user's normal .zshrc first, then installs the same
+/// one-line prompt contract as the Windows shells.
+#[cfg(not(windows))]
+fn mymux_zsh_dir() -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    let dir = home.join(".mycli").join("zsh");
+    std::fs::create_dir_all(&dir).ok()?;
+    let content = r#"# Mymux zsh init: preserve the user's config, then keep the prompt on one row.
+if [[ -n "${MYMUX_USER_ZDOTDIR:-}" && -r "$MYMUX_USER_ZDOTDIR/.zshrc" ]]; then
+  source "$MYMUX_USER_ZDOTDIR/.zshrc"
+elif [[ -r "$HOME/.zshrc" ]]; then
+  source "$HOME/.zshrc"
+fi
+
+# Let zsh measure/truncate the expanded path in display cells on EVERY redraw.
+# ${#PWD} counts characters, so CJK paths can still wrap; a precmd-only budget
+# also stays stale when the pane shrinks while ZLE is editing the first line.
+# %~ inserts the path literally: a directory named "%{foo" must not become a
+# zero-width prompt escape and corrupt ZLE's cursor accounting.
+setopt prompt_percent
+PROMPT=$'%{\e]133;A\e\\%}%F{cyan}%-8(l.%-4<...<%~%<<.)%f $ %{\e]133;B\e\\%}'
+"#;
+    // ZDOTDIR also redirects zsh's login startup files, so proxy the user's
+    // .zshenv and .zprofile as well as .zshrc before applying our prompt.
+    std::fs::write(
+        dir.join(".zshenv"),
+        "[[ -r \"$HOME/.zshenv\" ]] && source \"$HOME/.zshenv\"\n",
+    )
+    .ok()?;
+    std::fs::write(
+        dir.join(".zprofile"),
+        "[[ -r \"$HOME/.zprofile\" ]] && source \"$HOME/.zprofile\"\n",
+    )
+    .ok()?;
+    std::fs::write(dir.join(".zshrc"), content).ok()?;
+    Some(dir)
+}
+
+#[cfg(not(windows))]
+fn zsh_login_shell(shell: std::path::PathBuf) -> CommandBuilder {
+    let mut c = login_shell(shell);
+    if let Some(dir) = mymux_zsh_dir() {
+        let user_zdotdir = std::env::var_os("ZDOTDIR")
+            .and_then(|v| std::path::PathBuf::from(v).to_str().map(str::to_owned))
+            .unwrap_or_default();
+        c.env("ZDOTDIR", dir);
+        c.env("MYMUX_USER_ZDOTDIR", user_zdotdir);
+    }
+    c
+}
+
 /// Default shell. On Windows prefer Git Bash (clean, no product banner); if it
 /// isn't installed, fall back to PowerShell with `-NoLogo` so the startup
 /// banner is suppressed. On Unix (macOS/Linux) spawn the user's `$SHELL` as a
@@ -316,7 +448,11 @@ fn default_shell_builder() -> CommandBuilder {
         let shell = std::env::var("SHELL")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| "/bin/sh".into());
-        login_shell(shell)
+        if shell.file_name().and_then(|n| n.to_str()) == Some("zsh") {
+            zsh_login_shell(shell)
+        } else {
+            login_shell(shell)
+        }
     }
 }
 
@@ -379,7 +515,7 @@ fn build_command(shell: Option<&str>, args: Option<&Vec<String>>) -> CommandBuil
                 return login_shell(find_in_path("bash").unwrap_or_else(|| "/bin/bash".into()));
             }
             "zsh" => {
-                return login_shell(find_in_path("zsh").unwrap_or_else(|| "/bin/zsh".into()));
+                return zsh_login_shell(find_in_path("zsh").unwrap_or_else(|| "/bin/zsh".into()));
             }
             _ => {}
         }
@@ -392,6 +528,100 @@ fn build_command(shell: Option<&str>, args: Option<&Vec<String>>) -> CommandBuil
         }
     }
     c
+}
+
+// ── Account pin sanitation (see `pane_command`) ─────────────────────────────
+
+/// Proxies that multiplex several Claude accounts pin a shell to one of them
+/// through these. `TC_ACCT` names the account; `ANTHROPIC_BASE_URL` carries the
+/// same choice in its path when the proxy is account-scoped.
+const ACCOUNT_PIN_VAR: &str = "TC_ACCT";
+const ANTHROPIC_BASE_URL_VAR: &str = "ANTHROPIC_BASE_URL";
+const ACCOUNT_SCOPED_PATH: &str = "/tc-acct/";
+
+/// The proxy root behind an account-scoped local URL, e.g.
+/// `http://127.0.0.1:3456/tc-acct/someone` → `http://127.0.0.1:3456`.
+///
+/// Returns `None` — meaning "leave this alone" — for everything else: the
+/// proxy's own root URL, `api.anthropic.com`, a company gateway, and an
+/// account-scoped path on a REMOTE host, which is somebody else's routing and
+/// not ours to rewrite.
+fn account_scoped_proxy_root(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    if !parsed.path().starts_with(ACCOUNT_SCOPED_PATH) {
+        return None;
+    }
+    // Only a proxy running on this machine is ours to normalize. `host_str`
+    // brackets IPv6 literals, so strip those before parsing the address.
+    let host = parsed.host_str()?;
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let loopback = bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if !loopback {
+        return None;
+    }
+    // Serialized by the URL crate so the port and any IPv6 brackets come back
+    // in their canonical form; path, query and fragment are dropped with it.
+    Some(parsed.origin().ascii_serialization())
+}
+
+/// Drop an inherited account pin from the environment a new shell will start
+/// with.
+///
+/// Mymux is a long-running parent process, so whatever pin existed when the app
+/// was launched is inherited by every pane opened afterwards — including panes
+/// opened long after that account was removed from the proxy or the Claude
+/// login was changed. Neither of those touches an already-running process, so
+/// the pane keeps requesting an account that no longer exists and every call
+/// fails with `Unknown account pin` (404) instead of falling back to the
+/// proxy's account rotation. See issue #4.
+///
+/// This edits only the environment a shell is *started* with. A pin the user
+/// exports inside a pane is deliberate and stays in effect there.
+fn sanitize_account_pin(cmd: &mut CommandBuilder) {
+    cmd.env_remove(ACCOUNT_PIN_VAR);
+    let root = cmd
+        .get_env(ANTHROPIC_BASE_URL_VAR)
+        .and_then(|value| value.to_str())
+        .and_then(account_scoped_proxy_root);
+    if let Some(root) = root {
+        cmd.env(ANTHROPIC_BASE_URL_VAR, root);
+    }
+}
+
+/// Tell a Unix pane's programs which terminal they are drawing on.
+///
+/// portable-pty starts the child with our own environment, and an app opened
+/// from the Dock or Finder (or a Linux desktop launcher) has no `TERM` in it at
+/// all. zsh then knows no cursor movement: every keystroke is redrawn from
+/// column 0 with spaces painted over the prompt, and zsh-autosuggestions' grey
+/// hint is left behind as ordinary text. A typed command looks scattered with
+/// tab-wide gaps, and the command capture reads that debris back off the
+/// screen, so a restored session re-runs it. A `TERM` inherited from another
+/// terminal describes that terminal, not this one — every pane is xterm.js.
+///
+/// Windows panes run through ConPTY and are left as they are.
+#[cfg(not(windows))]
+fn declare_terminal_type(cmd: &mut CommandBuilder) {
+    cmd.env("TERM", "xterm-256color");
+}
+
+/// The command a new pane is spawned with. Every pane goes through here —
+/// default shell, PowerShell, Git Bash, CMD, SSH, a custom executable — so the
+/// account-pin sanitation above, and on Unix the terminal type, cannot be
+/// missed by a shell-specific builder.
+fn pane_command(shell: Option<&str>, args: Option<&Vec<String>>) -> CommandBuilder {
+    let mut cmd = build_command(shell, args);
+    sanitize_account_pin(&mut cmd);
+    #[cfg(not(windows))]
+    declare_terminal_type(&mut cmd);
+    cmd
 }
 
 /// Streaming UTF-8 decode: append `incoming` to `pending`, return the decoded
@@ -425,6 +655,29 @@ pub fn pty_spawn(
     cwd: Option<String>,
     cols: u16,
     rows: u16,
+    session_key: Option<String>,
+) -> Result<u32, String> {
+    let _ = state;
+    let key = session_key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let response = crate::pty_server::request("spawn", serde_json::json!({
+        "sessionKey": key,
+        "shell": shell,
+        "args": args,
+        "cwd": cwd,
+        "cols": cols,
+        "rows": rows,
+    }))?;
+    response.get("id").and_then(serde_json::Value::as_u64)
+        .map(|id| id as u32).ok_or_else(|| "PTY server did not return a session id".into())
+}
+
+pub(crate) fn spawn_local(
+    manager: &TerminalManager,
+    shell: Option<String>,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
 ) -> Result<u32, String> {
     let pty_system = native_pty_system();
 
@@ -449,23 +702,24 @@ pub fn pty_spawn(
         .filter(|p| p.is_dir())
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| ".".into()));
 
-    let mut cmd = build_command(shell.as_deref(), args.as_ref());
+    let mut cmd = pane_command(shell.as_deref(), args.as_ref());
     cmd.cwd(&work_dir);
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let shell_pid = child.process_id();
     drop(pair.slave);
 
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
 
     let id = {
-        let mut next = state.next_id.lock().unwrap();
+        let mut next = manager.next_id.lock().unwrap();
         let id = *next;
         *next += 1;
         id
     };
 
-    let output_buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let output_buf: Arc<Mutex<OutputHistory>> = Arc::new(Mutex::new(OutputHistory::default()));
     let exited: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
 
     let buf_clone = Arc::clone(&output_buf);
@@ -505,7 +759,7 @@ pub fn pty_spawn(
     });
 
     {
-        let mut sessions = state.sessions.lock().unwrap();
+        let mut sessions = manager.sessions.lock().unwrap();
         sessions.insert(
             id,
             PtySession {
@@ -513,6 +767,7 @@ pub fn pty_spawn(
                 master: pair.master,
                 output_buf,
                 exited,
+                shell_pid,
             },
         );
     }
@@ -520,29 +775,58 @@ pub fn pty_spawn(
     Ok(id)
 }
 
-/// Read buffered output from the PTY. Returns all pending data.
+/// Read retained output after a byte offset. Non-destructive: every reader
+/// keeps its own cursor and passes back the returned `next`.
+#[derive(serde::Serialize)]
+pub struct PtyReadReply {
+    pub chunks: Vec<String>,
+    pub next: u64,
+    pub exited: bool,
+    pub truncated: bool,
+}
+
 #[tauri::command]
 pub fn pty_read(
-    state: tauri::State<'_, Arc<TerminalManager>>,
+    _state: tauri::State<'_, Arc<TerminalManager>>,
     id: u32,
-) -> Result<(Vec<String>, bool), String> {
-    let sessions = state.sessions.lock().unwrap();
+    offset: Option<u64>,
+) -> Result<PtyReadReply, String> {
+    let response = crate::pty_server::request(
+        "read",
+        serde_json::json!({ "id": id, "offset": offset.unwrap_or(0) }),
+    )?;
+    let chunks = serde_json::from_value(response.get("data").cloned().unwrap_or_default())
+        .map_err(|e| e.to_string())?;
+    Ok(PtyReadReply {
+        chunks,
+        next: response.get("next").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        exited: response.get("exited").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        truncated: response.get("truncated").and_then(serde_json::Value::as_bool).unwrap_or(false),
+    })
+}
+
+pub(crate) fn read_local(manager: &TerminalManager, id: u32, offset: u64) -> Result<ReadResult, String> {
+    let sessions = manager.sessions.lock().unwrap();
     let session = sessions.get(&id).ok_or("Session not found")?;
 
-    let mut buf = session.output_buf.lock().unwrap();
-    let data: Vec<String> = buf.drain(..).collect();
+    let (chunks, next, truncated) = session.output_buf.lock().unwrap().read_after(offset);
     let exited = *session.exited.lock().unwrap();
 
-    Ok((data, exited))
+    Ok(ReadResult { chunks, next, exited, truncated })
 }
 
 #[tauri::command]
 pub fn pty_write(
-    state: tauri::State<'_, Arc<TerminalManager>>,
+    _state: tauri::State<'_, Arc<TerminalManager>>,
     id: u32,
     data: String,
 ) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().unwrap();
+    crate::pty_server::request("write", serde_json::json!({ "id": id, "data": data }))?;
+    Ok(())
+}
+
+pub(crate) fn write_local(manager: &TerminalManager, id: u32, data: String) -> Result<(), String> {
+    let mut sessions = manager.sessions.lock().unwrap();
     let session = sessions.get_mut(&id).ok_or("Session not found")?;
     session
         .writer
@@ -554,12 +838,17 @@ pub fn pty_write(
 
 #[tauri::command]
 pub fn pty_resize(
-    state: tauri::State<'_, Arc<TerminalManager>>,
+    _state: tauri::State<'_, Arc<TerminalManager>>,
     id: u32,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let sessions = state.sessions.lock().unwrap();
+    crate::pty_server::request("resize", serde_json::json!({ "id": id, "cols": cols, "rows": rows }))?;
+    Ok(())
+}
+
+pub(crate) fn resize_local(manager: &TerminalManager, id: u32, cols: u16, rows: u16) -> Result<(), String> {
+    let sessions = manager.sessions.lock().unwrap();
     let session = sessions.get(&id).ok_or("Session not found")?;
     session
         .master
@@ -574,12 +863,245 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_close(
-    state: tauri::State<'_, Arc<TerminalManager>>,
+    _state: tauri::State<'_, Arc<TerminalManager>>,
     id: u32,
 ) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().unwrap();
-    sessions.remove(&id);
+    crate::pty_server::request("close", serde_json::json!({ "id": id }))?;
     Ok(())
+}
+
+pub(crate) fn close_local(manager: &TerminalManager, id: u32) -> Result<(), String> {
+    let mut sessions = manager.sessions.lock().unwrap();
+    sessions.remove(&id);
+    manager.session_keys.lock().unwrap().retain(|_, value| *value != id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn terminal_background_handoff(session_keys: Vec<String>) -> Result<Vec<String>, String> {
+    let response = crate::pty_server::request("handoff", serde_json::json!({ "sessionKeys": session_keys }))?;
+    serde_json::from_value(response.get("kept").cloned().unwrap_or_default()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn terminal_shutdown() -> Result<(), String> {
+    crate::pty_server::request("shutdown", serde_json::json!({}))?;
+    Ok(())
+}
+
+/// Which program owns the pane right now, read off the process tree under its
+/// shell instead of the screen: "claude", "codex", "ssh" (whatever runs, runs
+/// on another machine) or None.
+///
+/// The screen-based guess (the frontend's `ctxSource`) only learns that an AI
+/// CLI has exited when the shell prompt comes back with an OSC 133 mark. CMD and
+/// ssh sessions never send one, so after Claude quits there, Codex started in
+/// the same pane would still count as Claude. The process tree can't go stale
+/// like that. Only the Windows wheel workaround asks (#40), so elsewhere the
+/// table is empty and the answer is always None.
+#[tauri::command]
+pub fn pty_ai_process(
+    _state: tauri::State<'_, Arc<TerminalManager>>,
+    id: u32,
+) -> Result<Option<String>, String> {
+    let response = crate::pty_server::request("aiProcess", serde_json::json!({ "id": id }))?;
+    Ok(response.get("process").and_then(serde_json::Value::as_str).map(str::to_owned))
+}
+
+pub(crate) fn ai_process_local(manager: &TerminalManager, id: u32) -> Result<Option<String>, String> {
+    let shell_pid = {
+        let sessions = manager.sessions.lock().unwrap();
+        let session = sessions.get(&id).ok_or("Session not found")?;
+        session.shell_pid
+    };
+    Ok(shell_pid.and_then(|pid| outermost_ai(pid, &process_table()).map(str::to_string)))
+}
+
+/// What a process image name says about the program, if it is one we track.
+/// Codex's npm launcher runs a platform binary named `codex-<target-triple>`.
+fn classify_process(exe: &str) -> Option<&'static str> {
+    let file = exe
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(exe)
+        .to_ascii_lowercase();
+    let stem = file.strip_suffix(".exe").unwrap_or(&file);
+    if stem == "claude" || stem.starts_with("claude-") {
+        Some("claude")
+    } else if stem == "codex" || stem.starts_with("codex-") {
+        Some("codex")
+    } else if matches!(stem, "ssh" | "plink" | "mosh" | "mosh-client") {
+        Some("ssh")
+    } else {
+        None
+    }
+}
+
+/// Breadth-first from the shell: the tracked program closest to the shell is
+/// the one the user launched. Whatever it starts itself — `codex exec` from a
+/// Claude tool call, an `ssh` from a Codex shell command — sits deeper and must
+/// not mask it. `procs` is (pid, parent pid, image name).
+fn outermost_ai(shell_pid: u32, procs: &[(u32, u32, String)]) -> Option<&'static str> {
+    if let Some((_, _, exe)) = procs.iter().find(|(pid, _, _)| *pid == shell_pid) {
+        if let Some(found) = classify_process(exe) {
+            return Some(found);
+        }
+    }
+    let mut seen = std::collections::HashSet::from([shell_pid]);
+    let mut level = vec![shell_pid];
+    // A pid can be reused for a process whose recorded parent is long gone, so
+    // the walk is bounded and never revisits a pid.
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        let mut found = None;
+        for (pid, ppid, exe) in procs {
+            if level.contains(ppid) && seen.insert(*pid) {
+                if found.is_none() {
+                    found = classify_process(exe);
+                }
+                next.push(*pid);
+            }
+        }
+        if found.is_some() || next.is_empty() {
+            return found;
+        }
+        level = next;
+    }
+    None
+}
+
+#[cfg(windows)]
+fn process_table() -> Vec<(u32, u32, String)> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let mut table = Vec::new();
+    // SAFETY: the snapshot handle is checked before use and closed once; the
+    // entry is a plain C struct whose dwSize is set before the first call.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return table;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snapshot, &mut entry);
+        while more != 0 {
+            let name = &entry.szExeFile;
+            let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+            table.push((
+                entry.th32ProcessID,
+                entry.th32ParentProcessID,
+                String::from_utf16_lossy(&name[..len]),
+            ));
+            more = Process32NextW(snapshot, &mut entry);
+        }
+        CloseHandle(snapshot);
+    }
+    table
+}
+
+#[cfg(not(windows))]
+fn process_table() -> Vec<(u32, u32, String)> {
+    Vec::new()
+}
+
+#[cfg(test)]
+mod ai_process_tests {
+    use super::{classify_process, outermost_ai};
+
+    fn table(rows: &[(u32, u32, &str)]) -> Vec<(u32, u32, String)> {
+        rows.iter()
+            .map(|&(p, pp, n)| (p, pp, n.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn image_names_map_to_the_programs_we_track() {
+        assert_eq!(classify_process("claude.exe"), Some("claude"));
+        assert_eq!(classify_process("CLAUDE.EXE"), Some("claude"));
+        assert_eq!(
+            classify_process(r"C:\Users\me\.local\bin\claude.exe"),
+            Some("claude")
+        );
+        assert_eq!(classify_process("codex.exe"), Some("codex"));
+        assert_eq!(
+            classify_process("codex-x86_64-pc-windows-msvc.exe"),
+            Some("codex")
+        );
+        assert_eq!(classify_process("ssh.exe"), Some("ssh"));
+        assert_eq!(classify_process("plink.exe"), Some("ssh"));
+        for other in [
+            "cmd.exe",
+            "pwsh.exe",
+            "node.exe",
+            "conhost.exe",
+            "claudette.exe",
+            "codexer.exe",
+        ] {
+            assert_eq!(classify_process(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn codex_after_claude_in_the_same_cmd_pane_is_codex() {
+        // Claude has exited; Codex runs through its npm launcher (node → binary).
+        let procs = table(&[
+            (10, 1, "cmd.exe"),
+            (20, 10, "node.exe"),
+            (21, 20, "codex-x86_64-pc-windows-msvc.exe"),
+        ]);
+        assert_eq!(outermost_ai(10, &procs), Some("codex"));
+    }
+
+    #[test]
+    fn claude_is_found_under_the_shell() {
+        let procs = table(&[
+            (10, 1, "pwsh.exe"),
+            (11, 10, "claude.exe"),
+            (99, 1, "codex.exe"),
+        ]);
+        assert_eq!(
+            outermost_ai(10, &procs),
+            Some("claude"),
+            "another pane's Codex must not count"
+        );
+    }
+
+    #[test]
+    fn what_claude_starts_does_not_mask_claude() {
+        let procs = table(&[
+            (10, 1, "cmd.exe"),
+            (11, 10, "claude.exe"),
+            (12, 11, "bash.exe"),
+            (13, 12, "codex.exe"),
+        ]);
+        assert_eq!(outermost_ai(10, &procs), Some("claude"));
+    }
+
+    #[test]
+    fn ssh_means_the_program_runs_elsewhere() {
+        let procs = table(&[(10, 1, "cmd.exe"), (11, 10, "ssh.exe")]);
+        assert_eq!(outermost_ai(10, &procs), Some("ssh"));
+        // An ssh pane spawns ssh itself as the shell.
+        assert_eq!(outermost_ai(30, &table(&[(30, 1, "ssh.exe")])), Some("ssh"));
+    }
+
+    #[test]
+    fn a_plain_shell_or_a_missing_shell_answers_none() {
+        let procs = table(&[(10, 1, "cmd.exe"), (11, 10, "git.exe")]);
+        assert_eq!(outermost_ai(10, &procs), None);
+        assert_eq!(outermost_ai(77, &procs), None);
+    }
+
+    #[test]
+    fn a_parent_loop_from_pid_reuse_terminates() {
+        let procs = table(&[(10, 11, "cmd.exe"), (11, 10, "node.exe")]);
+        assert_eq!(outermost_ai(10, &procs), None);
+    }
 }
 
 #[cfg(test)]
@@ -617,6 +1139,178 @@ mod utf8_stream_tests {
         let s = decode_utf8_stream(&mut pending, &[b'a', 0xFF, b'b']);
         assert_eq!(s, "a\u{FFFD}b");
         assert!(pending.is_empty());
+    }
+}
+
+/// Issue #4: a stale account pin inherited from the Mymux process pinned every
+/// new pane to a deleted account, and every request 404'd with no fallback.
+#[cfg(test)]
+mod account_pin_tests {
+    use super::*;
+
+    const SCOPED: &str = "http://localhost:3456/tc-acct/deleted-account";
+
+    #[test]
+    fn account_scoped_local_urls_normalize_to_the_proxy_root() {
+        for (url, root) in [
+            (SCOPED, "http://localhost:3456"),
+            ("http://127.0.0.1:3456/tc-acct/someone", "http://127.0.0.1:3456"),
+            ("https://127.0.0.1:8443/tc-acct/someone", "https://127.0.0.1:8443"),
+            ("http://[::1]:3456/tc-acct/someone", "http://[::1]:3456"),
+            // Trailing segments, a query and a fragment all go with the path.
+            ("http://localhost:3456/tc-acct/someone/v1/messages?beta=1#x", "http://localhost:3456"),
+            // No explicit port — the default one stays implicit.
+            ("http://localhost/tc-acct/someone", "http://localhost"),
+        ] {
+            assert_eq!(account_scoped_proxy_root(url).as_deref(), Some(root), "{url}");
+        }
+    }
+
+    #[test]
+    fn everything_else_is_left_alone() {
+        for url in [
+            // The proxy's own root — already what we would normalize to.
+            "http://localhost:3456",
+            "http://localhost:3456/",
+            // A real endpoint and a company gateway.
+            "https://api.anthropic.com",
+            "https://gateway.example.com/v1",
+            // Account-scoped, but on someone else's host: not our routing.
+            "https://proxy.example.com:3456/tc-acct/someone",
+            // Not a URL at all.
+            "",
+            "not a url",
+        ] {
+            assert_eq!(account_scoped_proxy_root(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn an_inherited_pin_is_dropped_before_the_shell_starts() {
+        // CommandBuilder seeds itself from the parent environment, so setting
+        // these is exactly the shape an inherited pin arrives in.
+        let mut cmd = CommandBuilder::new("test-shell");
+        cmd.env(ACCOUNT_PIN_VAR, "deleted-account");
+        cmd.env(ANTHROPIC_BASE_URL_VAR, SCOPED);
+
+        sanitize_account_pin(&mut cmd);
+
+        assert_eq!(cmd.get_env(ACCOUNT_PIN_VAR), None);
+        assert_eq!(
+            cmd.get_env(ANTHROPIC_BASE_URL_VAR).and_then(|v| v.to_str()),
+            Some("http://localhost:3456"),
+        );
+    }
+
+    #[test]
+    fn a_normal_base_url_and_unrelated_vars_survive() {
+        let mut cmd = CommandBuilder::new("test-shell");
+        cmd.env(ANTHROPIC_BASE_URL_VAR, "https://api.anthropic.com");
+        cmd.env("ANTHROPIC_API_KEY", "keep-me");
+
+        sanitize_account_pin(&mut cmd);
+
+        assert_eq!(
+            cmd.get_env(ANTHROPIC_BASE_URL_VAR).and_then(|v| v.to_str()),
+            Some("https://api.anthropic.com"),
+        );
+        assert_eq!(cmd.get_env("ANTHROPIC_API_KEY").and_then(|v| v.to_str()), Some("keep-me"));
+    }
+
+    /// Every shell the UI can ask for, not just the default one — a
+    /// shell-specific builder must not be able to carry the pin through.
+    #[test]
+    fn every_shell_kind_is_sanitized() {
+        let shells = [
+            None,
+            Some("powershell"),
+            Some("pwsh"),
+            Some("powershell.exe"),
+            Some("bash"),
+            Some("git-bash"),
+            Some("cmd"),
+            Some("zsh"),
+            Some("some-custom-shell"),
+        ];
+        for shell in shells {
+            let mut cmd = build_command(shell, None);
+            cmd.env(ACCOUNT_PIN_VAR, "deleted-account");
+            cmd.env(ANTHROPIC_BASE_URL_VAR, SCOPED);
+
+            sanitize_account_pin(&mut cmd);
+
+            let label = shell.unwrap_or("<default>");
+            assert_eq!(cmd.get_env(ACCOUNT_PIN_VAR), None, "{label}");
+            assert_eq!(
+                cmd.get_env(ANTHROPIC_BASE_URL_VAR).and_then(|v| v.to_str()),
+                Some("http://localhost:3456"),
+                "{label}",
+            );
+        }
+    }
+
+    /// The sanitation is only guaranteed for every pane while the spawn path
+    /// goes through `pane_command`. Guard that structurally so a later edit
+    /// cannot quietly reintroduce a raw `build_command` spawn.
+    #[test]
+    fn panes_are_spawned_through_the_sanitizing_builder() {
+        let source = include_str!("terminal.rs");
+        let spawn_site = source
+            .split_once("pub(crate) fn spawn_local(")
+            .expect("spawn_local must exist")
+            .1;
+        let body = spawn_site
+            .split_once("spawn_command(")
+            .expect("pty_spawn must spawn the command")
+            .0;
+        assert!(
+            body.contains("pane_command("),
+            "pty_spawn must build its command with pane_command so the account pin is sanitized",
+        );
+        assert!(
+            !body.contains("build_command("),
+            "pty_spawn must not call build_command directly — that skips sanitize_account_pin",
+        );
+    }
+}
+
+/// A Mymux started from the Dock or Finder has no `TERM` to hand down, and one
+/// started from another terminal hands down THAT terminal's type. Either way the
+/// pane is drawn by xterm.js, so every Unix pane must say so.
+#[cfg(all(test, not(windows)))]
+mod terminal_type_tests {
+    use super::*;
+
+    #[test]
+    fn every_unix_pane_declares_the_xterm_it_draws_on() {
+        for shell in [None, Some("zsh"), Some("bash"), Some("cmd"), Some("some-custom-shell")] {
+            let cmd = pane_command(shell, None);
+            assert_eq!(
+                cmd.get_env("TERM").and_then(|v| v.to_str()),
+                Some("xterm-256color"),
+                "{}",
+                shell.unwrap_or("<default>"),
+            );
+        }
+    }
+
+    #[test]
+    fn an_inherited_terminal_type_is_replaced() {
+        for inherited in [None, Some("dumb"), Some("screen")] {
+            let mut cmd = CommandBuilder::new("test-shell");
+            match inherited {
+                Some(term) => cmd.env("TERM", term),
+                None => cmd.env_remove("TERM"),
+            }
+
+            declare_terminal_type(&mut cmd);
+
+            assert_eq!(
+                cmd.get_env("TERM").and_then(|v| v.to_str()),
+                Some("xterm-256color"),
+                "{inherited:?}",
+            );
+        }
     }
 }
 

@@ -25,4 +25,15 @@ cloudflare.ini
 deploy/cloudflare.ini
 # PyInstaller build artifacts for the local faster-whisper voice runner
 /build/
-faster-whisper.spec
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
+# issue-* workspace — evidence only stays committed so issue comments render
+.issue/**
+!.issue/*/
+!.issue/*/evidence/
+!.issue/*/evidence/**
+.issue/**/.auth.json
+.issue/**/storage-state.json
